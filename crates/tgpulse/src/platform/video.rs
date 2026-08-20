@@ -182,8 +182,13 @@ impl Model2Video {
     ) -> Self {
         let size = window.inner_size();
 
+        let backends = if cfg!(target_os = "macos") {
+            wgpu::Backends::METAL
+        } else {
+            wgpu::Backends::VULKAN
+        };
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
+            backends,
             ..Default::default()
         });
 
