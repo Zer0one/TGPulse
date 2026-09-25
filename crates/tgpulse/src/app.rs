@@ -417,8 +417,8 @@ impl App {
         let ui = self
             .gui
             .build_renderer(video.device(), video.queue(), video.surface_format());
+        self.gui.set_display_size(window);
         let size = window.inner_size();
-        self.gui.set_display_size(size.width, size.height);
         self.touch.resize(size.width as f32, size.height as f32);
         self.video_settings = VideoSettings::of(&self.config);
         self.presenter = Some(Presenter { video, ui });
@@ -477,7 +477,7 @@ impl App {
                     }
                     WindowEvent::Resized(size) => {
                         presenter.video.resize(size);
-                        self.gui.set_display_size(size.width, size.height);
+                        self.gui.set_display_size(window);
                         self.touch.resize(size.width as f32, size.height as f32);
                     }
                     WindowEvent::Touch(finger) => {

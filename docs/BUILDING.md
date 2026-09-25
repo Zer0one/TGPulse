@@ -11,6 +11,19 @@ cargo build --release
 The binary is `target/release/tgpulse`. ROMs are read from `roms/` next to the
 working directory; `--roms <dir>` points it elsewhere.
 
+## macOS
+
+This fork uses Metal on macOS. After building, `./tgpulse-dev --list`
+launches the release binary with the checkout as its working directory, so
+ROMs belong in the checkout's `roms/` directory. The launcher also resolves
+symbolic links: a system-wide link to `tgpulse-dev` can be invoked from any
+directory without passing `--roms`. Keep the checkout and release build in
+place when using such a link.
+
+The interface uses logical coordinates for Retina scaling and mouse input.
+Fullscreen remains bound to F11; on macOS, try Fn+Cmd+F11 to send it to the
+application.
+
 ## Linux
 
 ```sh

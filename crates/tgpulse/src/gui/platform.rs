@@ -13,19 +13,27 @@ use winit::window::Window;
 /// itself -- true while the pointer is over a window or a text field has focus,
 /// in which case the emulated machine should not also see it.
 pub fn handle_event(io: &mut Io, window: &Window, event: &WindowEvent) -> bool {
+    let sync_display_metrics = |io: &mut Io, window: &Window, width: u32, height: u32| {
+        let scale = window.scale_factor();
+        let logical_size = winit::dpi::PhysicalSize::new(width, height).to_logical::<f32>(scale);
+        io.display_size = [logical_size.width, logical_size.height];
+        let scale = window.scale_factor() as f32;
+        io.display_framebuffer_scale = [scale, scale];
+    };
+
     match event {
         WindowEvent::Resized(size) => {
-            io.display_size = [size.width as f32, size.height as f32];
-            io.display_framebuffer_scale = [1.0, 1.0];
+            sync_display_metrics(io, window, size.width, size.height);
             false
         }
         WindowEvent::ScaleFactorChanged { .. } => {
             let size = window.inner_size();
-            io.display_size = [size.width as f32, size.height as f32];
+            sync_display_metrics(io, window, size.width, size.height);
             false
         }
         WindowEvent::CursorMoved { position, .. } => {
-            io.add_mouse_pos_event([position.x as f32, position.y as f32]);
+            let logical = position.to_logical::<f32>(window.scale_factor());
+            io.add_mouse_pos_event([logical.x as f32, logical.y as f32]);
             io.want_capture_mouse
         }
         WindowEvent::MouseInput { state, button, .. } => {

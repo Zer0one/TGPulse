@@ -381,8 +381,13 @@ impl Gui {
         self.visible && !self.suppressed
     }
 
-    pub fn set_display_size(&mut self, width: u32, height: u32) {
-        self.context.io_mut().display_size = [width as f32, height as f32];
+    pub fn set_display_size(&mut self, window: &winit::window::Window) {
+        let size = window.inner_size();
+        let scale = window.scale_factor();
+        let logical_size = winit::dpi::PhysicalSize::new(size.width, size.height).to_logical::<f32>(scale);
+        self.context.io_mut().display_size = [logical_size.width, logical_size.height];
+        let scale = scale as f32;
+        self.context.io_mut().display_framebuffer_scale = [scale, scale];
     }
 }
 
