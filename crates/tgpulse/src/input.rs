@@ -1254,12 +1254,12 @@ mod tests {
         let mut input = state(ControlScheme::Joystick);
         let mut out = Inputs::default();
 
-        // Button 1 ships bound to the West face button.
-        input.set_pad_button(gilrs::Button::West, true);
+        // Button 1 uses the East face button, like SM2-Emu's arcade bit 1.
+        input.set_pad_button(gilrs::Button::East, true);
         input.poll(&mut out);
         assert_eq!(out.in1 & IN1_JOY_BTN1, 0, "a platform pad button is ignored");
 
-        input.set_pad_button(gilrs::Button::West, false);
+        input.set_pad_button(gilrs::Button::East, false);
         input.poll(&mut out);
         assert_ne!(out.in1 & IN1_JOY_BTN1, 0, "it stayed pressed");
     }

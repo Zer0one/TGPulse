@@ -34,11 +34,15 @@ Refresh after adding archives.
 ```
 
 **Controls.** Coin `5` (Select), start `Enter` (Start), movement on the arrow
-keys, WASD, d-pad or left stick, actions `J`/`K`/`L` and West/South/East.
-Driving games steer left and right and use the triggers for throttle and brake;
-gun games aim with the mouse and fire with `Space`. All rebindable under
-Settings -> Input, saved to `config/input.conf`. Test menu `F2`, service switch
-`F8`.
+keys, WASD, d-pad or left stick, actions `J`/`K`/`L` and East/South/West.
+The pad positions follow SM2-Emu's common arcade bit 1/2/3 layout where the
+cabinet meanings agree; TGPulse currently has shared bindings rather than
+SM2-Emu's per-game profiles. Driving uses left stick X to steer, R2/L2 for
+throttle/brake, and R1/L1 to shift up/down. Gun games aim with the mouse or
+right stick, fire with South/R1, and reload with East/L1. Coin is Select,
+Start is Start, Service is L3, and Test is R3. The original keyboard bindings
+remain available. All are rebindable under Settings -> Input and saved to
+`config/input.conf`.
 
 | Key | |
 | --- | --- |

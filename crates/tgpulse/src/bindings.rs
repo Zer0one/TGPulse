@@ -268,8 +268,8 @@ pub struct Bindings {
 }
 
 impl Default for Bindings {
-    /// The layout the emulator shipped with before any of this was
-    /// configurable, so an existing muscle memory keeps working.
+    /// Match SM2-Emu's RetroPad positions where a cabinet control has the
+    /// same meaning. Keyboard bindings retain their original layout.
     fn default() -> Self {
         use Control as C;
         let key = |k| Source::Key(k);
@@ -313,9 +313,9 @@ impl Default for Bindings {
                     axis(Axis::LeftStickX, Sign::Positive),
                 ],
             ),
-            (C::Button1, vec![key(KeyCode::KeyJ), pad(Button::West)]),
+            (C::Button1, vec![key(KeyCode::KeyJ), pad(Button::East)]),
             (C::Button2, vec![key(KeyCode::KeyK), pad(Button::South)]),
-            (C::Button3, vec![key(KeyCode::KeyL), pad(Button::East)]),
+            (C::Button3, vec![key(KeyCode::KeyL), pad(Button::West)]),
             (C::Button4, vec![key(KeyCode::KeyI), pad(Button::North)]),
             (C::Coin1, vec![key(KeyCode::Digit5), pad(Button::Select)]),
             (C::Coin2, vec![key(KeyCode::Digit6)]),
@@ -328,10 +328,10 @@ impl Default for Bindings {
                 ],
             ),
             (C::Start2, vec![key(KeyCode::Digit2)]),
-            (C::Test, vec![key(KeyCode::F2)]),
+            (C::Test, vec![key(KeyCode::F2), pad(Button::RightThumb)]),
             // Not F1: a hotkey is resolved before the machine sees the key, so
             // a control sharing one with the menu toggle can never fire.
-            (C::Service, vec![key(KeyCode::F8)]),
+            (C::Service, vec![key(KeyCode::F8), pad(Button::LeftThumb)]),
             (C::ViewRed, vec![key(KeyCode::KeyZ), pad(Button::West)]),
             (C::ViewBlue, vec![key(KeyCode::KeyX), pad(Button::North)]),
             (C::ViewYellow, vec![key(KeyCode::KeyC), pad(Button::East)]),
@@ -383,6 +383,7 @@ impl Default for Bindings {
                 vec![
                     key(KeyCode::Space),
                     pad(Button::South),
+                    pad(Button::RightTrigger),
                     axis(Axis::RightZ, Sign::Positive),
                 ],
             ),
@@ -391,6 +392,7 @@ impl Default for Bindings {
                 vec![
                     key(KeyCode::KeyR),
                     pad(Button::East),
+                    pad(Button::LeftTrigger),
                     axis(Axis::LeftZ, Sign::Positive),
                 ],
             ),
@@ -805,5 +807,25 @@ mod tests {
         // firing both.
         assert_eq!(bindings.hotkey(Hotkey::Reset), Some(KeyCode::F5));
         assert_eq!(bindings.hotkey(Hotkey::SaveState), None);
+    }
+
+    #[test]
+    fn default_pad_uses_sm2_common_positions() {
+        let bindings = Bindings::default();
+        for (control, source) in [
+            (Control::Button1, Source::Pad(Button::East)),
+            (Control::Button2, Source::Pad(Button::South)),
+            (Control::Button3, Source::Pad(Button::West)),
+            (Control::Throttle, Source::PadAxis(Axis::RightZ, Sign::Positive)),
+            (Control::Brake, Source::PadAxis(Axis::LeftZ, Sign::Positive)),
+            (Control::GearUp, Source::Pad(Button::RightTrigger)),
+            (Control::GearDown, Source::Pad(Button::LeftTrigger)),
+            (Control::Service, Source::Pad(Button::LeftThumb)),
+            (Control::Test, Source::Pad(Button::RightThumb)),
+            (Control::Fire, Source::Pad(Button::RightTrigger)),
+            (Control::Reload, Source::Pad(Button::LeftTrigger)),
+        ] {
+            assert!(bindings.sources(control).contains(&source), "{control:?}");
+        }
     }
 }
