@@ -103,6 +103,9 @@ Striker's versus play run as a single machine.
 
 ## Roadmap
 
+For this fork's source-audited Model 1 gaps, ROM baseline and bounded fixes, see
+[Model 1 roadmap](docs/MODEL1_ROADMAP.md).
+
 - **More games.** New sets tend to expose real bugs: Virtua Fighter 2's hair was an i960 burst-read bug, Wave Runner's failure to boot a missing EEPROM.
 - **Performance improvements.**  Could be achieved by moving the coprocessors to their own threads and a JIT/dynarec. Currently it can be slow on low powered devices.
 - **Multiplayer.** Link two instances over a socket, as MAME's `m2comm` does.
