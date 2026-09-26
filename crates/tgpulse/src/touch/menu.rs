@@ -69,7 +69,7 @@ impl Setting {
         match self {
             Setting::Ssaa => "1 is the board's own output. Costs the most on a phone.",
             Setting::Volume => "SCSP titles mix quiet; try 400 for Sega Rally.",
-            Setting::Widescreen => "Widens the 3D field of view to 16:9.",
+            Setting::Widescreen => "Auto follows the game's saved monitor/cabinet setting.",
             Setting::Stretch2d => "Stretches the sky and HUD across the wider frame.",
             Setting::SmoothShadows => "Blends the hardware's stipple instead of reproducing it.",
             Setting::Rumble => "Drive-board force sent to the pad's motors.",
@@ -84,7 +84,7 @@ impl Setting {
         match self {
             Setting::Ssaa => format!("{}x", config.ssaa),
             Setting::Volume => format!("{}%", config.volume),
-            Setting::Widescreen => on_off(config.widescreen),
+            Setting::Widescreen => config.widescreen.as_str().to_uppercase(),
             Setting::Stretch2d => on_off(config.widescreen_stretch_2d),
             Setting::SmoothShadows => on_off(config.smooth_shadows),
             Setting::Rumble => on_off(config.rumble),
@@ -105,7 +105,7 @@ impl Setting {
                 config.volume =
                     (config.volume as i32 + delta * VOLUME_STEP).clamp(0, VOLUME_MAX) as u32
             }
-            Setting::Widescreen => config.widescreen = !config.widescreen,
+            Setting::Widescreen => config.widescreen = config.widescreen.next(),
             Setting::Stretch2d => config.widescreen_stretch_2d = !config.widescreen_stretch_2d,
             Setting::SmoothShadows => config.smooth_shadows = !config.smooth_shadows,
             Setting::Rumble => config.rumble = !config.rumble,

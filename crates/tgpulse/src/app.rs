@@ -16,7 +16,7 @@ use winit::{
     window::{Fullscreen, Window, WindowBuilder},
 };
 
-use tgpulse_core::config::{Config, System};
+use tgpulse_core::config::{Config, System, Widescreen};
 use tgpulse_core::debugger::Debugger;
 use tgpulse_core::tilemap::{self, SCREEN_H, SCREEN_W};
 use tgpulse_core::{library, loader, model1::Model1System, model1_video, nvram, savestate};
@@ -215,9 +215,6 @@ pub fn run_with(
         ))
         .build(&event_loop)
         .map_err(|e| e.to_string())?;
-    if config.fullscreen {
-        window.set_fullscreen(Some(Fullscreen::Borderless(None)));
-    }
 
     let mut app = App::new(config, rom);
     event_loop.set_control_flow(ControlFlow::Poll);
@@ -277,7 +274,6 @@ struct App {
 impl App {
     fn new(config: Config, pending_rom: Option<PathBuf>) -> Self {
         let now = Instant::now();
-        let fullscreen = config.fullscreen;
         Self {
             gui: Gui::new(&config),
             config,
@@ -285,10 +281,8 @@ impl App {
             session: None,
             debugger: None,
             pending_rom,
-            // Matches what `run_with` did to the window, so starting with
-            // --fullscreen suppresses the interface the same way the hotkey
-            // does.
-            fullscreen,
+            // The library starts windowed even when games should be fullscreen.
+            fullscreen: false,
             paused: false,
             fast_forward: false,
             bindings: Bindings::load_or_create(&Bindings::path()),
@@ -337,12 +331,15 @@ impl App {
                 window.set_title(&format!("TGPulse - {}", session.title));
                 session.input.set_bindings(self.bindings.clone());
                 self.session = Some(session);
+                self.sync_fullscreen(window);
                 self.last_frame = Instant::now();
                 true
             }
             Err(e) => {
                 log::error!(target: "app", "{e}");
                 self.gui.report_error(e);
+                self.gui.visible = true;
+                self.sync_fullscreen(window);
                 false
             }
         }
@@ -355,6 +352,7 @@ impl App {
         self.debugger = None;
         window.set_title("TGPulse");
         self.gui.visible = true;
+        self.sync_fullscreen(window);
         // With nothing running there is nothing for the overlay to control, so
         // the phone goes back to the library rather than to an empty screen.
         self.touch.set_menu_open(true);
@@ -389,11 +387,12 @@ impl App {
         // Both are arguments to the renderer's constructor, and the renderer is
         // rebuilt whenever a game is loaded or closed, so a game is handed
         // exactly the settings it was before.
+        let settings = self.current_video_settings();
         let (widescreen, stretch_2d) = match self.session {
-            Some(_) => (self.config.widescreen, self.config.widescreen_stretch_2d),
+            Some(_) => (settings.widescreen, self.config.widescreen_stretch_2d),
             None => (true, false),
         };
-        let video = pollster::block_on(async {
+        let mut video = pollster::block_on(async {
             if model1 {
                 Model2Video::new_model1(
                     window,
@@ -415,13 +414,14 @@ impl App {
                 .await
             }
         });
+        video.set_cabinet_aspect(settings.cabinet_wide);
         let ui = self
             .gui
             .build_renderer(video.device(), video.queue(), video.surface_format());
         self.gui.set_display_size(window);
         let size = window.inner_size();
         self.touch.resize(size.width as f32, size.height as f32);
-        self.video_settings = VideoSettings::of(&self.config);
+        self.video_settings = settings;
         self.presenter = Some(Presenter { video, ui });
     }
 
@@ -610,15 +610,13 @@ impl App {
                 }
             }
             Hotkey::Fullscreen => {
-                // Only the window changes: see `Settings` for why this is not
-                // written down.
-                self.fullscreen = !self.fullscreen;
-                self.config.fullscreen = self.fullscreen;
-                window.set_fullscreen(if self.fullscreen {
-                    Some(Fullscreen::Borderless(None))
-                } else {
-                    None
-                });
+                if self.session.is_none() {
+                    return;
+                }
+                // Remember explicit user toggles just like the GUI checkbox.
+                self.config.fullscreen = !self.fullscreen;
+                self.sync_fullscreen(window);
+                self.save_settings();
             }
             Hotkey::SaveState => self.save_state(self.gui.state_slot),
             Hotkey::LoadState => self.load_state(self.gui.state_slot),
@@ -721,6 +719,10 @@ impl App {
     }
 
     fn redraw(&mut self, window: &Window) {
+        // Re-evaluate live EEPROM after service-menu saves and state loads.
+        if self.presenter.is_some() && self.video_settings != self.current_video_settings() {
+            self.build_presenter(window);
+        }
         let Some((native_width, exact, model1_compute)) = self.presenter.as_ref().map(|p| {
             (
                 p.video.native_width() as f32,
@@ -837,12 +839,7 @@ impl App {
                 Action::LoadState(slot) => self.load_state(slot),
                 Action::Debug(line) => self.run_debug_command(&line),
                 Action::SettingsChanged => {
-                    window.set_fullscreen(if self.config.fullscreen {
-                        Some(Fullscreen::Borderless(None))
-                    } else {
-                        None
-                    });
-                    self.fullscreen = self.config.fullscreen;
+                    self.sync_fullscreen(window);
                     #[cfg(target_os = "android")]
                     crate::storage::set_reverse_landscape(self.config.reverse_landscape);
                     if let Some(session) = &mut self.session {
@@ -852,7 +849,7 @@ impl App {
                     // Supersampling and the widescreen framing shape the
                     // pipelines themselves, so editing one only takes effect
                     // once the renderer has been built again.
-                    if self.video_settings != VideoSettings::of(&self.config) {
+                    if self.video_settings != self.current_video_settings() {
                         self.build_presenter(window);
                     }
                     self.save_settings();
@@ -881,6 +878,33 @@ impl App {
         if let Err(e) = self.bindings.save(&Bindings::path()) {
             log::error!(target: "input", "cannot save bindings: {e}");
         }
+    }
+
+    fn sync_fullscreen(&mut self, window: &Window) {
+        let fullscreen = game_fullscreen(self.config.fullscreen, self.session.is_some());
+        if fullscreen != self.fullscreen {
+            window.set_fullscreen(if fullscreen {
+                Some(Fullscreen::Borderless(None))
+            } else {
+                None
+            });
+            self.fullscreen = fullscreen;
+        }
+        self.gui.set_suppressed(fullscreen);
+    }
+
+    fn current_video_settings(&self) -> VideoSettings {
+        let cabinet_wide = self.session.as_ref().and_then(|session| {
+            (self.config.widescreen == Widescreen::Auto).then(|| match &session.machine {
+                Machine::Model1(sys) => {
+                    crate::widescreen::cabinet_wide(&session.set, true, &sys.ioboard.eeprom().data)
+                }
+                Machine::Model2(sys) => {
+                    crate::widescreen::cabinet_wide(&session.set, false, &sys.eeprom.data)
+                }
+            })
+        });
+        VideoSettings::of(&self.config, cabinet_wide)
     }
 
     /// Writes the current adjustments out, so the next run starts the way this
@@ -1015,21 +1039,27 @@ fn android_pad_button(code: u32) -> Option<gilrs::Button> {
     })
 }
 
+fn game_fullscreen(preference: bool, running: bool) -> bool {
+    preference && running
+}
+
 /// The parts of the configuration the renderer bakes in at construction.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 struct VideoSettings {
     ssaa: u32,
     smooth_shadows: bool,
     widescreen: bool,
+    cabinet_wide: Option<bool>,
     stretch_2d: bool,
 }
 
 impl VideoSettings {
-    fn of(config: &Config) -> Self {
+    fn of(config: &Config, cabinet_wide: Option<bool>) -> Self {
         Self {
             ssaa: config.ssaa,
             smooth_shadows: config.smooth_shadows,
-            widescreen: config.widescreen,
+            widescreen: config.widescreen == Widescreen::On,
+            cabinet_wide,
             stretch_2d: config.widescreen_stretch_2d,
         }
     }
@@ -1043,6 +1073,33 @@ enum Layers {
     Model1 {
         quads: Vec<tgpulse_core::model1_video::GpuQuad>,
     },
+}
+
+#[cfg(test)]
+mod video_setting_tests {
+    use super::*;
+    #[test]
+    fn fullscreen_follows_game_lifecycle_not_library() {
+        for preference in [false, true] {
+            assert!(!game_fullscreen(preference, false)); // startup / failed load
+            assert_eq!(game_fullscreen(preference, true), preference); // launch
+            assert!(!game_fullscreen(preference, false)); // close
+            assert_eq!(game_fullscreen(preference, true), preference); // relaunch
+        }
+    }
+    #[test]
+    fn auto_uses_native_aspect_without_manual_fov_expansion() {
+        let mut config = Config::default();
+        config.widescreen = Widescreen::Auto;
+        let normal = VideoSettings::of(&config, Some(false));
+        let wide = VideoSettings::of(&config, Some(true));
+        assert!(!wide.widescreen);
+        assert!(normal != wide); // A live EEPROM change invalidates the presenter.
+        config.widescreen = Widescreen::On;
+        assert!(VideoSettings::of(&config, None).widescreen);
+        config.widescreen = Widescreen::Off;
+        assert!(!VideoSettings::of(&config, None).widescreen);
+    }
 }
 
 /// A lightgun crosshair, drawn into an ARGB `SCREEN_W`x`SCREEN_H` layer. Red

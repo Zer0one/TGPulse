@@ -24,6 +24,22 @@ The interface uses logical coordinates for Retina scaling and mouse input.
 Fullscreen remains bound to F11; on macOS, try Fn+Cmd+F11 to send it to the
 application.
 
+### Local toolkit release and rolling builds
+
+The separate macos-emulation-toolkit project owns installation and system
+launchers. Its development source is `~/dev/TGPulse` (this checkout); its
+replaceable rolling build lives in `~/dev/TGPulse-my`. `tgpulse.my` runs the
+verified rolling binary with this checkout as cwd, sharing its configuration,
+ROMs, NVRAM and states. Uncommitted source edits are not included by its updater.
+Use `./tgpulse-dev` to test this checkout's own release build directly.
+
+The `tgpulse` system launcher targets `~/Retro/Apps/TGPulse/current/tgpulse`.
+Whenever the user requests a release for a specific version, update `current`
+to that verified version with the required macOS compatibility fixes and record
+its source revision and binary hash in the toolkit verification notes. Routine
+rolling updates must not replace `current`. Current keeps separate settings
+and saves to avoid mixing upstream and custom formats; only ROMs are shared.
+
 ## Linux
 
 ```sh

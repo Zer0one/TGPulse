@@ -29,6 +29,43 @@ pub enum Script {
     Stdin,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn widescreen_modes_override_saved_config() {
+        use tgpulse_core::config::Widescreen;
+        for (text, expected) in [
+            ("auto", Widescreen::Auto),
+            ("on", Widescreen::On),
+            ("off", Widescreen::Off),
+        ] {
+            let mut base = Config::default();
+            base.widescreen = Widescreen::Auto;
+            let parsed = parse_from(vec!["--widescreen".into(), text.into()], base).unwrap();
+            assert_eq!(parsed.config.widescreen, expected);
+        }
+        assert!(parse_from(
+            vec!["--widescreen".into(), "invalid".into()],
+            Config::default()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn fullscreen_cli_overrides_saved_preference() {
+        let mut base = Config::default();
+        base.fullscreen = true;
+        assert!(parse_from(vec![], base.clone()).unwrap().config.fullscreen);
+        assert!(
+            !parse_from(vec!["--fullscreen".into(), "off".into()], base)
+                .unwrap()
+                .config
+                .fullscreen
+        );
+    }
+}
+
 pub struct Args {
     pub command: Command,
     pub config: Config,
@@ -95,7 +132,7 @@ fn parse_from(args: Vec<String>, mut config: Config) -> Result<Args, String> {
             }
             "--rumble" => config.rumble = on_off(arg, &next(&mut i)?)?,
             "--smooth-shadows" => config.smooth_shadows = on_off(arg, &next(&mut i)?)?,
-            "--widescreen" => config.widescreen = on_off(arg, &next(&mut i)?)?,
+            "--widescreen" => config.widescreen = next(&mut i)?.parse()?,
             "--widescreen-stretch-2d" => {
                 config.widescreen_stretch_2d = on_off(arg, &next(&mut i)?)?
             }
@@ -223,7 +260,8 @@ Video:
   --ssaa 1..4           Supersamples per output pixel on the 3D layer
                         (default 2). The board itself draws without
                         antialiasing; 1 reproduces that exactly.
-  --widescreen on|off   Render 16:9 with a widened field of view rather
+  --widescreen on|off|auto   Auto follows supported games' NVRAM monitor settings.
+                       On renders with a widened field of view rather
                         than stretching the 4:3 image (default off).
   --widescreen-stretch-2d on|off
                         Stretch the 2D tile layers to fill the widened
@@ -231,7 +269,7 @@ Video:
   --smooth-shadows on|off
                         Blend the hardware's stipple transparency instead
                         of reproducing its checkerboard (default on).
-  --fullscreen on|off   Start fullscreen (default off).
+  --fullscreen on|off   Fullscreen during games; library stays windowed (default off).
 
 Audio:
   --volume <pct>        Output volume, as a percentage of the board's own

@@ -13,18 +13,16 @@
 
 use std::path::{Path, PathBuf};
 
-use tgpulse_core::config::{Cabinet, Config};
+use tgpulse_core::config::{Cabinet, Config, Widescreen};
 
 /// The adjustable subset of `Config` that is worth remembering between runs.
 ///
-/// Fullscreen is deliberately not here. It is how the window is being looked
-/// at right now, not a preference: toggling it with the hotkey mid-game would
-/// otherwise decide how the emulator starts next time, which is a surprise
-/// nobody asked for.
+/// Fullscreen is persisted along with the other user preferences.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     pub ssaa: u32,
-    pub widescreen: bool,
+    pub fullscreen: bool,
+    pub widescreen: Widescreen,
     pub widescreen_stretch_2d: bool,
     pub smooth_shadows: bool,
     pub volume: u32,
@@ -43,6 +41,7 @@ impl Settings {
     pub fn from_config(config: &Config) -> Self {
         Self {
             ssaa: config.ssaa,
+            fullscreen: config.fullscreen,
             widescreen: config.widescreen,
             widescreen_stretch_2d: config.widescreen_stretch_2d,
             smooth_shadows: config.smooth_shadows,
@@ -55,6 +54,7 @@ impl Settings {
 
     pub fn apply_to(&self, config: &mut Config) {
         config.ssaa = self.ssaa;
+        config.fullscreen = self.fullscreen;
         config.widescreen = self.widescreen;
         config.widescreen_stretch_2d = self.widescreen_stretch_2d;
         config.smooth_shadows = self.smooth_shadows;
@@ -109,7 +109,7 @@ impl Settings {
                         log::warn!(target: "settings", "{}:{}: bad ssaa '{value}' (want 1..4)", path.display(), number + 1)
                     }
                 },
-                "widescreen" => settings.widescreen = boolean(value).unwrap_or(settings.widescreen),
+                "widescreen" => settings.widescreen = value.parse().unwrap_or(settings.widescreen),
                 "widescreen_stretch_2d" => {
                     settings.widescreen_stretch_2d =
                         boolean(value).unwrap_or(settings.widescreen_stretch_2d)
@@ -117,11 +117,7 @@ impl Settings {
                 "smooth_shadows" => {
                     settings.smooth_shadows = boolean(value).unwrap_or(settings.smooth_shadows)
                 }
-                // Fullscreen used to be written here. It is a view mode, not a
-                // preference: it belongs to the run, set by --fullscreen or
-                // toggled with the hotkey. Accepted and ignored so an older
-                // file does not warn.
-                "fullscreen" => {}
+                "fullscreen" => settings.fullscreen = boolean(value).unwrap_or(settings.fullscreen),
                 "volume" => match value.parse::<u32>() {
                     Ok(n) => settings.volume = n,
                     Err(_) => {
@@ -165,6 +161,7 @@ impl Settings {
              # Delete a line to go back to the shipped value.\n\
              \n\
              ssaa = {}\n\
+             fullscreen = {}\n\
              widescreen = {}\n\
              widescreen_stretch_2d = {}\n\
              smooth_shadows = {}\n\
@@ -173,7 +170,8 @@ impl Settings {
              cabinet = {}\n\
              reverse_landscape = {}\n",
             self.ssaa,
-            on_off(self.widescreen),
+            on_off(self.fullscreen),
+            self.widescreen.as_str(),
             on_off(self.widescreen_stretch_2d),
             on_off(self.smooth_shadows),
             self.volume,
@@ -195,7 +193,8 @@ mod tests {
         let path = dir.join("settings.conf");
         let settings = Settings {
             ssaa: 4,
-            widescreen: true,
+            fullscreen: true,
+            widescreen: Widescreen::Auto,
             smooth_shadows: false,
             volume: 400,
             cabinet: Cabinet::Twin,
@@ -203,6 +202,12 @@ mod tests {
         };
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path), settings);
+        for mode in [Widescreen::Off, Widescreen::On, Widescreen::Auto] {
+            let mut settings = settings.clone();
+            settings.widescreen = mode;
+            settings.save(&path).unwrap();
+            assert_eq!(Settings::load(&path), settings);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

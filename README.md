@@ -45,6 +45,11 @@ Settings → Input and stored in `config/input.conf`.
 See [input bindings and game routing](docs/INPUTS.md) for keyboard assignments,
 combination syntax, migration and deliberate differences from SM2-Emu.
 
+**Widescreen.** Settings → Widescreen offers Off, On and Auto. Auto follows
+the saved monitor/cabinet setting for VR, Indy 500 and Sega Touring Car;
+unknown games use 4:3. CLI: `--widescreen auto`. See
+[native aspect detection and supported sets](docs/WIDESCREEN.md).
+
 | Key | |
 | --- | --- |
 | `F1` | show or hide the interface over a running game |

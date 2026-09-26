@@ -547,20 +547,27 @@ fn settings_window(
                 changed = true;
             }
             ui.text_disabled("1 is the board's own output, without antialiasing.");
-            changed |= ui.checkbox("Widescreen", &mut config.widescreen);
+            let mut wide = match config.widescreen {
+                tgpulse_core::config::Widescreen::Off => 0,
+                tgpulse_core::config::Widescreen::On => 1,
+                tgpulse_core::config::Widescreen::Auto => 2,
+            };
+            if ui.combo_simple_string("Widescreen", &mut wide, &["Off", "On", "Auto"]) {
+                config.widescreen = [
+                    tgpulse_core::config::Widescreen::Off,
+                    tgpulse_core::config::Widescreen::On,
+                    tgpulse_core::config::Widescreen::Auto,
+                ][wide];
+                changed = true;
+            }
+            ui.text_disabled("Auto follows supported games' saved monitor/cabinet setting.");
             changed |= ui.checkbox(
                 "Stretch 2D layers when widescreen",
                 &mut config.widescreen_stretch_2d,
             );
             changed |= ui.checkbox("Smooth shadows", &mut config.smooth_shadows);
             ui.text_disabled("Blends the hardware's stipple instead of reproducing it.");
-            // Applied at once, but not remembered: fullscreen is how the
-            // window is being looked at, not a preference.
-            if ui.checkbox("Fullscreen", &mut config.fullscreen) {
-                actions.push(Action::SettingsChanged);
-            }
-            ui.same_line();
-            ui.text_disabled("(this run only)");
+            changed |= ui.checkbox("Fullscreen during games", &mut config.fullscreen);
 
             ui.separator();
             ui.text_disabled("Audio");

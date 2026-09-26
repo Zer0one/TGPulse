@@ -25,6 +25,8 @@ mod settings;
 mod storage;
 #[cfg(target_os = "android")]
 mod touch;
+#[cfg(target_os = "android")]
+mod widescreen;
 
 #[cfg(target_os = "android")]
 #[no_mangle]

@@ -30,6 +30,7 @@ pub struct Model2Video {
     exact_m1: Option<Model1Compute>,
     smooth_shadows: bool,
     widescreen: bool,
+    cabinet_wide: Option<bool>,
     stretch_2d: bool,
     bgl: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -39,6 +40,10 @@ pub struct Model2Video {
 }
 
 impl Model2Video {
+    /// Native cabinet aspect: no additional FOV expansion on an anamorphic image.
+    pub fn set_cabinet_aspect(&mut self, wide: Option<bool>) {
+        self.cabinet_wide = wide;
+    }
     pub fn exact_compute_enabled(&self) -> bool {
         self.exact_enabled
     }
@@ -341,6 +346,7 @@ impl Model2Video {
             widescreen,
             stretch_2d,
             bgl,
+            cabinet_wide: None,
             sampler,
             tex_w,
             tex_h,
@@ -558,8 +564,11 @@ impl Model2Video {
     /// lightgun so the aim tracks 1:1 even pillarboxed on an ultrawide.
     pub fn view_rect(&self) -> (f32, f32, f32, f32) {
         let (win_w, win_h) = (self.config.width as f32, self.config.height as f32);
-        let scale = (win_w / self.tex_w as f32).min(win_h / self.tex_h as f32);
-        let vp_w = (self.tex_w as f32 * scale).max(1.0);
+        let source_w = self.cabinet_wide.map_or(self.tex_w as f32, |wide| {
+            self.tex_h as f32 * if wide { 16.0 / 9.0 } else { 4.0 / 3.0 }
+        });
+        let scale = (win_w / source_w).min(win_h / self.tex_h as f32);
+        let vp_w = (source_w * scale).max(1.0);
         let vp_h = (self.tex_h as f32 * scale).max(1.0);
         let vp_x = ((win_w - vp_w) / 2.0).max(0.0);
         let vp_y = ((win_h - vp_h) / 2.0).max(0.0);

@@ -1,6 +1,46 @@
 //! Runtime configuration for the machine. Nothing game-specific should be
 //! hardcoded in the emulation itself; it comes through here.
 
+/// Manual widescreen override, or the game's persisted cabinet/monitor choice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Widescreen {
+    #[default]
+    Off,
+    On,
+    Auto,
+}
+
+impl Widescreen {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::Auto => "auto",
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            Self::Off => Self::On,
+            Self::On => Self::Auto,
+            Self::Auto => Self::Off,
+        }
+    }
+}
+
+impl std::str::FromStr for Widescreen {
+    type Err = String;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "off" | "false" | "0" | "no" => Ok(Self::Off),
+            "on" | "true" | "1" | "yes" => Ok(Self::On),
+            "auto" => Ok(Self::Auto),
+            _ => Err(format!(
+                "invalid widescreen mode '{value}' (expected off, on or auto)"
+            )),
+        }
+    }
+}
+
 /// Whether the M2COMM network board (837-10537) is fitted. This is a physical
 /// property of the cabinet, not a game setting, so it cannot be derived from
 /// the ROMs and has to be told to us.
@@ -183,7 +223,8 @@ pub struct Config {
     /// plain digital gain on the mixed output, clamped against clipping.
     pub volume: u32,
 
-    /// Render the 3D layer in 16:9 with a widened field of view.
+    /// Off: legacy native framing. On: widen the 3D field of view.
+    /// Auto: present the native image at the saved cabinet's 4:3/16:9 aspect.
     ///
     /// The render target widens from
     /// 496x384 to 683x384 and the polygon viewport/frustum widens around its
@@ -191,7 +232,7 @@ pub struct Config {
     /// sides instead of the 4:3 image being stretched. The 2D tile layers
     /// (sky, HUD) stretch to fill, Off is
     /// the hardware's own framing.
-    pub widescreen: bool,
+    pub widescreen: Widescreen,
 
     /// Stretch the 2D tile layers to fill the widened frame.
     ///
@@ -227,7 +268,7 @@ impl Default for Config {
             // did on a CRT; the exact dither is one flag away for purists.
             smooth_shadows: true,
             volume: 100,
-            widescreen: false,
+            widescreen: Widescreen::Off,
             widescreen_stretch_2d: true,
             reverse_landscape: false,
         }

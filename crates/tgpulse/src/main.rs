@@ -14,6 +14,7 @@ mod settings;
 #[cfg(target_os = "android")]
 mod storage;
 mod touch;
+mod widescreen;
 
 use std::io::{BufRead, Write};
 
