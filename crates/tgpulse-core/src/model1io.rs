@@ -14,12 +14,12 @@
 //!
 //!
 
-use std::cell::Cell;
-
 use z80::{Z80_io, Z80};
 
 use crate::config::Inputs;
 use crate::eeprom93c46::Eeprom93c46;
+use crate::msm6253::Adc;
+use crate::sega3155338::{Chip5338, WriteEffect};
 
 /// Z80 clock: the board's 32 MHz crystal divided by eight.
 pub const Z80_HZ: u32 = 4_000_000;
@@ -123,7 +123,16 @@ impl Z80_io for Board {
         match addr {
             0x0000..=0x3fff => self.rom[addr as usize],
             0x4000..=0x5fff => self.ram[(addr - 0x4000) as usize],
-            0x8000..=0x800f => self.io.read(self, (addr & 0x0f) as u8),
+            0x8000..=0x800f => self.io.read(
+                (addr & 0x0f) as u8,
+                |port| self.input_port(port),
+                |address| {
+                    self.dpram
+                        .get(address as usize & (DPRAM_SIZE - 1))
+                        .copied()
+                        .unwrap_or(0xff)
+                },
+            ),
             0xc000..=0xc003 => self.adc.shift_out(),
             _ => 0xff,
         }
@@ -143,6 +152,152 @@ impl Z80_io for Board {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_generation_memory_map_stays_separate_from_board2() {
+        let mut board = IoBoard::new(&vec![0x5a; 0x8000], Eeprom93c46::new()).cpu.io;
+        for address in [0, 0x3fff] {
+            board.write_byte(address, 0xa5);
+            assert_eq!(board.read_byte(address), 0x5a);
+        }
+        for address in [0x4000, 0x5fff] {
+            board.write_byte(address, 0x23);
+            assert_eq!(board.read_byte(address), 0x23);
+        }
+        // These are not RAM/ADC locations on this first-generation board.
+        for address in [0x6000, 0x8040, 0x8080, 0x8200, 0xe000, 0xffff] {
+            board.write_byte(address, 0x12);
+            assert_eq!(board.read_byte(address), 0xff);
+        }
+    }
+
+    #[test]
+    fn parallel_inputs_and_dips_keep_first_generation_port_wiring() {
+        let mut io = IoBoard::new(&[], Eeprom93c46::new());
+        io.set_inputs(Inputs {
+            in0: 0x12,
+            in1: 0x34,
+            in2: 0x56,
+            dsw: [0x78, 0x9a, 0xbc],
+            ..Inputs::default()
+        });
+        let board = &mut io.cpu.io;
+        board.write_byte(0x8008, 0x0e);
+        for (port, expected) in [(1, 0x12), (2, 0x34), (3, 0x56)] {
+            assert_eq!(board.read_byte(0x8000 + port), expected);
+        }
+        board.write_byte(0x8000, 1);
+        for (port, expected) in [(1, 0x78), (2, 0x9a), (3, 0xbc)] {
+            assert_eq!(board.read_byte(0x8000 + port), expected);
+        }
+        board.write_byte(0x8000, 0);
+        assert_eq!(board.read_byte(0x8001), 0x12);
+    }
+
+    #[test]
+    fn adc_samples_on_write_and_selects_both_analog_banks() {
+        let mut io = IoBoard::new(&[], Eeprom93c46::new());
+        let values = [0x15, 0x2a, 0x43, 0x68, 0x87, 0xab, 0xce, 0xf1];
+        let inputs = Inputs {
+            steer: values[0],
+            accel: values[1],
+            brake: values[2],
+            analog: values,
+            ..Inputs::default()
+        };
+        for (channel, expected) in values.into_iter().enumerate() {
+            io.set_inputs(inputs);
+            io.cpu.io.write_byte(0x8000, (channel / 4) as u8);
+            io.cpu.io.write_byte(0xc000 + (channel & 3) as u16, 0xff);
+            // Later input changes must not alter a conversion already latched.
+            io.set_inputs(Inputs::default());
+            let value = (0..8).fold(0, |value, bit| {
+                (value << 1) | io.cpu.io.read_byte(0xc000 + (bit & 3))
+            });
+            assert_eq!(value, expected, "channel {channel}");
+            assert_eq!(io.cpu.io.read_byte(0xc000), 0);
+        }
+    }
+
+    #[test]
+    fn host_addresses_wrap_at_the_board_dual_port_ram_not_in_the_chip() {
+        let mut io = IoBoard::new(&[], Eeprom93c46::new());
+        for (reg, value) in [
+            (0x0a, 0x23),
+            (9, 0),
+            (0x0a, 0xf9),
+            (9, 1),
+            (0x0a, 0x5e),
+            (9, 7),
+        ] {
+            io.cpu.io.write_byte(0x8000 + reg, value);
+        }
+        assert_eq!(io.dpram()[0x123], 0x5e);
+        io.dpram_mut()[0x123] = 0xa9;
+        assert_eq!(io.cpu.io.read_byte(0x800c), 0xa9);
+        io.cpu.io.write_byte(0x8009, 0x73);
+        assert_eq!(io.dpram()[3], 0x5e);
+        assert_eq!(io.dpram()[0x123], 0xa9);
+    }
+
+    #[test]
+    fn output_effects_are_applied_immediately_even_for_input_ports() {
+        let mut io = IoBoard::new(&[], Eeprom93c46::new());
+        io.cpu.io.write_byte(0x8008, 0x30);
+        io.cpu.io.write_byte(0x8004, 0x12);
+        io.cpu.io.write_byte(0x8005, 0x34);
+        assert_eq!(io.drive_cmd(), 0x12);
+        assert_eq!(io.cpu.io.outputs, 0x34);
+        // Input reads still use external wiring rather than the output latch.
+        assert_eq!(io.cpu.io.read_byte(0x8004), 0xff);
+        io.cpu.io.drive_cmd = 0;
+        io.cpu.io.outputs = 0;
+        io.cpu.io.write_byte(0x8008, 0);
+        assert_eq!(io.drive_cmd(), 0x12);
+        assert_eq!(io.cpu.io.outputs, 0x34);
+    }
+
+    fn eeprom_bits(board: &mut Board, value: u32, count: u32) {
+        for bit in (0..count).rev() {
+            let lines = 0x40 | (((value >> bit) as u8 & 1) << 5);
+            board.write_byte(0x8000, lines);
+            board.write_byte(0x8000, lines | 0x80);
+        }
+    }
+
+    #[test]
+    fn eeprom_commands_survive_the_shared_chip_boundary() {
+        let mut io = IoBoard::new(&[], Eeprom93c46::new());
+        // Enable writes: start, opcode 00, address 11xxxx.
+        eeprom_bits(&mut io.cpu.io, 0x130, 9);
+        io.cpu.io.write_byte(0x8000, 0);
+        // Write word 7: start, opcode 01, six-bit address, sixteen data bits.
+        eeprom_bits(&mut io.cpu.io, 0x147, 9);
+        eeprom_bits(&mut io.cpu.io, 0xa635, 16);
+        io.cpu.io.write_byte(0x8000, 0);
+        assert_eq!(io.eeprom().data[7], 0xa635);
+        assert!(io.eeprom().dirty);
+        assert_eq!(io.eeprom().data[6], 0xffff);
+        // Read through port G bit 7, including the initial dummy zero.
+        io.cpu.io.write_byte(0x8008, 0x40);
+        eeprom_bits(&mut io.cpu.io, 0x187, 9);
+        assert_eq!(io.cpu.io.read_byte(0x8006), 0x7f);
+        let mut result = 0u16;
+        for _ in 0..16 {
+            eeprom_bits(&mut io.cpu.io, 0, 1);
+            let port = io.cpu.io.read_byte(0x8006);
+            assert_eq!(port & 0x7f, 0x7f);
+            result = (result << 1) | (port >> 7) as u16;
+        }
+        assert_eq!(result, 0xa635);
+        io.cpu.io.write_byte(0x8000, 0);
+        assert_eq!(io.cpu.io.read_byte(0x8006), 0xff);
     }
 }
 
@@ -181,49 +336,16 @@ impl Board {
     }
 
     fn io_write(&mut self, reg: u8, value: u8) {
-        match reg {
-            0x00..=0x06 => {
-                self.io.port_value[reg as usize] = value;
-                self.output_port(reg, value);
-            }
-            0x08 => {
-                // Direction register: a bit set means the port is an input.
-                // A port that has just become an output re-presents its latch.
-                let changed = value ^ self.io.port_config;
-                self.io.port_config = value;
+        match self.io.write(reg, value) {
+            WriteEffect::None => {}
+            WriteEffect::Ports(mask) => {
                 for port in 0..7u8 {
-                    if changed & (1 << port) != 0 && value & (1 << port) == 0 {
-                        self.output_port(port, self.io.port_value[port as usize]);
+                    if mask & (1 << port) != 0 {
+                        self.output_port(port, self.io.port_value(port));
                     }
                 }
             }
-            0x09 => self.command(value),
-            0x0a => self.io.serial_output = value,
-            _ => {}
-        }
-    }
-
-    /// The command register. The chip addresses the dual-port RAM a byte at a
-    /// time: the address is loaded in two halves from the serial latch, then a
-    /// command moves one byte in or out.
-    fn command(&mut self, value: u8) {
-        self.io.cmd = value;
-        match value {
-            0x00 => self.io.address = (self.io.address & 0xff00) | self.io.serial_output as u16,
-            0x01 => {
-                self.io.address = (self.io.address & 0x00ff) | ((self.io.serial_output as u16) << 8)
-            }
-            0x07 => {
-                let (address, data) = (self.io.address, self.io.serial_output);
-                self.dpram_write(address, data);
-            }
-            0x70..=0x77 => {
-                let data = self.io.serial_output;
-                self.dpram_write((value & 0x07) as u16, data);
-            }
-            // Sent once the address is set and the chip is about to be read.
-            0x87 => {}
-            other => log::debug!(target: "ioboard", "unknown 315-5338A command {other:02X}"),
+            WriteEffect::Host { address, data } => self.dpram_write(address, data),
         }
     }
 
@@ -247,70 +369,5 @@ impl Board {
             5 => self.outputs = value,
             _ => {}
         }
-    }
-}
-
-/// Sega 315-5338A: seven parallel ports plus a serial path into the host's
-/// memory, which on this board is the dual-port RAM.
-#[derive(Default)]
-struct Chip5338 {
-    port_value: [u8; 7],
-    /// A set bit marks that port as an input.
-    port_config: u8,
-    cmd: u8,
-    serial_output: u8,
-    address: u16,
-}
-
-impl Chip5338 {
-    fn read(&self, board: &Board, reg: u8) -> u8 {
-        match reg {
-            0x00..=0x06 => {
-                if self.port_config & (1 << reg) != 0 {
-                    board.input_port(reg)
-                } else {
-                    self.port_value[reg as usize]
-                }
-            }
-            0x08 => self.port_config,
-            0x0a => self.serial_output,
-            0x0b => self.cmd,
-            0x0c => board
-                .dpram
-                .get(self.address as usize & (DPRAM_SIZE - 1))
-                .copied()
-                .unwrap_or(0xff),
-            // Status: bit 3 says the transfer finished, bit 0 that the last
-            // command was acknowledged. Both are always true here, because
-            // nothing in this model takes time.
-            0x0d => 0x08,
-            _ => 0xff,
-        }
-    }
-}
-
-/// OKI MSM6253: four multiplexed analog inputs, read out one bit at a time.
-///
-/// Writing to the chip picks a channel *and* latches that channel's reading
-/// into the shift register in one action; each read then hands back the top
-/// bit and shifts, with zeros feeding in behind. Latching lazily on the first
-/// read instead -- which is what this did -- leaves the register holding
-/// whatever the previous conversion had shifted down to, and the wheel reads
-/// hard over.
-#[derive(Default)]
-struct Adc {
-    shifter: Cell<u8>,
-}
-
-impl Adc {
-    fn latch(&self, value: u8) {
-        self.shifter.set(value);
-    }
-
-    /// The next bit of the conversion, most significant first, in bit 0.
-    fn shift_out(&self) -> u8 {
-        let shifter = self.shifter.get();
-        self.shifter.set(shifter << 1);
-        shifter >> 7
     }
 }
