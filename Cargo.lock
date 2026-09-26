@@ -2121,6 +2121,7 @@ dependencies = [
  "mb86235",
  "serde",
  "serde-big-array",
+ "sha1",
  "sharc",
  "v60",
  "z80",

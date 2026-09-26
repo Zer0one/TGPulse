@@ -56,6 +56,7 @@ struct Load {
     region: String,
     file: String,
     off: usize,
+    len: usize,
     kind: [u8; 2],
 }
 
@@ -256,13 +257,14 @@ fn parse_db() -> Vec<GameDef> {
                     let region = it.next().unwrap_or("").to_string();
                     let file = it.next().unwrap_or("").to_string();
                     let off = parse_num(it.next().unwrap_or("0"));
-                    let _sz = it.next();
+                    let len = parse_num(it.next().unwrap_or("0"));
                     let k = it.next().unwrap_or("p").as_bytes();
                     let kind = [k[0], if k.len() > 1 { k[1] } else { 0 }];
                     g.loads.push(Load {
                         region,
                         file,
                         off,
+                        len,
                         kind,
                     });
                 }
@@ -328,15 +330,7 @@ pub fn build_regions(
         let Some(dest) = regions.get_mut(&load.region) else {
             continue;
         };
-        let r = match &load.kind {
-            b"p\0" => crate::loader::copy_at(dest, load.off, &data),
-            b"w\0" => load16_word_swap(dest, load.off, &data),
-            b"4w" => load32_word(dest, load.off, &data),
-            b"4b" => load32_byte(dest, load.off & !3, load.off & 3, &data),
-            b"2b" => load16_byte(dest, load.off & !1, load.off & 1, &data),
-            _ => Ok(()),
-        };
-        r?;
+        apply_load(dest, load, &data)?;
     }
     for c in &def.copies {
         if let Some(reg) = regions.get_mut(&c.region) {
@@ -349,4 +343,46 @@ pub fn build_regions(
         log::info!(target: "loader", "warning: {missing} ROM file(s) missing from the set");
     }
     Ok(regions)
+}
+
+fn apply_load(dest: &mut [u8], load: &Load, data: &[u8]) -> Result<(), String> {
+    // ROM_RELOAD can mirror only a prefix of a chip (NetMerc sound ROM).
+    // Keep the existing partial-file behavior, but never exceed the declared load.
+    let data = &data[..data.len().min(load.len)];
+    if data.is_empty() {
+        return Ok(());
+    }
+    match &load.kind {
+        b"p\0" => crate::loader::copy_at(dest, load.off, data),
+        b"w\0" => load16_word_swap(dest, load.off, data),
+        b"4w" => load32_word(dest, load.off, data),
+        b"4b" => load32_byte(dest, load.off & !3, load.off & 3, data),
+        b"2b" => load16_byte(dest, load.off & !1, load.off & 1, data),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn netmerc_sound_reload_uses_only_declared_prefix() {
+        let game = GAMES.iter().find(|game| game.name == "netmerc").unwrap();
+        let mut dest = vec![0; 0xc0000];
+        let data: Vec<u8> = (0..0x80000).map(|i| (i % 251) as u8).collect();
+        let loads: Vec<_> = game
+            .loads
+            .iter()
+            .filter(|l| l.file == "epr-18121.ic7")
+            .collect();
+        assert_eq!(loads.len(), 2);
+        assert_eq!(loads[1].len, 0x20000);
+        for load in loads {
+            apply_load(&mut dest, load, &data).unwrap();
+        }
+        assert_eq!(&dest[0x80000..0xa0000], &dest[..0x20000]);
+        assert_eq!(&dest[..4], &[1, 0, 3, 2]);
+        assert!(dest[0xa0000..].iter().all(|&b| b == 0));
+    }
 }

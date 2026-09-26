@@ -16,6 +16,12 @@ pub struct Binding {
     alternatives: Vec<Vec<Atom>>,
 }
 impl Binding {
+    pub fn uses_source(&self, source: Source) -> bool {
+        self.alternatives
+            .iter()
+            .flatten()
+            .any(|atom| *atom == Atom::Source(source))
+    }
     pub fn parse(text: &str, signed: bool) -> Result<Self, String> {
         let mut alternatives = Vec::new();
         if !text.trim().is_empty() {

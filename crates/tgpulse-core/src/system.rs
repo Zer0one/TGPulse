@@ -143,6 +143,8 @@ pub struct Model2System {
     /// Sega 315-5649 I/O chip state (2A/2B/2C boards): the output-port latches
     /// and the auto-incrementing analog channel selector.
     pub io5649_ports: [u8; 8],
+    /// Immutable cabinet wiring, restored by loading the ROM, not save-state data.
+    pub airwalkers_matrix: bool,
     pub io5649_analog: u32,
     /// Mux index the gun interface board will answer with on serial ch2.
     pub io5649_gun_mux: u32,
@@ -363,7 +365,14 @@ impl Model2System {
             sharc_read_addrs: [0; 4],
             sharc_write_addrs: [0; 4],
             sharc_write_samples: [0; 8],
-            io5649_ports: [0xff; 8],
+            io5649_ports: {
+                let mut ports = [0xff; 8];
+                if roms.airwalkers_matrix {
+                    ports[5] &= !0x80;
+                }
+                ports
+            },
+            airwalkers_matrix: roms.airwalkers_matrix,
             io5649_analog: 0,
             io5649_gun_mux: 0,
             eeprom: {

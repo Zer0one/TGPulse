@@ -7,6 +7,10 @@ use tgpulse_core::config::Inputs;
 
 impl InputState {
     pub fn set_game(&mut self, game: &str) {
+        if self.game != game {
+            self.special_shift = false;
+            self.special_shift_held = false;
+        }
         self.game = game.to_owned();
     }
 
@@ -113,8 +117,18 @@ impl InputState {
             C::Button3 if self.game == "vf" || self.game.starts_with("doa") => S::Action2,
             C::Button2 if self.game.starts_with("vstriker") => S::Action3,
             C::Button3 if self.game.starts_with("vstriker") => S::Action2,
-            C::Button1 if self.game.starts_with("dynabb") => S::Action2,
-            C::Button2 if self.game.starts_with("dynabb") => S::Action1,
+            C::Button1
+                if self.game.starts_with("dynabb")
+                    || matches!(self.game.as_str(), "hpyagu98" | "rascot2" | "airwlkrs") =>
+            {
+                S::Action2
+            }
+            C::Button2
+                if self.game.starts_with("dynabb")
+                    || matches!(self.game.as_str(), "hpyagu98" | "rascot2" | "airwlkrs") =>
+            {
+                S::Action1
+            }
             C::Button1 => S::Action1,
             C::Button2 => S::Action2,
             C::Button3 => S::Action3,
@@ -138,21 +152,132 @@ impl InputState {
     /// Override independent axes absent from the old scheme, retaining its
     /// calibration and the DB's channel ordering for everything else.
     pub(in crate::input) fn routed_axis(&self, role: A, axes: &Axes) -> u8 {
-        let axis = |s| (128.0 + self.signal(s) * 127.0).round().clamp(0.0, 255.0) as u8;
+        let axis = |s| centered(self.signal(s), 128, 0, 255);
+        // The legacy racing sampler ramps within Daytona/VR's 20..e0 range.
+        // Translate that travel, not the bindings, for full-range cabinets.
+        let full_range_car = matches!(self.scheme, Scheme::Racing | Scheme::Bike)
+            && !self.game.is_empty()
+            && !matches!(self.game.as_str(), "vr" | "vformula");
+        if full_range_car {
+            let pedal = |v: u8| {
+                ((v.saturating_sub(0x20) as f32 / 192.0) * 255.0)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            };
+            match role {
+                A::Steer => {
+                    return centered(
+                        (axes.steer as f32 - 128.0) / 96.0
+                            * if self.scheme == Scheme::Bike {
+                                -1.0
+                            } else {
+                                1.0
+                            },
+                        128,
+                        0,
+                        255,
+                    )
+                }
+                A::Brake if self.game == "desert" => {
+                    return centered(-self.signal(S::Elevation), 128, 0, 255)
+                }
+                A::Accel | A::Brake | A::Throttle => {
+                    let v = pedal(axes.by_role(role));
+                    return if self.game.starts_with("overrev") || self.game == "sgt24h" {
+                        255 - v
+                    } else {
+                        v
+                    };
+                }
+                _ => {}
+            }
+        }
+        if self.scheme == Scheme::Flight && !self.game.is_empty() {
+            let swa = self.game.starts_with("swa");
+            let (mid, lo, hi) = if swa { (127, 27, 227) } else { (128, 0, 255) };
+            match role {
+                A::StickX => {
+                    return centered(
+                        self.signal(S::SkyX)
+                            * if self.game == "netmerc" || self.game == "wingwar360" {
+                                1.0
+                            } else {
+                                -1.0
+                            },
+                        if self.game == "netmerc" { 127 } else { mid },
+                        lo,
+                        hi,
+                    )
+                }
+                // gilrs Y is positive UP; MAME's non-reversed ADC Y is positive DOWN.
+                A::StickY => {
+                    return centered(
+                        self.signal(S::SkyY)
+                            * if self.game == "netmerc" || self.game == "wingwar360" {
+                                1.0
+                            } else {
+                                -1.0
+                            },
+                        if self.game == "netmerc" { 127 } else { mid },
+                        lo,
+                        hi,
+                    )
+                }
+                A::Stick2X | A::Stick2Y if swa => return 127, // no second player binding
+                A::Throttle if swa => {
+                    return centered(
+                        self.amount(C::Brake) - self.amount(C::Throttle),
+                        128,
+                        28,
+                        228,
+                    )
+                }
+                A::Throttle if self.game.starts_with("wingwar") => {
+                    return (1.0 + 254.0 * self.amount(C::Throttle).clamp(0.0, 1.0)).round() as u8
+                }
+                _ => {}
+            }
+        }
         match role {
+            // Positional gun cabinets have calibrated ADC travel, not the
+            // serial lightgun coordinates. rchase2a really differs from rchase2.
+            A::Gun1X | A::Gun1Y | A::Gun2X | A::Gun2Y if !self.serial_gun() => {
+                let (min, max, rest, reverse) = match (self.game.as_str(), role) {
+                    ("gunblade" | "bel", A::Gun1X) => (0x69, 0xff, 0xb1, false),
+                    ("gunblade" | "bel", A::Gun2X) => (0x00, 0x96, 0x50, false),
+                    ("gunblade" | "bel", _) => (0x11, 0xae, 0x5f, false),
+                    ("rchase2", A::Gun1X) => (0x3a, 0xca, 0x82, true),
+                    ("rchase2", A::Gun2X) => (0x34, 0xc7, 0x7d, true),
+                    ("rchase2", _) => (0x1c, 0xcb, 0x73, true),
+                    _ => (0x00, 0xff, 0x80, false),
+                };
+                if matches!(role, A::Gun2X | A::Gun2Y) {
+                    return rest;
+                }
+                // Do not quantize to an intermediate 0..255 axis before
+                // applying the calibrated range (SM2 scales the cursor itself).
+                let raw = if role == A::Gun1X {
+                    self.cursor.0
+                } else {
+                    self.cursor.1
+                };
+                let fraction = if reverse { 1.0 - raw } else { raw };
+                (min as f32 + fraction * (max - min) as f32).round() as u8
+            }
             A::Roll => axis(S::Roll),
             A::Pitch => axis(S::Pitch),
-            A::Slide => axis(if self.scheme == Scheme::Skate {
-                S::SkaterSlide
-            } else {
-                S::WaterSlide
-            }),
-            A::Curving => axis(S::Curving),
-            A::Swing => axis(S::Swing),
+            A::Slide if self.scheme == Scheme::Skate => axis(S::SkaterSlide),
+            A::Slide => centered(-self.signal(S::WaterSlide), 128, 0, 255),
+            A::Curving => centered(-self.signal(S::Curving), 128, 0, 255),
+            A::Swing => centered(-self.signal(S::Swing), 128, 0, 255),
             A::Incline => axis(S::Inclining),
             A::Bat1 => (255.0 * self.signal(S::BatSwing)).round() as u8,
             _ => axes.by_role(role),
         }
+    }
+
+    pub(in crate::input) fn serial_gun(&self) -> bool {
+        self.game.is_empty() || self.game.starts_with("vcop") || self.game.starts_with("hotd")
     }
 
     fn h_gate(&self) -> bool {
@@ -205,9 +330,15 @@ impl InputState {
         // function. Do not create a second configurable Start signal.
         let start40 = self.scheme == Scheme::Bike
             || self.game.starts_with("srally")
+            || self.game.starts_with("indy500")
             || self.game.starts_with("stcc")
             || self.game.starts_with("overrev")
+            || self.game == "skytargt"
             || self.game == "sgt24h";
+        // No stale IN2 value may leak from a previous cabinet/frame.
+        if matches!(self.scheme, Scheme::Racing | Scheme::Bike) {
+            out.in2 = 0xff;
+        }
         if start40 {
             out.in0 |= 0xf0;
             write(&mut out.in0, 0x40, pressed(S::Start));
@@ -253,8 +384,26 @@ impl InputState {
             write(&mut out.in1, 0x10, pressed(S::Action1));
             write(&mut out.in1, 0x20, pressed(S::Action2));
             write(&mut out.in1, 1, self.special_shift);
-            out.brake = (128.0 + self.signal(S::Elevation) * 127.0).round() as u8;
-            out.analog[2] = out.brake;
+        } else if self.game.starts_with("wingwar") {
+            out.in1 = 0xff;
+            write(&mut out.in1, 0x10, pressed(S::Action1));
+            write(&mut out.in1, 0x20, pressed(S::Action2));
+            write(&mut out.in1, 0x40, pressed(S::Action3));
+            if self.game != "wingwar360" {
+                for (bit, signal) in [(0x20, S::View1), (0x40, S::View2), (0x80, S::View3)] {
+                    write(&mut out.in0, bit, pressed(signal));
+                }
+                write(&mut out.in1, 1, pressed(S::View4));
+                out.in0 |= 2; // no Coin 2 on the standard cabinet
+            }
+        } else if self.game == "netmerc" {
+            out.in0 |= 0xf2; // no Start switch or Coin 2
+            out.in1 = 0xff;
+            for (bit, signal) in [(1, S::Action1), (2, S::Action2), (4, S::Action3)] {
+                write(&mut out.in1, bit, pressed(signal));
+            }
+        } else if self.game.starts_with("swa") {
+            write(&mut out.in0, 0x20, pressed(S::Start2));
         } else if matches!(self.game.as_str(), "vr" | "vformula") {
             // Model 1 VR uses momentary, active-low shifts, NOT Daytona's
             // active-high H-gate code. Leave VR4 (bit 0) untouched.
@@ -264,11 +413,17 @@ impl InputState {
             write(&mut out.in1, 0x20, up && !down);
             write(&mut out.in1, 0x10, down && !up);
         } else if self.scheme == Scheme::Bike || (self.scheme == Scheme::Racing && !self.h_gate()) {
-            out.in1 |= 0x70;
-            write(&mut out.in1, 1, false);
-            write(&mut out.in1, 0x10, pressed(S::Action1));
-            write(&mut out.in1, 0x20, pressed(S::Action2));
-            if self.game.starts_with("overrev") {
+            out.in1 = 0xff;
+            let up = pressed(S::Action1);
+            let down = pressed(S::Action2);
+            // Motor Raid has independent Punch/Kick, not a sequential shifter.
+            let independent = self.game.starts_with("motoraid");
+            write(&mut out.in1, 0x10, up && (independent || !down));
+            write(&mut out.in1, 0x20, down && (independent || !up));
+            if self.game.starts_with("overrev")
+                || self.game.starts_with("indy500")
+                || self.game.starts_with("stcc")
+            {
                 write(&mut out.in1, 1, pressed(S::View4));
                 write(&mut out.in1, 2, pressed(S::View1));
             } else if self.game == "sgt24h" {
@@ -277,12 +432,22 @@ impl InputState {
         }
         if self.game.starts_with("srally") {
             // Rally handbrake is active high, unlike cabinet buttons.
-            out.in2 = if pressed(S::Action4) { 0xff } else { 0x00 };
+            out.in2 = (255.0 * self.signal(S::Action4).clamp(0.0, 1.0)).round() as u8;
             write(&mut out.in0, 0x20, pressed(S::View1));
             write(&mut out.in1, 1, false);
         }
-        if self.scheme == Scheme::Joystick || self.scheme == Scheme::Gun {
+        if (self.scheme == Scheme::Joystick && !self.game.starts_with("von"))
+            || matches!(self.scheme, Scheme::Gun | Scheme::Sled)
+        {
             write(&mut out.in0, 0x20, pressed(S::Start2));
+        }
+        // These boards have only two action buttons. In particular Bat Swing
+        // must not also produce an unused third button in Dynamite Baseball.
+        if self.game.starts_with("dynabb")
+            || self.game.starts_with("pltkids")
+            || self.game.starts_with("zerogun")
+        {
+            out.in1 |= 0x0c;
         }
         if self.game == "segawski" {
             out.in0 |= 0x10;
@@ -290,8 +455,8 @@ impl InputState {
             write(&mut out.in0, 0x40, pressed(S::Start));
             write(&mut out.in1, 2, pressed(S::View4));
             write(&mut out.in1, 1, pressed(S::Action3));
-            write(&mut out.in1, 4, pressed(S::Action1));
-            write(&mut out.in1, 8, pressed(S::Action2));
+            write(&mut out.in1, 4, pressed(S::Action2)); // L1: Pitch Left
+            write(&mut out.in1, 8, pressed(S::Action1)); // R1: Pitch Right
         } else if self.game == "skisuprg" {
             out.in1 = 0xff;
             write(&mut out.in0, 0x20, pressed(S::View4));
@@ -299,8 +464,8 @@ impl InputState {
             write(&mut out.in0, 0x80, pressed(S::Action4));
             write(&mut out.in0, 0x10, pressed(S::Start));
             write(&mut out.in0, 0x40, pressed(S::Action3));
-            out.in2 = if pressed(S::Action1) { 0xf0 } else { 0 }
-                | if pressed(S::Action2) { 0x0f } else { 0 };
+            out.in2 = if pressed(S::Action2) { 0xf0 } else { 0 } // L1: left foot
+                | if pressed(S::Action1) { 0x0f } else { 0 }; // R1: right foot
         } else if self.game.starts_with("topskatr") {
             out.in1 = 0xff;
             write(&mut out.in0, 0x40, pressed(S::Start));
@@ -310,9 +475,26 @@ impl InputState {
             write(&mut out.in1, 1, pressed(S::Action2));
         }
         if self.game == "bel" {
+            // BEL reverses the electrical Test/Service lines, not their bindings.
+            write(&mut out.in0, 4, self.on(C::Service));
+            write(&mut out.in0, 8, self.on(C::Test));
             out.gun_offscreen = false;
             write(&mut out.in1, 1, pressed(S::Action1) || self.mouse_fire);
             write(&mut out.in1, 0x10, pressed(S::Action2) || self.mouse_reload);
         }
+        if self.game == "segawski" || self.game == "waverunr" {
+            out.in0 |= 2; // single coin input, not Coin 2
+        }
+        if self.scheme == Scheme::Sled {
+            // Do not let Action 3 operate the second seat's Entry input.
+            out.in1 |= 0xfc;
+            write(&mut out.in0, 0x80, pressed(S::Action4));
+        }
     }
+}
+
+fn centered(value: f32, rest: u8, min: u8, max: u8) -> u8 {
+    let v = value.clamp(-1.0, 1.0);
+    let span = if v < 0.0 { rest - min } else { max - rest };
+    (rest as f32 + v * span as f32).round() as u8
 }

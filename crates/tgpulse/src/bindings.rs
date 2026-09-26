@@ -149,6 +149,7 @@ impl fmt::Display for Source {
 /// Everything the player has bound.
 #[derive(Clone, Debug)]
 pub struct Bindings {
+    pub return_to_menu: Binding,
     pub controls: BTreeMap<Signal, Binding>,
     pub hotkeys: BTreeMap<Hotkey, KeyCode>,
 }
@@ -171,7 +172,12 @@ impl Default for Bindings {
             (Hotkey::FastForward, KeyCode::Tab),
         ]);
 
-        Self { controls, hotkeys }
+        Self {
+            controls,
+            hotkeys,
+            return_to_menu: Binding::parse("Escape, pad:Select & pad:Start", false)
+                .expect("valid return-to-menu default"),
+        }
     }
 }
 
@@ -271,7 +277,12 @@ impl Bindings {
             if name == "format" {
                 continue;
             }
-            if let Some(signal) = Signal::from_key(name).filter(|_| modern) {
+            if name == "return_to_menu" {
+                match Binding::parse(value, false) {
+                    Ok(binding) => bindings.return_to_menu = binding,
+                    Err(e) => log::warn!("Invalid return_to_menu binding: {e}; keeping default"),
+                }
+            } else if let Some(signal) = Signal::from_key(name).filter(|_| modern) {
                 if let Err(e) = bindings.set_expression(signal, value) {
                     log::warn!("Invalid binding {name}: {e}; keeping default");
                 }
@@ -426,6 +437,7 @@ impl Bindings {
             );
         }
         out += "\n# Emulator hotkeys\n";
+        out += &format!("return_to_menu = {}\n", self.return_to_menu.text);
         for hotkey in Hotkey::ALL {
             let key = self.hotkey(*hotkey).map(key_token).unwrap_or_default();
             out += &format!("{} = {}\n", hotkey.key(), key);
@@ -526,6 +538,7 @@ fn pad_axis_name(axis: Axis) -> &'static str {
 /// The keys offered for binding. Anything a cabinet button might reasonably
 /// live on; the exotic ones are left out so the picker stays readable.
 pub const KEYS: &[KeyCode] = &[
+    KeyCode::Escape,
     KeyCode::KeyA,
     KeyCode::KeyB,
     KeyCode::KeyC,
@@ -652,12 +665,14 @@ mod tests {
             .unwrap();
         written.set_expression(Signal::Coin2, "").unwrap();
         written.bind_hotkey(Hotkey::Reset, KeyCode::F5);
+        written.return_to_menu = Binding::parse("KeyQ, pad:Select & pad:North", false).unwrap();
         written.save(&path).unwrap();
         let read = Bindings::load(&path);
         for signal in Signal::ALL {
             assert_eq!(read.binding(*signal), written.binding(*signal));
         }
         assert_eq!(read.hotkeys, written.hotkeys);
+        assert_eq!(read.return_to_menu, written.return_to_menu);
         std::fs::remove_file(path).unwrap();
     }
     #[test]

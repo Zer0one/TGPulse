@@ -1,4 +1,6 @@
 //! Single user-facing catalogue. Cabinet controls remain private routing requests.
+#[cfg(test)]
+mod audit;
 pub mod expression;
 mod routing;
 use expression::Binding;
@@ -81,7 +83,7 @@ impl Signal {
         match self {
             Self::SkyX | Self::SkyY => Some("(Sky Target, Star Wars Arcade, Wing War, NetMerc)"),
             Self::Action4 => Some(
-                "(Sega Rally: Handbrake; Virtual On: Right Dash / Turbo; Ski Super G: Select 2)",
+                "(Sega Rally: Handbrake; Virtual On: Right Dash / Turbo; Ski Super G: Select 2; Power Sled: Cancel Error)",
             ),
             _ => None,
         }

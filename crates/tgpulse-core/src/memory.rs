@@ -21,6 +21,38 @@ fn ram_w(ram: &mut [u32], byte_off: u32, val: u32) {
     }
 }
 
+/// Air Walkers' second pair is physically separate from players 1/2.
+/// The frontend currently supplies one player's controls (and Start 2), so
+/// players 3/4 must stay released, not receive mirrored P1 buttons and Start.
+fn digital_cabinet_port(inputs: &crate::config::Inputs, port: usize, second_pair: bool) -> u8 {
+    match (port, second_pair) {
+        (0, false) => inputs.in0,
+        (0, true) => inputs.in0 | 0x30,
+        (1, false) => inputs.in1,
+        (2, false) => inputs.in2,
+        _ => 0xff,
+    }
+}
+
+#[cfg(test)]
+mod input_matrix_tests {
+    use super::digital_cabinet_port;
+    use crate::config::Inputs;
+
+    #[test]
+    fn air_walkers_second_pair_does_not_mirror_first_pair() {
+        let mut input = Inputs::default();
+        input.in0 = 0xc6; // Start 1/2, coin and service held
+        input.in1 = 0x7e;
+        input.in2 = 0xbd;
+        for (pair, expected) in [(false, [0xc6, 0x7e, 0xbd]), (true, [0xf6, 0xff, 0xff])] {
+            for (port, value) in expected.into_iter().enumerate() {
+                assert_eq!(digital_cabinet_port(&input, port, pair), value);
+            }
+        }
+    }
+}
+
 impl Bus for Model2System {
     /// The regions wired to the i960's burst bus cycle.
     ///
@@ -769,6 +801,7 @@ impl Model2System {
     ///   0x0f is the auto-incrementing analog channel.
     fn io5649_byte(&mut self, offset: u32) -> u8 {
         let i = self.inputs;
+        let second_pair = self.airwalkers_matrix && self.io5649_ports[5] & 0x80 != 0;
         match offset {
             0x00 => self.io5649_ports[0],
             // Port B is IN0, except while the game holds the EEPROM in control
@@ -777,11 +810,11 @@ impl Model2System {
                 if self.io5649_ctrlmode {
                     0xC0 | ((self.eeprom.do_read() as u8) << 5) | 0x10 | (i.in0 & 0x0F)
                 } else {
-                    i.in0
+                    digital_cabinet_port(&i, 0, second_pair)
                 }
             }
-            0x02 => i.in1,
-            0x03 => i.in2,
+            0x02 => digital_cabinet_port(&i, 1, second_pair),
+            0x03 => digital_cabinet_port(&i, 2, second_pair),
             0x04 | 0x05 => self.io5649_ports[offset as usize],
             0x06 => i.dsw[0],
             // RS-422 channel 2 input. The 2A/2C light-gun cabinets hang the

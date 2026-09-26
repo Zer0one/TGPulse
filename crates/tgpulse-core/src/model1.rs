@@ -81,6 +81,8 @@ pub struct Model1System {
     pub timer_mode: u16,
     pub timer_period: [u16; 2],
     pub timer_remaining: [u32; 2],
+    /// Last observed count, retained when software stops a timer (MAME #15715).
+    timer_latched: [u16; 2],
 
     pub frame_num: u64,
 
@@ -146,14 +148,18 @@ impl Model1System {
         let mut ioboard = crate::model1io::IoBoard::new(&roms.iocpu, eeprom);
         ioboard.dpram_mut()[IO_STATUS] = 0x40;
 
-        // Battery-backed work RAM (RAMA). The reference maps this as a plain zero-filled
-        // RAM share with no shipped default, so the games initialise every byte
+        // Battery-backed work RAM (RAMA). Use a shipped factory image when present
+        // (NetMerc); otherwise retain our zero-filled boot state. Games initialise bytes
         // they rely on during boot. We must match that power-on state: a stray
         // 0xff fill leaves flags like vf's 0x40bf00 (a "skip the vblank game
         // logic" gate, read at FE3F21) set, so vf's ISR never builds a display
         // list and the screen stays blank. The couple of bytes we used to seed
         // for vr are unnecessary once the region starts at zero.
-        let nvram = vec![0x00; 0x10000];
+        let nvram = if roms.nvram_default.len() == 0x10000 {
+            roms.nvram_default.clone()
+        } else {
+            vec![0x00; 0x10000]
+        };
 
         Self {
             main_cpu: V60::new(),
@@ -206,6 +212,7 @@ impl Model1System {
             timer_mode: 0,
             timer_period: [0; 2],
             timer_remaining: [0; 2],
+            timer_latched: [0; 2],
 
             frame_num: 0,
 
@@ -349,8 +356,11 @@ impl Model1System {
         }
     }
 
-    fn timer_r(&self, index: usize) -> u16 {
-        (self.timer_remaining[index] / 0x800) as u16
+    fn timer_r(&mut self, index: usize) -> u16 {
+        if self.timer_period[index] != 0 {
+            self.timer_latched[index] = (self.timer_remaining[index] / 0x800) as u16;
+        }
+        self.timer_latched[index]
     }
 
     fn dpram_write(&mut self, index: usize, value: u8) {
@@ -847,9 +857,9 @@ impl crate::tilemap::TileSource for Model1System {
 mod persistence_tests {
     use super::*;
 
-    #[test]
-    fn nvram_container_round_trips_complete_eeprom() {
-        let roms = Model1Roms {
+    fn empty_roms() -> Model1Roms {
+        Model1Roms {
+            nvram_default: vec![],
             maincpu: vec![],
             tgp: vec![],
             copro_tables: vec![],
@@ -860,7 +870,53 @@ mod persistence_tests {
             mpcm1: vec![],
             mpcm2: vec![],
             ioboard_config: vec![],
-        };
+        }
+    }
+
+    #[test]
+    fn timer_retains_last_read_count_when_stopped() {
+        let mut sys = Model1System::new(&empty_roms());
+        for index in 0..2 {
+            let period = 0xe00008 + index as u32 * 2;
+            let count = 0xe0000c + index as u32 * 2;
+            assert_eq!(sys.read_u16(count), 0);
+            sys.write_u16(period, 10);
+            sys.advance_timers(3 * 0x800);
+            assert_eq!(sys.read_u16(count), 7);
+            sys.advance_timers(2 * 0x800);
+            sys.write_u16(period, 0);
+            sys.advance_timers(100 * 0x800);
+            // Retain the last *read*, not the count at the moment of stopping.
+            assert_eq!(sys.read_u16(count), 7);
+            sys.write_u16(period, 4);
+            assert_eq!(sys.read_u16(count), 4);
+            sys.advance_timers(4 * 0x800);
+            assert_eq!(sys.read_u16(count), 4);
+        }
+    }
+
+    #[test]
+    fn factory_nvram_is_overridden_by_saved_nvram() {
+        let mut roms = empty_roms();
+        roms.nvram_default = vec![0x5a; 0x10000];
+        let mut sys = Model1System::new(&roms);
+        assert_eq!(sys.nvram, roms.nvram_default);
+        sys.set_nvram_blocks(&vec![0xa5; 0x10000], &[]);
+        assert_eq!(sys.nvram, vec![0xa5; 0x10000]);
+    }
+
+    #[test]
+    fn absent_or_invalid_factory_nvram_preserves_zero_default() {
+        let mut roms = empty_roms();
+        for size in [0, 1, 0x10001] {
+            roms.nvram_default = vec![0xff; size];
+            assert_eq!(Model1System::new(&roms).nvram, vec![0; 0x10000]);
+        }
+    }
+
+    #[test]
+    fn nvram_container_round_trips_complete_eeprom() {
+        let roms = empty_roms();
         let mut original = Model1System::new(&roms);
         original.nvram[0] = 0x5a;
         original.nvram[0xffff] = 0xa5;

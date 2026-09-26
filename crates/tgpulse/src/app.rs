@@ -517,6 +517,13 @@ impl App {
                 }
             }
             Event::AboutToWait => {
+                if self
+                    .session
+                    .as_mut()
+                    .is_some_and(|session| session.input.return_to_menu_requested())
+                {
+                    self.close_game(window);
+                }
                 self.advance();
                 window.request_redraw();
             }
@@ -585,6 +592,17 @@ impl App {
             return;
         }
 
+        if self
+            .bindings
+            .return_to_menu
+            .uses_source(crate::bindings::Source::Key(code))
+        {
+            if let Some(session) = &mut self.session {
+                session.input.on_key(code, pressed);
+            }
+            return;
+        }
+
         if let Some(hotkey) = self.bindings.hotkey_for(code) {
             if matches!(hotkey, Hotkey::FastForward) {
                 self.fast_forward = pressed;
@@ -613,10 +631,9 @@ impl App {
                 if self.session.is_none() {
                     return;
                 }
-                // Remember explicit user toggles just like the GUI checkbox.
-                self.config.fullscreen = !self.fullscreen;
-                self.sync_fullscreen(window);
-                self.save_settings();
+                // A temporary window toggle must not change the next game's
+                // startup preference or write it to settings.conf.
+                self.set_fullscreen(window, !self.fullscreen);
             }
             Hotkey::SaveState => self.save_state(self.gui.state_slot),
             Hotkey::LoadState => self.load_state(self.gui.state_slot),
@@ -768,6 +785,7 @@ impl App {
         // fills the screen with nothing over it. A handset is always
         // fullscreen, which is why its interface is not one of these windows.
         gui.set_suppressed(*fullscreen);
+        let previous_fullscreen_preference = config.fullscreen;
         let actions = gui.frame(
             ui,
             dt,
@@ -821,6 +839,11 @@ impl App {
             self.apply_bindings();
         }
 
+        // Only a changed fullscreen preference should override a temporary
+        // F11 toggle, not unrelated GUI settings such as volume.
+        if self.config.fullscreen != previous_fullscreen_preference {
+            self.sync_fullscreen(window);
+        }
         self.apply(window, actions);
     }
 
@@ -839,7 +862,6 @@ impl App {
                 Action::LoadState(slot) => self.load_state(slot),
                 Action::Debug(line) => self.run_debug_command(&line),
                 Action::SettingsChanged => {
-                    self.sync_fullscreen(window);
                     #[cfg(target_os = "android")]
                     crate::storage::set_reverse_landscape(self.config.reverse_landscape);
                     if let Some(session) = &mut self.session {
@@ -882,6 +904,10 @@ impl App {
 
     fn sync_fullscreen(&mut self, window: &Window) {
         let fullscreen = game_fullscreen(self.config.fullscreen, self.session.is_some());
+        self.set_fullscreen(window, fullscreen);
+    }
+
+    fn set_fullscreen(&mut self, window: &Window, fullscreen: bool) {
         if fullscreen != self.fullscreen {
             window.set_fullscreen(if fullscreen {
                 Some(Fullscreen::Borderless(None))

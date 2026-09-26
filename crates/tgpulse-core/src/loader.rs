@@ -1,9 +1,27 @@
 //! ROM loading for Sega Model 2: which chip goes where in each ROM region,
 //! and how the interleaved ones are woven together.
 
+use sha1::{Digest, Sha1};
 use std::fs::File;
 use std::io::Read;
 use zip::ZipArchive;
+
+/// MAME #15649: repair only the fully identified old 315-5711 dump, never
+/// a different program or an unknown/corrupted revision. ZIPs remain untouched.
+fn repair_315_5711(program: &mut [u8]) -> bool {
+    const OLD_SHA1: [u8; 20] = [
+        0x9e, 0x21, 0xd3, 0xa0, 0x7f, 0xfa, 0x31, 0x5e, 0x01, 0x39, 0x48, 0x3b, 0x66, 0x4e, 0x3f,
+        0xa2, 0x83, 0xef, 0x4e, 0x06,
+    ];
+    if program.len() != 0x2000 || Sha1::digest(&*program)[..] != OLD_SHA1 {
+        return false;
+    }
+    // PC 0x8b: branch 0x59e -> 0x59c; PC 0x67e: lia #2 -> lia #0.
+    program[0x8b * 4] &= !2;
+    program[0x67e * 4] &= !2;
+    log::info!(target: "loader", "315-5711: repaired legacy bad dump in memory (MAME #15649)");
+    true
+}
 
 /// The ROM regions the i960 and the TGP see. Each is a byte image of a the reference
 /// ROM_REGION, already interleaved, indexed by region-relative byte offset.
@@ -45,6 +63,8 @@ pub struct Roms {
     /// The geometry coprocessor the board carries. The original and 2A boards
     /// use the MB86234 TGP (fully emulated); 2B uses the ADSP-21062 SHARC.
     pub coprocessor: crate::roms_db::Board,
+    /// Air Walkers selects players 1/2 or 3/4 through port F bit 7.
+    pub airwalkers_matrix: bool,
 }
 
 /// Copies a chip in with the byte order of each 16-bit word exchanged.
@@ -72,13 +92,14 @@ pub fn load_model2_zip(path: &str) -> Result<Roms, String> {
     let mut archive = ZipArchive::new(file).map_err(|e| e.to_string())?;
     log::info!(target: "loader", "{} ({:?})", def.name, def.board);
     let regions = crate::roms_db::build_regions(def, &mut archive)?;
-    Ok(build_model2(regions, def.board))
+    Ok(build_model2(regions, def.board, &def.name))
 }
 
 /// Maps the built ROM regions onto the Model 2 `Roms` the system consumes.
 fn build_model2(
     mut regions: std::collections::HashMap<String, Vec<u8>>,
     board: crate::roms_db::Board,
+    game: &str,
 ) -> Roms {
     let take = |r: &mut std::collections::HashMap<String, Vec<u8>>, name: &str, size: usize| {
         r.remove(name).unwrap_or_else(|| vec![0u8; size])
@@ -114,6 +135,7 @@ fn build_model2(
         mpcm2,
         sound_scsp,
         coprocessor: board,
+        airwalkers_matrix: game == "airwlkrs",
     }
 }
 
@@ -141,7 +163,12 @@ fn build_model1(
             }
             m
         },
-        tgp: take(&mut regions, "tgp_copro", 0x2000),
+        tgp: {
+            let mut program = take(&mut regions, "tgp_copro", 0x2000);
+            repair_315_5711(&mut program);
+            program
+        },
+        nvram_default: take(&mut regions, "nvram", 0),
         copro_tables: words(take(&mut regions, "copro_tables", 0x40000)),
         polygons: words(take(&mut regions, "polygons", 0x1000000)),
         copro_data: words(take(&mut regions, "copro_data", 0x200000)),
@@ -238,6 +265,8 @@ pub fn load_model1_zip(path: &str) -> Result<Model1Roms, String> {
 /// Loads Star Wars Arcade, building the V60 memory image
 /// `ROM_START(swa)` lays it out.
 pub struct Model1Roms {
+    /// Factory battery-backed RAM image (NetMerc). Saved user NVRAM wins.
+    pub nvram_default: Vec<u8>,
     /// "maincpu": the V60's whole 32MB address image. The reset vector lives at
     /// region offset 0xfffff0, inside the boot ROMs at 0xfe0000.
     pub maincpu: Vec<u8>,
@@ -297,4 +326,59 @@ pub(crate) fn read_chip(archive: &mut ZipArchive<File>, name: &str) -> Result<Ve
     let mut buf = Vec::with_capacity(file.size() as usize);
     file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod model1_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_tgp_program_is_never_patched() {
+        for size in [0, 0x2000, 0x2001] {
+            let mut program = vec![0xff; size];
+            if size >= 0x2000 {
+                program[0x8b * 4..0x8b * 4 + 4].copy_from_slice(&0xbf60059eu32.to_le_bytes());
+                program[0x67e * 4..0x67e * 4 + 4].copy_from_slice(&0x39000002u32.to_le_bytes());
+            }
+            let before = program.clone();
+            assert!(!repair_315_5711(&mut program));
+            assert_eq!(program, before);
+        }
+    }
+
+    #[test]
+    fn model1_loader_preserves_factory_nvram() {
+        let factory = vec![0x5a; 0x10000];
+        let regions = [("nvram".to_owned(), factory.clone())]
+            .into_iter()
+            .collect();
+        assert_eq!(build_model1(regions, vec![]).nvram_default, factory);
+    }
+
+    // No copyrighted ROM fixture is shipped. Run explicitly with a user-owned
+    // swa/swaj/wingwar/netmerc ZIP supplied via TGPULSE_MODEL1_TEST_ZIP.
+    #[test]
+    #[ignore = "requires a user-owned 315-5711 ZIP via TGPULSE_MODEL1_TEST_ZIP"]
+    fn legacy_and_corrected_tgp_load_identically() {
+        let path = std::env::var("TGPULSE_MODEL1_TEST_ZIP").expect("ROM ZIP path");
+        let mut archive = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        let mut program = read_chip(&mut archive, "315-5711.bin").unwrap();
+        repair_315_5711(&mut program);
+        assert_eq!(
+            format!("{:x}", Sha1::digest(&program)),
+            "d5c61ea6e4744f10170ea556068c248bd43bb111"
+        );
+        let corrected = program.clone();
+        assert!(!repair_315_5711(&mut program));
+        assert_eq!(program, corrected);
+        program[0x8b * 4] |= 2;
+        program[0x67e * 4] |= 2;
+        assert_eq!(
+            format!("{:x}", Sha1::digest(&program)),
+            "9e21d3a07ffa315e0139483b664e3fa283ef4e06"
+        );
+        assert!(repair_315_5711(&mut program));
+        assert_eq!(program, corrected);
+        assert_eq!(load_model1_zip(&path).unwrap().tgp, corrected);
+    }
 }

@@ -59,7 +59,10 @@ desktop presentation and live service-menu transitions still need gameplay QA.
 loads successfully, including a game supplied on the command line. The library
 always starts windowed; closing a game (or a failed load) returns to windowed
 mode without clearing the preference. Pausing is not closing a game.
-GUI and in-game F11 toggles are remembered; F11 in the library is ignored.
+The GUI checkbox is remembered. In-game F11 only toggles the current window:
+it does not change or save the startup preference. Unrelated GUI settings do
+not undo that temporary toggle. The next game uses the saved preference again.
+F11 in the library is ignored.
 `--fullscreen on|off` overrides the loaded preference
 for that invocation without itself writing the file. Missing/invalid values
 keep the default (off).

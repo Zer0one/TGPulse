@@ -4,7 +4,8 @@ The frontend has one public signal catalogue, one binding file
 (`config/input.conf`), and one unfiltered Cabinet list in Settings → Input.
 Bindings produce logical signal values; the input translator routes them to
 the existing cabinet controls and I/O ports according to the ROM set and its
-`Scheme` / `AnalogRole` metadata. The emulation core is unchanged.
+`Scheme` / `AnalogRole` metadata. The only core input exception is Air Walkers'
+port-F player-pair mux; the public catalogue and bindings remain frontend-only.
 
 Desktop pad buttons are tracked per device from gilrs' logical press/release
 events. Native-code fallback polling is deliberately avoided: on macOS an
@@ -23,6 +24,22 @@ Click a Cabinet binding, edit its expression, then Apply. Cancel discards the
 editor contents. An invalid expression is reported without replacing the
 working binding. Emulator hotkeys retain keyboard capture.
 
+### Return to the game menu
+
+Esc or Select + Start stops the current game using the same action as Stop:
+save NVRAM, leave fullscreen and return to the library without quitting or
+changing the fullscreen startup preference. It also works while paused.
+Settings → Input → Emulator lists "Return to game menu" after the other
+commands, using the same binding row. Click it to edit the expression:
+`return_to_menu = Escape, pad:Select & pad:Start` in config/input.conf.
+Existing files without this entry inherit the default; an empty value disables
+it. Keyboard exit keys are ignored while editing text or capturing a binding.
+
+The exit action is edge-triggered and checked before the machine advances.
+Hold Select then press Start: a completed chord does not send Start to the
+game. A button pressed alone in an earlier frame cannot be retrospectively
+consumed (Select alone may insert a coin, Start alone may start a game).
+
 ## Shared defaults and game meanings
 
 One signal has one binding, regardless of the game. SM2-Emu positions are
@@ -31,8 +48,8 @@ physical bindings and no redundant Shot/Shift/Foot Sensor entries.
 
 | Signal | Pad | Keyboard | Examples of routed functions |
 | --- | --- | --- | --- |
-| Action 1 | East OR R1 | J, E, Space | Punch, long pass, shot, shift up, left shot/pitch/foot |
-| Action 2 | South OR L1 | K, Q, R | Kick, short pass, secondary/reload, shift down, right shot/pitch/foot |
+| Action 1 | East OR R1 | J, E, Space | Punch, long pass, shot, shift up, left twin shot, right pitch/foot |
+| Action 2 | South OR L1 | K, Q, R | Kick, short pass, secondary/reload, shift down, right twin shot, left pitch/foot |
 | Action 3 | West | L | Guard/hold, shoot in soccer, Desert shift, left dash, Water Ski set |
 | Extra Action | North | I | Rally handbrake, right dash, Ski Super G Select 2 |
 | View / Select 1–4 | Down, Left, Right, Up | Z, X, C, V | VR buttons, view changes, menu selections and zoom |
@@ -53,7 +70,7 @@ Slide (right X, U/O), matching their respective SM2-Emu defaults.
 The GUI shows game-family names in parentheses below Analog Joystick X/Y
 and Extra Action. For Extra Action, each game also includes its function:
 Sega Rally: Handbrake; Virtual On: Right Dash / Turbo; Ski Super G: Select 2.
-This is explanatory text, not a game filter.
+Power Sled uses Extra Action for Cancel Error. This is explanatory text, not a game filter.
 Driving signals are ordered Steering / Bank, Accelerator, Brake, then all
 H-Gate gears and neutral. Cars and bikes use the same `steering` binding.
 
@@ -119,6 +136,34 @@ The retained `Control` enum identifies internal cabinet requests and touch
 overlay inputs. It has no separate user-facing catalogue or configuration.
 Digital cabinet wiring is not fully represented in the ROM database, so
 those exceptions live in the translator rather than changing the core.
+
+## Per-cabinet audit
+
+See [INPUT_AUDIT.md](INPUT_AUDIT.md) for the reference revisions, corrections,
+intentional binding differences and remaining capability limits. The tested
+SM2-Emu Libretro workbook, metadata and runtime input path are authoritative
+for Model 2, including where they differ from MAME. MAME is used for the
+Model 1 cabinets and Power Sled, which are absent from that reference.
+
+With the shared defaults, Indy 500 / Sega Touring Car / Over Rev now use:
+Start → Start; D-pad Up → View 1; D-pad Down → View 2; R1/East → Shift Up;
+L1/South → Shift Down. D-pad Left/Right do not start the game or change views.
+Rebinding these signals in the existing list still works; no per-game binding
+file or second GUI list was introduced.
+
+Model 2 driving axes use SM2's 00..ff travel (including Daytona), with reversed
+Bank and reversed Over Rev / Super GT pedals. VR / Virtua Formula retain their
+20..e0 Model 1 calibration. Ski Super G uses Inclining on ADC 0 and reversed
+Swing on ADC 1, overriding the old generated metadata. Wave Runner throttle
+uses the reference's reversed positive half, 80 at rest and 00 at full travel.
+Already calibrated NVRAM is not reset: a cabinet calibrated against the old
+incorrect range may need its normal service-menu analogue calibration repeated.
+
+Gun sticks move a persistent cursor like SM2's Analog Stick mode; releasing
+the stick holds aim instead of snapping to centre. Only serial lightgun games
+use off-screen reload. BEL's second action is Missile; Gunblade and Rail Chase
+ignore Reload. ADC/lightgun ranges and Rail Chase 2 revision polarity are
+set-specific, and the drawn crosshair uses the same stored cursor.
 
 Automated tests check expressions, persistence/migration, analog travel,
 game-dependent routing, H-gate latching and D-pad/pedal separation. They do

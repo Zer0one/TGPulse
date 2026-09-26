@@ -96,6 +96,8 @@ pub enum Awaiting {
 
 #[derive(Default)]
 struct BindingEditor {
+    return_to_menu: Option<String>,
+    return_to_menu_error: Option<String>,
     signal: Option<Signal>,
     text: String,
     error: Option<String>,
@@ -652,6 +654,34 @@ fn input_window(
                             *awaiting == Some(Awaiting::Hotkey(*hotkey)),
                             || *awaiting = Some(Awaiting::Hotkey(*hotkey)),
                         );
+                    }
+                    let bound = &bindings.return_to_menu.text;
+                    binding_row(ui, "Return to game menu", if bound.is_empty() { "Unbound" } else { bound }, false, || {
+                        *awaiting = None;
+                        editor.return_to_menu = Some(bound.clone());
+                        editor.return_to_menu_error = None;
+                        ui.open_popup("return_to_menu_binding");
+                    });
+                    if let Some(_popup) = ui.begin_popup("return_to_menu_binding") {
+                        let text = editor.return_to_menu.get_or_insert_with(|| bound.clone());
+                        ui.input_text("Expression", text).build();
+                        ui.text_disabled("Comma = alternatives; & = simultaneous.");
+                        if ui.button("Apply") {
+                            match crate::input::signals::expression::Binding::parse(text, false) {
+                                Ok(binding) => {
+                                    bindings.return_to_menu = binding;
+                                    editor.return_to_menu_error = None;
+                                    actions.push(Action::BindingsChanged);
+                                    ui.close_current_popup();
+                                }
+                                Err(error) => editor.return_to_menu_error = Some(error),
+                            }
+                        }
+                        ui.same_line();
+                        if ui.button("Cancel") { ui.close_current_popup(); }
+                        if let Some(error) = &editor.return_to_menu_error {
+                            ui.text_colored([1.0, 0.4, 0.3, 1.0], error);
+                        }
                     }
                     tab.end();
                 }

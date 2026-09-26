@@ -144,6 +144,7 @@ pub struct InputState {
     game: String,
     special_shift: bool,
     special_shift_held: bool,
+    return_to_menu_held: bool,
     /// The ADC channel wiring of the loaded cabinet.
     analog_roles: [AnalogRole; 8],
     /// What the player has bound each control to.
@@ -291,7 +292,7 @@ impl Default for InputState {
 
 impl InputState {
     pub fn new() -> Self {
-        let mut gilrs = match gilrs::Gilrs::new() {
+        let gilrs = match gilrs::Gilrs::new() {
             Ok(g) => {
                 for (_id, pad) in g.gamepads() {
                     log::info!(target: "input", "gamepad: {}", pad.name());
@@ -303,6 +304,10 @@ impl InputState {
                 None
             }
         };
+        Self::with_gilrs(gilrs)
+    }
+
+    fn with_gilrs(mut gilrs: Option<gilrs::Gilrs>) -> Self {
         let rumble = gilrs.as_mut().and_then(Self::build_rumble);
         Self {
             gilrs,
@@ -324,6 +329,7 @@ impl InputState {
             game: String::new(),
             special_shift: false,
             special_shift_held: false,
+            return_to_menu_held: false,
             analog_roles: [AnalogRole::None; 8],
             bindings: Bindings::default(),
             touch: Vec::new(),
@@ -359,7 +365,12 @@ impl InputState {
 
     /// Which physical axis each of the eight ADC channels carries, taken from
     /// the ROM database so a cabinet's wiring is data, not code.
-    pub fn set_analog_roles(&mut self, roles: [AnalogRole; 8]) {
+    pub fn set_analog_roles(&mut self, mut roles: [AnalogRole; 8]) {
+        // The tested SM2 layout takes precedence over the MAME-generated DB.
+        // Guard the old order so regenerating corrected metadata is harmless.
+        if self.game == "skisuprg" && roles[..2] == [AnalogRole::Swing, AnalogRole::Incline] {
+            roles.swap(0, 1);
+        }
         self.analog_roles = roles;
     }
 
@@ -368,11 +379,15 @@ impl InputState {
         for (ch, role) in self.analog_roles.iter().enumerate() {
             out.analog[ch] = self.routed_axis(*role, axes);
         }
-        // The Model 1 I/O board reads three fixed channels rather than the
-        // 315-5649's mux, so keep those in step with the wheel/pedal axes.
-        out.steer = axes.steer;
-        out.accel = axes.accel;
-        out.brake = axes.brake;
+        // The original I/O board reads these mirrors rather than the mux.
+        // Mirror the *routed channels*, including NetMerc's Y on channel 2.
+        if self.analog_roles.iter().any(|r| *r != AnalogRole::None) {
+            [out.steer, out.accel, out.brake] = out.analog[..3].try_into().unwrap();
+        } else {
+            out.steer = axes.steer;
+            out.accel = axes.accel;
+            out.brake = axes.brake;
+        }
     }
 
     /// Records the mouse position as a fraction of the render area (0..1).
@@ -383,17 +398,7 @@ impl InputState {
     /// The lightgun aim as a fraction of the render area (0..1), for drawing
     /// the on-screen crosshair. Follows the mouse or the bound gun axes.
     pub fn aim(&self) -> (f32, f32) {
-        let mut aim = self.cursor;
-        // Use the same configurable axes as the emulated gun coordinates.
-        let rx = self.signal(Signal::GunYaw);
-        let ry = self.signal(Signal::GunPitch);
-        if rx.abs() > STICK_DEADZONE || ry.abs() > STICK_DEADZONE {
-            aim = (
-                (0.5 + rx * 0.5).clamp(0.0, 1.0),
-                (0.5 - ry * 0.5).clamp(0.0, 1.0),
-            );
-        }
-        aim
+        self.cursor
     }
 
     /// Records the mouse buttons: left fires, right reloads (points off-screen).
@@ -614,7 +619,9 @@ impl InputState {
         self.route_ports(out);
     }
 
-    fn poll_cabinet(&mut self, out: &mut Inputs) {
+    /// Sample devices before advancing the machine, even while paused.
+    /// Consume a complete exit chord before its Start reaches the cabinet.
+    pub fn return_to_menu_requested(&mut self) -> bool {
         // Drain the event queue so gilrs keeps its button/axis state current.
         if let Some(g) = self.gilrs.as_mut() {
             while let Some(event) = g.next_event() {
@@ -626,6 +633,16 @@ impl InputState {
             }
         }
 
+        let active = self.bindings.return_to_menu.value(|atom| match atom {
+            signals::expression::Atom::Source(source) => self.source_amount(*source),
+            _ => 0.0,
+        }) > 0.5;
+        let pressed = active && !self.return_to_menu_held;
+        self.return_to_menu_held = active;
+        pressed
+    }
+
+    fn poll_cabinet(&mut self, out: &mut Inputs) {
         match self.scheme {
             ControlScheme::Joystick => {
                 self.poll_joystick(out);
@@ -935,11 +952,8 @@ impl InputState {
             in0 &= !IN0_SERVICE;
         }
 
-        // The handle bar is a centred axis. The throttle is a lever with a
-        // physical rest position at one end of its travel, not a centred stick:
-        // A 0x80 default would be the neutral of a centred stick, and parking
-        // there means half throttle with nothing held. The channel is reversed:
-        // full throttle sits at the low end.
+        // Match the tested SM2 channel interpretation: centred handle bar,
+        // reversed throttle lever, with its positive half used by the trigger.
         let axis = |frac: f32| (0x80 + (frac * 0x7f as f32) as i32).clamp(0, 0xff) as u8;
         out.in0 = in0;
         out.in1 = in1;
@@ -952,7 +966,9 @@ impl InputState {
             // nothing to lean, so both sit at their neutral reading.
             roll: 0x80,
             pitch: 0x80,
-            throttle: (0xff - (throttle.clamp(0.0, 1.0) * 255.0) as i32).clamp(0, 0xff) as u8,
+            // SM2's tested profile drives the reversed positive half of this
+            // centred channel: 80 at rest, 00 at full throttle.
+            throttle: (128.0 * (1.0 - throttle.clamp(0.0, 1.0))).round() as u8,
             ..Default::default()
         };
         self.scatter(&axes, out);
@@ -965,17 +981,22 @@ impl InputState {
         let mut in0: u8 = 0xff;
         let mut in1: u8 = 0xff;
 
-        let (mut nx, mut ny) = self.cursor;
         let mut fire = self.mouse_fire;
         let mut reload = self.mouse_reload;
 
-        // Bound axes nudge the aim from centre for pad-only players.
-        let rx = self.signal(Signal::GunYaw);
-        let ry = self.signal(Signal::GunPitch);
-        if rx.abs() > STICK_DEADZONE || ry.abs() > STICK_DEADZONE {
-            nx = 0.5 + rx * 0.5;
-            ny = 0.5 - ry * 0.5;
-        }
+        // SM2's Analog Stick gun mode moves a persistent cursor. Releasing
+        // the stick must not jump back to the last mouse position/centre.
+        let step = |value: f32| {
+            const DEADZONE: f32 = 6000.0 / 32767.0;
+            if value.abs() <= DEADZONE {
+                return 0.0;
+            }
+            value.signum() * (1.0 + ((value.abs() - DEADZONE) / (1.0 - DEADZONE) * 11.0).round())
+        };
+        self.cursor.0 = (self.cursor.0 + step(self.signal(Signal::GunYaw)) / 495.0).clamp(0.0, 1.0);
+        self.cursor.1 =
+            (self.cursor.1 - step(self.signal(Signal::GunPitch)) / 383.0).clamp(0.0, 1.0);
+        let (mut nx, mut ny) = self.cursor;
 
         fire |= self.on(Control::Fire);
         reload |= self.on(Control::Reload);
@@ -997,19 +1018,29 @@ impl InputState {
 
         // Reloading is done by shooting off-screen: report the gun off-screen
         // and pull the trigger, which is exactly what the cabinet's gun does.
+        reload &= self.serial_gun();
         if reload {
             fire = true;
+            nx = 0.0;
+            ny = 0.0;
         }
         if fire {
             in1 &= !IN1_VCOP_TRIGGER;
         }
 
-        let lerp = |t: f32, lo: i32, hi: i32| (lo as f32 + t * (hi - lo) as f32) as u16;
+        let lerp = |t: f32, lo: i32, hi: i32| (lo as f32 + t * (hi - lo) as f32).round() as u16;
         out.in0 = in0;
         out.in1 = in1;
         out.in2 = 0xff;
-        out.gun_x = lerp(nx, GUN_X_MIN, GUN_X_MAX);
-        out.gun_y = lerp(ny, GUN_Y_MIN, GUN_Y_MAX);
+        let (xmin, xmax, ymin, ymax) = if self.game.starts_with("hotd") {
+            (173, 596, 87, 380)
+        } else if self.game == "vcop2" {
+            (137, 630, 36, 425)
+        } else {
+            (GUN_X_MIN, GUN_X_MAX, GUN_Y_MIN, GUN_Y_MAX)
+        };
+        out.gun_x = lerp(nx, xmin, xmax);
+        out.gun_y = lerp(ny, ymin, ymax);
         out.gun_offscreen = reload;
         // The mounted-gun cabinets (Gunblade, Rail Chase 2, Behind Enemy Lines)
         // read aim straight off the ADC instead of the gun interface board, so
@@ -1184,10 +1215,38 @@ mod tests {
     ];
 
     fn state(scheme: ControlScheme) -> InputState {
-        let mut input = InputState::new();
-        input.gilrs = None; // Tests must not sample an attached physical pad.
+        let mut input = InputState::with_gilrs(None); // No physical device or FF worker in tests.
         input.set_scheme(scheme);
         input
+    }
+
+    #[test]
+    fn return_to_menu_is_configurable_and_edge_triggered() {
+        use gilrs::Button;
+        let mut input = state(ControlScheme::Racing);
+        assert!(!input.return_to_menu_requested());
+        input.set_pad_button(Button::Select, true);
+        assert!(!input.return_to_menu_requested());
+        input.set_pad_button(Button::Start, true);
+        // The app checks this before polling cabinet ports, even when paused.
+        assert!(input.return_to_menu_requested());
+        assert!(!input.return_to_menu_requested());
+        input.set_pad_button(Button::Start, false);
+        input.set_pad_button(Button::Select, false);
+        assert!(!input.return_to_menu_requested());
+        input.on_key(KeyCode::Escape, true);
+        assert!(input.return_to_menu_requested());
+        assert!(!input.return_to_menu_requested());
+        input.on_key(KeyCode::Escape, false);
+        assert!(!input.return_to_menu_requested());
+
+        let mut bindings = Bindings::default();
+        bindings.return_to_menu = signals::expression::Binding::parse("KeyQ", false).unwrap();
+        input.set_bindings(bindings);
+        input.on_key(KeyCode::Escape, true);
+        assert!(!input.return_to_menu_requested());
+        input.on_key(KeyCode::KeyQ, true);
+        assert!(input.return_to_menu_requested());
     }
 
     /// Coin, test and service must reach the machine through the *binding*,
@@ -1464,10 +1523,10 @@ mod tests {
         input.set_pad_stick(0.5, 0.0);
         let mut out = Inputs::default();
         input.poll(&mut out);
-        assert_eq!(out.analog[0], 77);
+        assert_eq!(out.analog[0], 64); // Sky Target: full-range reversed X
         input.bindings.set_expression(Signal::SkyX, "").unwrap();
         input.poll(&mut out);
-        assert_eq!(out.analog[0], 127);
+        assert_eq!(out.analog[0], 128);
     }
 
     #[test]
@@ -1501,7 +1560,7 @@ mod tests {
         ]);
         input.set_pad_stick(0.5, 0.0);
         input.poll(&mut out);
-        assert_eq!(out.analog[0], 192);
+        assert_eq!(out.analog[0], 64); // Top Skater: reversed Curving
         assert_eq!(out.analog[1], 128);
     }
 
@@ -1533,7 +1592,7 @@ mod tests {
         let mut out = Inputs::default();
         input.on_key(KeyCode::KeyD, true);
         input.poll(&mut out);
-        assert_eq!(out.analog[0], 255);
+        assert_eq!(out.analog[0], 0); // Water Ski: reversed Slide
         input.set_game("topskatr");
         input.set_scheme(ControlScheme::Skate);
         input.poll(&mut out);
