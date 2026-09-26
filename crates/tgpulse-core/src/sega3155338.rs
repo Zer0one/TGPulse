@@ -16,6 +16,7 @@ pub(crate) enum WriteEffect {
     Host { address: u16, data: u8 },
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Chip5338 {
     port_value: [u8; 7],
     /// A set bit marks that port as an input.
@@ -249,6 +250,43 @@ mod tests {
                 address: 0,
                 data: 0
             }
+        );
+    }
+
+    #[test]
+    fn snapshot_resumes_a_configured_host_transfer_and_preserves_port_latches() {
+        let mut chip = Chip5338::default();
+        for port in 0..7 {
+            chip.write(port, 0x30 + port);
+        }
+        chip.write(8, 0x7f);
+        chip.write(0x0a, 0xcd);
+        chip.write(9, 0);
+        chip.write(0x0a, 0xab);
+        chip.write(9, 1);
+        chip.write(0x0a, 0x62);
+        chip.write(9, 0x87);
+
+        let bytes = bincode::serialize(&chip).unwrap();
+        let mut restored: Chip5338 = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(read_local(&restored, 8), 0x7f);
+        assert_eq!(read_local(&restored, 0x0a), 0x62);
+        assert_eq!(read_local(&restored, 0x0b), 0x87);
+        assert_eq!(restored.write(8, 0), chip.write(8, 0));
+        for port in 0..7 {
+            assert_eq!(read_local(&restored, port), 0x30 + port);
+        }
+        assert_eq!(restored.write(9, 7), chip.write(9, 7));
+        assert_eq!(
+            restored.write(9, 7),
+            WriteEffect::Host {
+                address: 0xabcd,
+                data: 0x62
+            }
+        );
+        assert_eq!(
+            bincode::serialize(&restored).unwrap(),
+            bincode::serialize(&chip).unwrap()
         );
     }
 }

@@ -9,7 +9,7 @@
 
 use std::cell::Cell;
 
-#[derive(Default)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Adc {
     shifter: Cell<u8>,
 }
@@ -54,5 +54,24 @@ mod tests {
         adc.latch(0x53);
         let result = (0..8).fold(0, |value, _| (value << 1) | adc.shift_out());
         assert_eq!(result, 0x53);
+    }
+
+    #[test]
+    fn snapshot_resumes_in_the_middle_of_a_conversion() {
+        let adc = Adc::default();
+        adc.latch(0xb6);
+        assert_eq!(adc.shift_out(), 1);
+        assert_eq!(adc.shift_out(), 0);
+        assert_eq!(adc.shift_out(), 1);
+        let bytes = bincode::serialize(&adc).unwrap();
+        let restored: Adc = bincode::deserialize(&bytes).unwrap();
+        for expected in [1, 0, 1, 1, 0, 0, 0, 0] {
+            assert_eq!(restored.shift_out(), expected);
+            assert_eq!(adc.shift_out(), expected);
+        }
+        assert_eq!(
+            bincode::serialize(&restored).unwrap(),
+            bincode::serialize(&adc).unwrap()
+        );
     }
 }
