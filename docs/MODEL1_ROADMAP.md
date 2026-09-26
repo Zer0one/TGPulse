@@ -29,6 +29,14 @@ runs can refine estimates, but account-wide percentage deltas are not per-task
 costs. Do not backfill a consumption figure for Phase 1: no comparable start/end
 usage baseline was collected for that implementation.
 
+## Cross-cutting direction — future Model 1 Libretro core
+
+During every integration, consider a future Libretro frontend initially limited
+to Model 1: execution/lifecycle, input, audio/video, resources, portability and
+save states, not serialization alone. Apply the concrete guidance in
+[AGENTS.md](../AGENTS.md) where relevant, keeping changes minimal and avoiding
+an unsolicited adapter or broad rewrite. This is not a claim of Libretro support.
+
 ## Phase 1 — bounded compatibility fixes
 
 - [x] Prefer the corrected `315-5711.bin` (MAME 0.289). Recognise the complete
@@ -42,7 +50,7 @@ usage baseline was collected for that implementation.
 - [x] Honour declared ROM load lengths: NetMerc reloads only 128 KiB of its
   512 KiB sound program. Previously the loader ignored that length and failed
   with a region overrun. Cover the real database record with a synthetic chip.
-- [ ] Supply the missing `netmerc_nvram.bin` from a verified user-owned set.
+- [x] Supply the missing `netmerc_nvram.bin` from the author's verified MAME PR attachment.
   Wiring the region does not supply its contents or make NetMerc playable.
 
 ### ROM baseline and fallback
@@ -63,6 +71,11 @@ Updating these ZIP members does not certify unrelated ROMs or missing devices.
 
 NetMerc factory image: 65536 bytes, CRC32 `09866826`,
 SHA-1 `411134c1e6307f2e32c3b4b372597b45b14a9834`.
+Source: author-provided `netmerc_nvram.zip` in
+[MAME PR #15642](https://github.com/mamedev/mame/pull/15642),
+[attachment](https://github.com/user-attachments/files/29659125/netmerc_nvram.zip).
+This is the initialization/calibration image supplied with that change, not a
+replacement for a user's persistent gameplay NVRAM.
 
 ## Phase 2 — missing hardware (separate implementation tasks)
 
@@ -70,6 +83,9 @@ SHA-1 `411134c1e6307f2e32c3b4b372597b45b14a9834`.
    Wing War and NetMerc. Validate boot handshake, digital and analog controls,
    EEPROM persistence and per-game variants against the reference. The current
    frontend signal mapping is not a substitute for this board.
+   [Register/wiring contract and checkpoints](MODEL1_IOBOARD2.md): shared
+   315-5338A/ADC extraction and board-1 regression tests are complete; the
+   TMPZ84C015, advanced memory map and firmware integration are still pending.
 2. **YM3438 synthesis:** currently only timers/status are implemented. Add FM
    generation and correct routing beside the existing MultiPCM output; verify
    timing, levels and sound tests per title.
@@ -78,6 +94,8 @@ SHA-1 `411134c1e6307f2e32c3b4b372597b45b14a9834`.
 4. **NetMerc initialization:** with verified ROMs and I/O, validate factory NVRAM,
    startup and gameplay. MAME itself still marks NetMerc not working, so it is
    not a complete gameplay oracle.
+   Review the additional Polhemus/i386SX tracking subsystem separately from
+   the I/O board; the reference machine configuration includes it.
 
 ## Phase 3 — fidelity and remaining features
 
@@ -87,7 +105,11 @@ SHA-1 `411134c1e6307f2e32c3b4b372597b45b14a9834`.
   do not change this merely by analogy without tracing actual game writes.
 - Validate VR/Virtua Formula, VF, SWA and the Wing War variants in-game; the
   README's tested-title list is not a complete compatibility matrix.
-- Add Model 1 machine save states (separate from persistent NVRAM).
+- Add Model 1 machine save states (separate from persistent NVRAM), preserving
+  an in-memory API suitable for a future Model 1-only Libretro frontend.
+  New integrations should inventory state and add serialization/continuation
+  coverage where applicable now, without waiting for the full adapter. The
+  current shared I/O chips are covered; the complete Model 1 machine is not.
 - Implement cabinet link and review drive/motion-board fidelity separately from
   the existing controller rumble approximation.
 - Consider checksum-aware ROM diagnostics beyond the narrowly guarded TGP
@@ -132,3 +154,52 @@ Publication and toolkit/current release replacement require separate requests.
   smoke test does not validate a complete boot, visuals, sound or gameplay.
 - These checks precede publication; publication revisions are recorded in Git
   history. No toolkit release update was performed.
+
+### NetMerc factory NVRAM recovery — 2026-09-27
+
+- The inspected local Model 1 and MAME archives lacked the file. Downloaded the
+  author's separate attachment above and verified length, CRC32 and SHA-1 against
+  the local MAME driver before installation.
+- Added only `netmerc_nvram.bin` to local `roms/netmerc.zip`; every pre-existing
+  member's SHA-1 was unchanged, including the corrected TGP program. Backup:
+  `roms/.backup-netmerc-nvram-20260927/netmerc.zip`.
+- In an isolated debugger run, read all 65536 bytes at `0x400000` before execution:
+  their SHA-1 matched the factory image exactly. Then executed 120 frames without
+  a crash. `tgpulse.dev --list` now reports NetMerc with no missing database files.
+- No existing user saves, MAME archives, toolkit files or executable changed.
+  No new claim of playable NetMerc: I/O board 2 and further integration are still
+  outstanding. This recovery required no emulator code changes.
+
+### I/O board 2 shared-peripheral checkpoint — 2026-09-27
+
+- [Implementation contract](MODEL1_IOBOARD2.md) records the MAME revision,
+  memory/port maps, firmware, cabinet wiring and remaining CPU/IRQ work.
+- Extracted the 315-5338A and MSM6253 into crate-private reusable modules used
+  by the existing board. Corrected power-on output latches to `FF` per MAME;
+  no advanced-board firmware or new game support is enabled yet.
+- Added 14 ROM-free tests. `cargo test --offline --workspace`: 109 passed,
+  one ROM-dependent test ignored (not rerun for this peripheral-only change).
+- `cargo build --offline --release -p tgpulse` passed. The existing dependency
+  warning about future Rust compatibility of `block` 0.1.6 remains unrelated.
+- Compared the previous and new release builds on `vr`, `vformula`, `vf`, `swa`
+  and `swaj`, each in an isolated temporary working directory. At frame 120,
+  complete debugger output matched byte-for-byte: `state`, 64 KiB at `400000`
+  and the 4 KiB V60 window at `C00000` containing the 2 KiB dual-port RAM.
+  This is a bounded regression check, not complete CPU-state equality or proof
+  of gameplay/audio/rendering correctness.
+- The development executable is `target/release/tgpulse`. No user ROMs, saves,
+  bindings, MAME checkout or toolkit-managed release was modified. Publication
+  was subsequently authorized; publication revisions are recorded in Git.
+
+### Libretro-oriented integration policy — 2026-09-27
+
+- Recorded the general Model 1-first architecture criterion in `AGENTS.md` and
+  the board integration contract: frontend-independent execution, lifecycle,
+  inputs, audio/video, resources and portability, including (not limited to)
+  serialization. No Libretro adapter or complete machine save-state claim.
+- Added serialization for the two extracted I/O chips using existing serde /
+  bincode dependencies. Two additional tests restore a configured host transfer
+  and a partially consumed ADC sample, then verify identical continuation.
+- Re-ran `cargo test --offline --workspace`: 111 passed, one opt-in ROM-dependent
+  test ignored. No runtime behavior or persistent user-file format was changed
+  by these serialization derives; the snapshot APIs are still crate-private.

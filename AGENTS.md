@@ -6,6 +6,12 @@
   and reasoning effort (`low`, `medium`, `high`, `xhigh` as appropriate), expected
   consumption, uncertainty and planned verification. For trivial follow-ups,
   keep this to one sentence; do not turn it into a second planning task.
+- Always name the exact recommended model and version (for example GPT-6 Sol),
+  alongside effort; "a coding model" or "high" alone is insufficient. Choose
+  among currently available models based on the bounded task, explain the
+  tradeoff briefly, and request approval before a needed switch. Do not default
+  to the strongest model for every activity or confuse a recommendation with
+  the actual active model.
 - Distinguish the recommended model/effort from the actual active settings.
   Never claim to have changed either without confirmation from the product.
   If a change is needed, explain why and wait for explicit user approval before
@@ -30,6 +36,35 @@
 - Treat user-named references as authoritative at the requested layer: inspect
   their current implementation, not only prior summaries. For Model 2 controls,
   the tested SM2 Libretro reference and its workbook remain authoritative.
+
+## Future Libretro core — Model 1 first
+
+- During integrations, preserve a path to a future Libretro frontend initially
+  limited to Model 1. Keep the hardware core independent of the desktop GUI,
+  host input devices, audio devices, filesystem paths and wall-clock timing.
+- Treat this as a general architectural criterion, not just save-state work:
+  keep frame/sample production, input delivery and emulated time explicit so a
+  frontend can drive execution without the desktop event loop. Avoid introducing
+  platform/GPU assumptions into device emulation; keep output and resource
+  interfaces reusable where the current integration touches them.
+- Keep load/reset/run/unload lifecycle and resource ownership explicit, avoiding
+  process-global mutable state or process exits in reusable emulation code.
+  Consider repeated loading, cleanup, frontend-owned settings and ROM/resource
+  provision, and portability when selecting or integrating dependencies.
+- Where applicable, make new mutable device state explicitly serializable:
+  registers, RAM, latches, pending transfers/IRQs, timers and fractional cycle
+  debt. Keep ROMs and host callbacks/resources out of snapshots; reconnect or
+  recompute derived state on restore without replaying hardware writes.
+- Keep persistent NVRAM separate from complete machine save states. Prefer
+  in-memory state APIs that a future frontend can own; avoid implicit disk writes
+  when restoring a state or resetting a machine.
+- Cover a relevant mid-operation save/restore and identical continuation when
+  adding device serialization. Device round-trips alone do not establish full
+  machine save states, deterministic gameplay, run-ahead or Libretro support.
+- Apply this incrementally and keep changes upstream-reapplicable. Do not build
+  the Libretro adapter, redesign all existing subsystems or extend the initial
+  scope to Model 2 without a separate request. Document uncovered state/CPU
+  dependencies instead of claiming partial serialization is complete.
 
 ## End-of-activity recap (including partial/blocked outcomes)
 
