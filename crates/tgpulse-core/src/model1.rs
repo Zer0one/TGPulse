@@ -96,13 +96,6 @@ pub struct Model1System {
 }
 
 impl Model1System {
-    /// Where the I/O board's 93C45 mirror lives inside the dual-port RAM: one
-    /// config byte per word of the 64-word EEPROM, starting with the "SEGA"
-    /// magic. The game reads its operator settings (region included) from this
-    /// copy, so it is the half of the machine's persistent state a settings
-    /// change has to reach.
-    const DPRAM_CONFIG: std::ops::Range<usize> = 0x100..0x140;
-
     /// Battery-backed SRAM at 0x400000, plus the I/O board's 93C45 image as
     /// the second block. The Model 1 boards have no EEPROM of their own, but
     /// the I/O board does, and the game keeps its operator settings there.
@@ -129,7 +122,8 @@ impl Model1System {
     }
 
     pub fn nvram_sizes(&self) -> (usize, usize) {
-        (self.nvram.len(), Self::DPRAM_CONFIG.len())
+        // Persist the complete 16-bit EEPROM words, not its byte-wide DPRAM mirror.
+        (self.nvram.len(), self.ioboard.eeprom().data.len() * 2)
     }
 
     pub fn new(roms: &Model1Roms) -> Self {
@@ -846,6 +840,42 @@ impl crate::tilemap::TileSource for Model1System {
     }
     fn monitor_gamma(&self, v: u32) -> u32 {
         v & 0xff
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn nvram_container_round_trips_complete_eeprom() {
+        let roms = Model1Roms {
+            maincpu: vec![],
+            tgp: vec![],
+            copro_tables: vec![],
+            polygons: vec![],
+            copro_data: vec![],
+            iocpu: vec![],
+            sndcpu: vec![],
+            mpcm1: vec![],
+            mpcm2: vec![],
+            ioboard_config: vec![],
+        };
+        let mut original = Model1System::new(&roms);
+        original.nvram[0] = 0x5a;
+        original.nvram[0xffff] = 0xa5;
+        for (index, word) in original.ioboard.eeprom_mut().data.iter_mut().enumerate() {
+            *word = 0xa500 | index as u16;
+        }
+        let (backup, eeprom) = original.nvram_blocks();
+        assert_eq!(eeprom.len(), 128);
+        let blob = crate::nvram::encode(&backup, &eeprom);
+        let mut restored = Model1System::new(&roms);
+        let (backup_len, eeprom_len) = restored.nvram_sizes();
+        let (loaded_backup, loaded_eeprom) = crate::nvram::decode(&blob, backup_len, eeprom_len)
+            .expect("a Model 1 save must be accepted by the next instance");
+        restored.set_nvram_blocks(&loaded_backup, &loaded_eeprom);
+        assert_eq!(restored.nvram_blocks(), (backup, eeprom));
     }
 }
 
