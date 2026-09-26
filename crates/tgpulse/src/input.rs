@@ -10,7 +10,9 @@
 //! give steering, throttle and brake a travel of 0x20..0xe0, centred at 0x80 for
 //! the wheel and resting at 0x20 for both pedals.
 
-use std::collections::HashSet;
+pub mod signals;
+use signals::Signal;
+use std::collections::{HashMap, HashSet};
 
 use gilrs::ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder, Repeat, Replay, Ticks};
 use winit::keyboard::KeyCode;
@@ -109,6 +111,9 @@ const TOP_GEAR: usize = 4;
 
 pub struct InputState {
     gilrs: Option<gilrs::Gilrs>,
+    // Cache logical events, not native codes: gilrs' unmapped-button fallback
+    // can alias an SDL-mapped button (e.g. Xbox R3 and D-pad Right on macOS).
+    pad_buttons: HashMap<gilrs::GamepadId, HashSet<gilrs::Button>>,
     /// A single always-running rumble effect whose gain we scale, rather than
     /// rebuilding an effect every time the game changes force.
     rumble: Option<Effect>,
@@ -136,6 +141,9 @@ pub struct InputState {
     /// the joystick games' stick + buttons, Star Wars' flight sticks, and Virtua
     /// Cop's lightgun.
     scheme: ControlScheme,
+    game: String,
+    special_shift: bool,
+    special_shift_held: bool,
     /// The ADC channel wiring of the loaded cabinet.
     analog_roles: [AnalogRole; 8],
     /// What the player has bound each control to.
@@ -298,6 +306,7 @@ impl InputState {
         let rumble = gilrs.as_mut().and_then(Self::build_rumble);
         Self {
             gilrs,
+            pad_buttons: HashMap::new(),
             rumble,
             rumble_gain: -1.0,
             rumble_enabled: false,
@@ -312,6 +321,9 @@ impl InputState {
             mouse_fire: false,
             mouse_reload: false,
             scheme: ControlScheme::Racing,
+            game: String::new(),
+            special_shift: false,
+            special_shift_held: false,
             analog_roles: [AnalogRole::None; 8],
             bindings: Bindings::default(),
             touch: Vec::new(),
@@ -354,7 +366,7 @@ impl InputState {
     /// Places the axes a scheme produced onto the channels this game reads.
     fn scatter(&self, axes: &Axes, out: &mut Inputs) {
         for (ch, role) in self.analog_roles.iter().enumerate() {
-            out.analog[ch] = axes.by_role(*role);
+            out.analog[ch] = self.routed_axis(*role, axes);
         }
         // The Model 1 I/O board reads three fixed channels rather than the
         // 315-5649's mux, so keep those in step with the wheel/pedal axes.
@@ -369,14 +381,12 @@ impl InputState {
     }
 
     /// The lightgun aim as a fraction of the render area (0..1), for drawing
-    /// the on-screen crosshair. Follows the mouse, or the pad's right stick.
+    /// the on-screen crosshair. Follows the mouse or the bound gun axes.
     pub fn aim(&self) -> (f32, f32) {
         let mut aim = self.cursor;
-        // The right stick nudges the aim from centre, for players without a
-        // mouse. It is read directly rather than through a binding: it is a
-        // pointing device, not a control that can be pressed.
-        let rx = self.axis_value(gilrs::Axis::RightStickX);
-        let ry = self.axis_value(gilrs::Axis::RightStickY);
+        // Use the same configurable axes as the emulated gun coordinates.
+        let rx = self.signal(Signal::GunYaw);
+        let ry = self.signal(Signal::GunPitch);
         if rx.abs() > STICK_DEADZONE || ry.abs() > STICK_DEADZONE {
             aim = (
                 (0.5 + rx * 0.5).clamp(0.0, 1.0),
@@ -499,13 +509,7 @@ impl InputState {
     /// How far `control` is pressed, 0..1. Digital sources read as fully on,
     /// so a keyboard drives the same code path a trigger does.
     pub fn amount(&self, control: Control) -> f32 {
-        let bound = self
-            .bindings
-            .sources(control)
-            .iter()
-            .map(|source| self.source_amount(*source))
-            .fold(0.0, f32::max);
-        bound.max(self.touch_amount(control))
+        self.routed_amount(control).max(self.touch_amount(control))
     }
 
     fn touch_amount(&self, control: Control) -> f32 {
@@ -527,7 +531,13 @@ impl InputState {
 
     /// The travel of one pad axis, from whichever device is reporting it.
     fn axis_value(&self, axis: gilrs::Axis) -> f32 {
-        let hardware = self.pad().map_or(0.0, |pad| pad.value(axis));
+        let hardware = self.pad().map_or(0.0, |pad| {
+            mapped_axis_value(
+                axis,
+                pad.axis_code(axis).map(|_| pad.value(axis)),
+                |button| pad.button_data(button).map_or(0.0, |data| data.value()),
+            )
+        });
         let external = self.external.axis(axis);
         if external.abs() > hardware.abs() {
             external
@@ -546,7 +556,11 @@ impl InputState {
         match source {
             Source::Key(k) => f32::from(u8::from(self.held(k))),
             Source::Pad(b) => {
-                let hardware = self.pad().is_some_and(|pad| pad.is_pressed(b));
+                let hardware = self.pad().is_some_and(|pad| {
+                    self.pad_buttons
+                        .get(&pad.id())
+                        .is_some_and(|buttons| buttons.contains(&b))
+                });
                 f32::from(u8::from(hardware || self.external.buttons.contains(&b)))
             }
             Source::PadAxis(a, sign) => {
@@ -596,9 +610,20 @@ impl InputState {
     /// Samples every device and publishes the result the way the I/O board sees
     /// it. Call once per emulated frame, before the board's input command runs.
     pub fn poll(&mut self, out: &mut Inputs) {
+        self.poll_cabinet(out);
+        self.route_ports(out);
+    }
+
+    fn poll_cabinet(&mut self, out: &mut Inputs) {
         // Drain the event queue so gilrs keeps its button/axis state current.
         if let Some(g) = self.gilrs.as_mut() {
-            while g.next_event().is_some() {}
+            while let Some(event) = g.next_event() {
+                if matches!(event.event, gilrs::EventType::Disconnected) {
+                    self.pad_buttons.remove(&event.id);
+                } else {
+                    update_pad_buttons(self.pad_buttons.entry(event.id).or_default(), event.event);
+                }
+            }
         }
 
         match self.scheme {
@@ -654,13 +679,6 @@ impl InputState {
 
             want_up = self.on(Control::GearUp);
             want_down = self.on(Control::GearDown);
-
-            // Coin plus both shift paddles is a deliberate two-hand gesture, so
-            // the test menu cannot be opened by accident mid-race. It is the one
-            // combination rather than a binding, because it exists to be awkward.
-            if self.on(Control::Coin1) && want_up && want_down {
-                in0 &= !IN0_TEST;
-            }
         }
 
         // --- keyboard --------------------------------------------------------
@@ -710,6 +728,8 @@ impl InputState {
         }
         self.shift_up_held = want_up;
         self.shift_down_held = want_down;
+
+        self.apply_direct_gear();
 
         // --- analog ----------------------------------------------------------
         let half = (ANALOG_MAX - STEER_CENTRE) as f32;
@@ -826,42 +846,13 @@ impl InputState {
         let mut in0: u8 = 0xff;
         let mut in1: u8 = 0xff;
 
-        // Aim axes and throttle as fractions in [-1, 1]; buttons.
-        let (mut aim_x, mut aim_y, mut throttle) = (0.0f32, 0.0f32, 0.0f32);
-        let (mut fire1, mut fire2, mut fire3) = (false, false, false);
+        let aim_x = self.axis(Control::Left, Control::Right);
+        let aim_y = self.axis(Control::Down, Control::Up);
+        let throttle = self.amount(Control::Throttle) - self.amount(Control::Brake);
+        let fire1 = self.on(Control::Button1);
+        let fire2 = self.on(Control::Button2);
+        let fire3 = self.on(Control::Button3);
 
-        if self.has_analog() {
-            aim_x = self.axis(Control::Left, Control::Right);
-            aim_y = self.axis(Control::Down, Control::Up);
-            // The throttle runs both ways: forward on its own control, reverse
-            // on the brake.
-            throttle = self.amount(Control::Throttle) - self.amount(Control::Brake);
-        }
-        fire1 |= self.on(Control::Button1);
-        fire2 |= self.on(Control::Button2);
-        fire3 |= self.on(Control::Button3);
-
-        if self.on(Control::Left) {
-            aim_x = -1.0;
-        }
-        if self.on(Control::Right) {
-            aim_x = 1.0;
-        }
-        if self.on(Control::Up) {
-            aim_y = 1.0;
-        }
-        if self.on(Control::Down) {
-            aim_y = -1.0;
-        }
-        if self.on(Control::Throttle) {
-            throttle = 1.0;
-        }
-        if self.on(Control::Brake) {
-            throttle = -1.0;
-        }
-        fire1 |= self.on(Control::Button1);
-        fire2 |= self.on(Control::Button2);
-        fire3 |= self.on(Control::Button3);
         if self.on(Control::Start1) {
             in0 &= !IN0_START1;
         }
@@ -923,24 +914,10 @@ impl InputState {
         let mut in0: u8 = 0xff;
         let mut in1: u8 = 0xff;
 
-        let (mut handle, mut throttle) = (0.0f32, 0.0f32);
-
-        if self.has_analog() {
-            handle = self.axis(Control::LeanLeft, Control::LeanRight);
-            throttle = self.amount(Control::Throttle);
-        }
+        let handle = self.axis(Control::LeanLeft, Control::LeanRight);
+        let throttle = self.amount(Control::Throttle);
         if self.on(Control::ViewChange) {
             in1 &= !IN1_WR_VIEW;
-        }
-
-        if self.on(Control::Left) {
-            handle = -1.0;
-        }
-        if self.on(Control::Right) {
-            handle = 1.0;
-        }
-        if self.on(Control::Up) {
-            throttle = 1.0;
         }
         if self.on(Control::Start1) {
             in0 &= !IN0_WR_START1;
@@ -983,7 +960,7 @@ impl InputState {
 
     /// Virtua Cop: the mouse is the lightgun. Its position maps across the ADC
     /// range; the left button fires (IN.1 bit 0), the right reloads by pointing
-    /// off-screen. A gamepad's right stick aims for players without a mouse.
+    /// off-screen. Bound gun axes aim for players without a mouse.
     fn poll_gun(&mut self, out: &mut Inputs) {
         let mut in0: u8 = 0xff;
         let mut in1: u8 = 0xff;
@@ -992,9 +969,9 @@ impl InputState {
         let mut fire = self.mouse_fire;
         let mut reload = self.mouse_reload;
 
-        // The right stick nudges the aim from centre for pad-only players.
-        let rx = self.axis_value(gilrs::Axis::RightStickX);
-        let ry = self.axis_value(gilrs::Axis::RightStickY);
+        // Bound axes nudge the aim from centre for pad-only players.
+        let rx = self.signal(Signal::GunYaw);
+        let ry = self.signal(Signal::GunPitch);
         if rx.abs() > STICK_DEADZONE || ry.abs() > STICK_DEADZONE {
             nx = 0.5 + rx * 0.5;
             ny = 0.5 - ry * 0.5;
@@ -1055,16 +1032,10 @@ impl InputState {
     fn poll_body(&mut self, out: &mut Inputs) {
         let mut in0: u8 = 0xff;
         let mut in1: u8 = 0xff;
-        let (mut lean_x, mut lean_y) = (0.0f32, 0.0f32);
-        let (mut left, mut right) = (0.0f32, 0.0f32);
-
-        if self.has_analog() {
-            lean_x = self.axis(Control::LeanLeft, Control::LeanRight);
-            lean_y = self.axis(Control::Down, Control::Up);
-            // The foot pedals, one per side.
-            right = self.amount(Control::Throttle);
-            left = self.amount(Control::Brake);
-        }
+        let lean_x = self.axis(Control::LeanLeft, Control::LeanRight);
+        let lean_y = self.axis(Control::Down, Control::Up);
+        let right = self.amount(Control::Throttle);
+        let left = self.amount(Control::Brake);
         if self.on(Control::Button1) {
             in1 &= !0x01;
         }
@@ -1075,18 +1046,6 @@ impl InputState {
             in1 &= !0x04;
         }
 
-        if self.on(Control::Left) {
-            lean_x = -1.0;
-        }
-        if self.on(Control::Right) {
-            lean_x = 1.0;
-        }
-        if self.on(Control::Up) {
-            lean_y = 1.0;
-        }
-        if self.on(Control::Down) {
-            lean_y = -1.0;
-        }
         if self.on(Control::Start1) {
             in0 &= !IN0_START1;
         }
@@ -1124,10 +1083,84 @@ impl InputState {
     }
 }
 
+// SDL mappings may expose triggers as analog buttons rather than Z axes.
+// Keep their full travel and only fall back when the requested axis is absent.
+fn mapped_axis_value(
+    axis: gilrs::Axis,
+    mapped: Option<f32>,
+    button_value: impl FnOnce(gilrs::Button) -> f32,
+) -> f32 {
+    mapped.unwrap_or_else(|| match axis {
+        gilrs::Axis::LeftZ => button_value(gilrs::Button::LeftTrigger2),
+        gilrs::Axis::RightZ => button_value(gilrs::Button::RightTrigger2),
+        _ => 0.0,
+    })
+}
+
+fn update_pad_buttons(buttons: &mut HashSet<gilrs::Button>, event: gilrs::EventType) {
+    match event {
+        gilrs::EventType::ButtonPressed(button, _) if button != gilrs::Button::Unknown => {
+            buttons.insert(button);
+        }
+        gilrs::EventType::ButtonReleased(button, _) => {
+            buttons.remove(&button);
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bindings::Source;
+
+    #[test]
+    fn analog_trigger_buttons_supply_missing_z_axes() {
+        use gilrs::{Axis as A, Button as B};
+        for value in [0.0, 0.03, 0.25, 0.5, 1.0, 0.0] {
+            for (axis, expected) in [(A::LeftZ, B::LeftTrigger2), (A::RightZ, B::RightTrigger2)] {
+                assert_eq!(
+                    mapped_axis_value(axis, None, |button| {
+                        assert_eq!(button, expected);
+                        value
+                    }),
+                    value
+                );
+                assert_eq!(
+                    mapped_axis_value(axis, Some(value), |_| panic!(
+                        "mapped axis must take priority"
+                    )),
+                    value
+                );
+            }
+        }
+        for axis in [A::LeftStickX, A::LeftStickY, A::RightStickX, A::RightStickY] {
+            assert_eq!(
+                mapped_axis_value(axis, None, |_| panic!("sticks must not read triggers")),
+                0.0
+            );
+            assert_eq!(
+                mapped_axis_value(axis, Some(-0.5), |_| panic!(
+                    "stick mapping must be preserved"
+                )),
+                -0.5
+            );
+        }
+    }
+
+    #[test]
+    fn logical_pad_buttons_do_not_alias_native_codes() {
+        use gilrs::{Button as B, EventType as E};
+        let mut buttons = HashSet::new();
+        // A hat-generated D-pad event can share a native code with R3.
+        let code = B::RightThumb.to_nec().unwrap();
+        update_pad_buttons(&mut buttons, E::ButtonPressed(B::RightThumb, code));
+        assert_eq!(buttons, HashSet::from([B::RightThumb]));
+        update_pad_buttons(&mut buttons, E::ButtonPressed(B::DPadRight, code));
+        update_pad_buttons(&mut buttons, E::ButtonReleased(B::RightThumb, code));
+        assert_eq!(buttons, HashSet::from([B::DPadRight]));
+        update_pad_buttons(&mut buttons, E::ButtonReleased(B::DPadRight, code));
+        assert!(buttons.is_empty());
+    }
 
     /// Every scheme, so a new one cannot be added without being covered.
     const SCHEMES: [ControlScheme; 8] = [
@@ -1152,6 +1185,7 @@ mod tests {
 
     fn state(scheme: ControlScheme) -> InputState {
         let mut input = InputState::new();
+        input.gilrs = None; // Tests must not sample an attached physical pad.
         input.set_scheme(scheme);
         input
     }
@@ -1169,7 +1203,14 @@ mod tests {
             for (control, bit) in FURNITURE {
                 let mut input = state(scheme);
                 let mut bindings = Bindings::default();
-                bindings.bind(control, vec![Source::Key(KeyCode::F12)]);
+                let signal = match control {
+                    Control::Coin1 => Signal::Coin,
+                    Control::Coin2 => Signal::Coin2,
+                    Control::Test => Signal::Test,
+                    Control::Service => Signal::Service,
+                    _ => unreachable!(),
+                };
+                bindings.set_expression(signal, "F12").unwrap();
                 input.set_bindings(bindings);
 
                 let mut out = Inputs::default();
@@ -1234,7 +1275,9 @@ mod tests {
     fn a_key_still_ramps_the_wheel() {
         let mut input = state(ControlScheme::Racing);
         let mut bindings = Bindings::default();
-        bindings.bind(Control::Left, vec![Source::Key(KeyCode::F12)]);
+        bindings
+            .set_expression(Signal::Steering, "keys:F12/KeyD")
+            .unwrap();
         input.set_bindings(bindings);
 
         let mut out = Inputs::default();
@@ -1257,7 +1300,11 @@ mod tests {
         // Button 1 uses the East face button, like SM2-Emu's arcade bit 1.
         input.set_pad_button(gilrs::Button::East, true);
         input.poll(&mut out);
-        assert_eq!(out.in1 & IN1_JOY_BTN1, 0, "a platform pad button is ignored");
+        assert_eq!(
+            out.in1 & IN1_JOY_BTN1,
+            0,
+            "a platform pad button is ignored"
+        );
 
         input.set_pad_button(gilrs::Button::East, false);
         input.poll(&mut out);
@@ -1271,18 +1318,228 @@ mod tests {
         for scheme in SCHEMES {
             let mut input = state(scheme);
             let mut bindings = Bindings::default();
-            bindings.bind(Control::Start1, vec![Source::Key(KeyCode::F12)]);
+            bindings.set_expression(Signal::Start, "F12").unwrap();
             input.set_bindings(bindings);
 
             let mut out = Inputs::default();
             input.on_key(KeyCode::F12, true);
             input.poll(&mut out);
-            let start = if scheme == ControlScheme::Jetski {
+            let start = if matches!(scheme, ControlScheme::Jetski | ControlScheme::Bike) {
                 0x40
             } else {
                 IN0_START1
             };
             assert_eq!(out.in0 & start, 0, "{scheme:?} ignores a rebound start");
         }
+    }
+
+    #[test]
+    fn dpad_views_do_not_drive_the_car() {
+        let mut input = state(ControlScheme::Racing);
+        input.set_game("daytona");
+        input.set_pad_button(gilrs::Button::DPadDown, true);
+        let mut out = Inputs::default();
+        input.poll(&mut out);
+        assert_eq!(out.in0 & 0x20, 0);
+        assert_eq!((out.steer, out.accel, out.brake), (0x80, 0x20, 0x20));
+    }
+
+    #[test]
+    fn cars_and_bikes_share_the_rebound_steering_signal() {
+        for (scheme, game) in [
+            (ControlScheme::Racing, "daytona"),
+            (ControlScheme::Bike, "manxtt"),
+            (ControlScheme::Bike, "motoraid"),
+        ] {
+            let mut input = state(scheme);
+            input.set_game(game);
+            input
+                .bindings
+                .set_expression(Signal::Steering, "keys:F12/KeyD")
+                .unwrap();
+            input.on_key(KeyCode::F12, true);
+            let mut out = Inputs::default();
+            input.poll(&mut out);
+            assert_eq!(out.steer, (STEER_CENTRE - STEER_KEYDELTA) as u8, "{game}");
+        }
+    }
+
+    #[test]
+    fn face_and_shoulder_aliases_are_or_not_chords() {
+        use gilrs::Button as B;
+        let mut input = state(ControlScheme::Joystick);
+        for (signal, face, shoulder, other) in [
+            (Signal::Action1, B::East, B::RightTrigger, Signal::Action2),
+            (Signal::Action2, B::South, B::LeftTrigger, Signal::Action1),
+        ] {
+            for buttons in [vec![face], vec![shoulder], vec![face, shoulder]] {
+                input.external.buttons.clear();
+                for button in buttons {
+                    input.set_pad_button(button, true);
+                }
+                assert_eq!(input.signal(signal), 1.0);
+                assert_eq!(input.signal(other), 0.0);
+                assert_eq!(input.signal(Signal::Accelerator), 0.0);
+                assert_eq!(input.signal(Signal::Brake), 0.0);
+            }
+        }
+        input.external.buttons.clear();
+        input.set_pad_button(B::RightTrigger2, true);
+        assert_eq!(input.signal(Signal::Action2), 0.0);
+    }
+
+    #[test]
+    fn direct_gears_require_chords_latch_and_ignore_conflicts() {
+        let mut input = state(ControlScheme::Racing);
+        input.set_game("daytona");
+        input
+            .bindings
+            .set_expression(Signal::Gear1, "KeyA & KeyB")
+            .unwrap();
+        input
+            .bindings
+            .set_expression(Signal::Gear2, "KeyC")
+            .unwrap();
+        let mut out = Inputs::default();
+        input.on_key(KeyCode::KeyA, true);
+        input.poll(&mut out);
+        assert_eq!(input.gear, 0);
+        input.on_key(KeyCode::KeyB, true);
+        input.poll(&mut out);
+        assert_eq!(input.gear, 1);
+        input.on_key(KeyCode::KeyC, true);
+        input.poll(&mut out);
+        assert_eq!(input.gear, 1);
+        input.keys.clear();
+        input.poll(&mut out);
+        assert_eq!(input.gear, 1);
+        input.on_key(KeyCode::Digit0, true);
+        input.poll(&mut out);
+        assert_eq!(input.gear, 0);
+    }
+
+    #[test]
+    fn vr_service_is_isolated_from_momentary_shift_inputs() {
+        use gilrs::Button as B;
+        for game in ["vr", "vformula"] {
+            let mut input = state(ControlScheme::Racing);
+            input.set_game(game);
+            let mut out = Inputs::default();
+            input.poll(&mut out);
+            assert_eq!((out.in0, out.in1), (0xff, 0xff), "{game}: idle");
+            input.set_pad_button(B::RightThumb, true);
+            input.poll(&mut out);
+            assert_eq!((out.in0, out.in1), (0xf7, 0xff), "{game}: service");
+            input.set_pad_button(B::RightThumb, false);
+            input.set_pad_button(B::RightTrigger, true);
+            input.poll(&mut out);
+            assert_eq!(out.in1, 0xdf, "{game}: shift up");
+            input.set_pad_button(B::RightTrigger, false);
+            input.poll(&mut out);
+            assert_eq!(out.in1, 0xff, "{game}: release must not latch");
+            input.set_pad_button(B::LeftTrigger, true);
+            input.poll(&mut out);
+            assert_eq!(out.in1, 0xef, "{game}: shift down");
+            input.set_pad_button(B::RightTrigger, true);
+            input.poll(&mut out);
+            assert_eq!(out.in1, 0xff, "{game}: conflicting shifts");
+            input.external.buttons.clear();
+            input.on_key(KeyCode::Digit1, true);
+            input.poll(&mut out);
+            assert_eq!(out.in1, 0xff, "{game}: no H-gate encoding");
+            input.on_key(KeyCode::F8, true);
+            input.poll(&mut out);
+            assert_eq!((out.in0, out.in1), (0xf7, 0xff), "{game}: keyboard service");
+            input.set_pad_button(B::DPadUp, true);
+            input.poll(&mut out);
+            assert_eq!(out.in1, 0xfe, "{game}: VR4 preserved");
+        }
+    }
+
+    #[test]
+    fn flight_axis_keeps_partial_travel_and_rebinding() {
+        let mut input = state(ControlScheme::Flight);
+        input.set_game("skytargt");
+        input.set_analog_roles([AnalogRole::StickX; 8]);
+        input.set_pad_stick(0.5, 0.0);
+        let mut out = Inputs::default();
+        input.poll(&mut out);
+        assert_eq!(out.analog[0], 77);
+        input.bindings.set_expression(Signal::SkyX, "").unwrap();
+        input.poll(&mut out);
+        assert_eq!(out.analog[0], 127);
+    }
+
+    #[test]
+    fn game_context_routes_start_actions_and_independent_axes() {
+        let mut input = state(ControlScheme::Joystick);
+        input.set_game("vf");
+        input.set_pad_button(gilrs::Button::East, true);
+        let mut out = Inputs::default();
+        input.poll(&mut out);
+        assert_eq!(out.in1 & 7, 5); // Model 1 Punch is bit 2.
+        input.set_game("vf2");
+        input.poll(&mut out);
+        assert_eq!(out.in1 & 7, 6); // Model 2 Punch is bit 1.
+        input.set_scheme(ControlScheme::Ski);
+        input.set_game("segawski");
+        input.set_pad_button(gilrs::Button::Start, true);
+        input.poll(&mut out);
+        assert_eq!(out.in0 & 0x40, 0);
+        assert_ne!(out.in0 & 0x10, 0);
+        input.set_scheme(ControlScheme::Skate);
+        input.set_game("topskatr");
+        input.set_analog_roles([
+            AnalogRole::Curving,
+            AnalogRole::Slide,
+            AnalogRole::None,
+            AnalogRole::None,
+            AnalogRole::None,
+            AnalogRole::None,
+            AnalogRole::None,
+            AnalogRole::None,
+        ]);
+        input.set_pad_stick(0.5, 0.0);
+        input.poll(&mut out);
+        assert_eq!(out.analog[0], 192);
+        assert_eq!(out.analog[1], 128);
+    }
+
+    #[test]
+    fn virtual_on_has_two_independent_sticks() {
+        let mut input = state(ControlScheme::Joystick);
+        input.set_game("von");
+        input.on_key(KeyCode::KeyW, true);
+        input.on_key(KeyCode::ArrowDown, true);
+        let mut out = Inputs::default();
+        input.poll(&mut out);
+        assert_eq!(out.in1 & 0x30, 0x10);
+        assert_eq!(out.in2 & 0x30, 0x20);
+    }
+
+    #[test]
+    fn slide_bindings_are_independent_per_game() {
+        let mut input = state(ControlScheme::Ski);
+        input.set_game("segawski");
+        input.set_analog_roles([AnalogRole::Slide; 8]);
+        input
+            .bindings
+            .set_expression(Signal::WaterSlide, "keys:KeyA/KeyD")
+            .unwrap();
+        input
+            .bindings
+            .set_expression(Signal::SkaterSlide, "keys:KeyU/KeyO")
+            .unwrap();
+        let mut out = Inputs::default();
+        input.on_key(KeyCode::KeyD, true);
+        input.poll(&mut out);
+        assert_eq!(out.analog[0], 255);
+        input.set_game("topskatr");
+        input.set_scheme(ControlScheme::Skate);
+        input.poll(&mut out);
+        assert_eq!(out.analog[0], 128);
+        input.on_key(KeyCode::KeyO, true);
+        input.poll(&mut out);
+        assert_eq!(out.analog[0], 255);
     }
 }

@@ -97,6 +97,7 @@ impl Session {
         let mut input = InputState::new();
         input.enable_rumble(config.rumble);
         input.set_scheme(scheme);
+        input.set_game(&set);
         input.set_analog_roles(roles);
 
         let sample_rate = match &machine {
@@ -579,6 +580,11 @@ impl App {
             return;
         }
 
+        // Editing a binding expression must not execute rebound letter hotkeys.
+        if self.gui.wants_text_input() && pressed {
+            return;
+        }
+
         if let Some(hotkey) = self.bindings.hotkey_for(code) {
             if matches!(hotkey, Hotkey::FastForward) {
                 self.fast_forward = pressed;
@@ -589,7 +595,7 @@ impl App {
         }
 
         // The machine only sees keys the interface did not take.
-        if !captured {
+        if !captured || !pressed {
             if let Some(session) = &mut self.session {
                 session.input.on_key(code, pressed);
             }
@@ -809,19 +815,6 @@ impl App {
         if let Some((awaiting, key)) = self.gui.take_capture() {
             match awaiting {
                 crate::gui::Awaiting::Hotkey(hotkey) => self.bindings.bind_hotkey(hotkey, key),
-                crate::gui::Awaiting::Control(control) => {
-                    // Rebinding replaces the keyboard sources and keeps the pad
-                    // ones, so binding a key does not silently unbind the pad.
-                    let mut sources: Vec<crate::bindings::Source> = self
-                        .bindings
-                        .sources(control)
-                        .iter()
-                        .copied()
-                        .filter(|s| !matches!(s, crate::bindings::Source::Key(_)))
-                        .collect();
-                    sources.insert(0, crate::bindings::Source::Key(key));
-                    self.bindings.bind(control, sources);
-                }
             }
             self.apply_bindings();
         }

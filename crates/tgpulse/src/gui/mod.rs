@@ -18,14 +18,19 @@ use tgpulse_core::config::Config;
 use tgpulse_core::library::{self, Entry};
 use tgpulse_core::tilemap::{SCREEN_H, SCREEN_W};
 
-use crate::bindings::{Bindings, Control, Hotkey, Source};
+use crate::bindings::{Bindings, Hotkey, Source};
+use crate::input::signals::Signal;
 
 pub use renderer::Renderer;
 
 /// How much larger everything is drawn than on a desktop. A phone is held at
 /// arm's length and has no pointer to aim with, so both the text and the hit
 /// targets have to grow; everywhere else this is 1 and nothing changes.
-const UI_SCALE: f32 = if cfg!(target_os = "android") { 2.5 } else { 1.0 };
+const UI_SCALE: f32 = if cfg!(target_os = "android") {
+    2.5
+} else {
+    1.0
+};
 
 /// What the interface is asking the application to do.
 pub enum Action {
@@ -68,6 +73,7 @@ pub struct Gui {
     /// What the next key press should be bound to, while the panel is waiting
     /// for one.
     awaiting: Option<Awaiting>,
+    binding_editor: BindingEditor,
 
     entries: Vec<Entry>,
     selected: Option<usize>,
@@ -85,11 +91,21 @@ pub struct Gui {
 /// What a pending key press will be bound to.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Awaiting {
-    Control(Control),
     Hotkey(Hotkey),
 }
 
+#[derive(Default)]
+struct BindingEditor {
+    signal: Option<Signal>,
+    text: String,
+    error: Option<String>,
+}
+
 impl Gui {
+    pub fn wants_text_input(&self) -> bool {
+        self.context.io().want_text_input
+    }
+
     pub fn new(config: &Config) -> Self {
         let mut context = imgui::Context::create();
         context.set_ini_filename(None);
@@ -103,12 +119,14 @@ impl Gui {
         // not built until the renderer asks for it, so the size only has to be
         // settled before then.
         if UI_SCALE > 1.0 {
-            context.fonts().add_font(&[imgui::FontSource::DefaultFontData {
-                config: Some(imgui::FontConfig {
-                    size_pixels: 13.0 * UI_SCALE,
-                    ..imgui::FontConfig::default()
-                }),
-            }]);
+            context
+                .fonts()
+                .add_font(&[imgui::FontSource::DefaultFontData {
+                    config: Some(imgui::FontConfig {
+                        size_pixels: 13.0 * UI_SCALE,
+                        ..imgui::FontConfig::default()
+                    }),
+                }]);
             context.style_mut().scale_all_sizes(UI_SCALE);
         }
 
@@ -119,6 +137,7 @@ impl Gui {
             show_settings: false,
             show_input: false,
             awaiting: None,
+            binding_editor: BindingEditor::default(),
             show_debugger: false,
             show_stats: false,
             entries: library::scan(&config.rom_dir),
@@ -247,6 +266,7 @@ impl Gui {
         let debug_follow = &mut self.debug_follow;
         let library_error = &self.library_error;
         let mut awaiting = self.awaiting;
+        let mut binding_editor = std::mem::take(&mut self.binding_editor);
         let mut refresh = false;
 
         let ui = self.context.frame();
@@ -325,7 +345,14 @@ impl Gui {
             settings_window(ui, config, &mut show_settings, &mut actions);
         }
         if show_input {
-            input_window(ui, bindings, &mut awaiting, &mut show_input, &mut actions);
+            input_window(
+                ui,
+                bindings,
+                &mut awaiting,
+                &mut binding_editor,
+                &mut show_input,
+                &mut actions,
+            );
         }
         if show_debugger {
             debugger_window(
@@ -347,6 +374,7 @@ impl Gui {
         self.show_settings = show_settings;
         self.show_input = show_input;
         self.awaiting = awaiting;
+        self.binding_editor = binding_editor;
         self.show_debugger = show_debugger;
         self.show_stats = show_stats;
         self.selected = selected;
@@ -384,7 +412,8 @@ impl Gui {
     pub fn set_display_size(&mut self, window: &winit::window::Window) {
         let size = window.inner_size();
         let scale = window.scale_factor();
-        let logical_size = winit::dpi::PhysicalSize::new(size.width, size.height).to_logical::<f32>(scale);
+        let logical_size =
+            winit::dpi::PhysicalSize::new(size.width, size.height).to_logical::<f32>(scale);
         self.context.io_mut().display_size = [logical_size.width, logical_size.height];
         let scale = scale as f32;
         self.context.io_mut().display_framebuffer_scale = [scale, scale];
@@ -576,31 +605,28 @@ fn settings_window(
         });
 }
 
-/// Controls and hotkeys, with click-to-rebind.
-///
-/// Only keyboard rebinding happens here: a pad binding needs the pad to be
-/// held still while the panel reads it, which is a different interaction. The
-/// pad bindings each control already carries are listed so they are at least
-/// discoverable, and the config file can be edited to change them.
+/// One unfiltered signal list with expression editing, plus hotkey capture.
 fn input_window(
     ui: &imgui::Ui,
     bindings: &mut Bindings,
     awaiting: &mut Option<Awaiting>,
+    editor: &mut BindingEditor,
     open: &mut bool,
     actions: &mut Vec<Action>,
 ) {
     ui.window("Input")
-        .size([560.0, 520.0], imgui::Condition::FirstUseEver)
+        .size([820.0, 600.0], imgui::Condition::FirstUseEver)
         .opened(open)
         .build(|| {
             if awaiting.is_some() {
                 ui.text_colored([1.0, 0.85, 0.3, 1.0], "Press a key, or Escape to cancel.");
             } else {
-                ui.text_disabled("Click a binding, then press the key you want.");
+                ui.text_disabled("Emulator: capture a key. Cabinet: edit a binding expression.");
             }
             ui.same_line();
             if ui.button("Revert to defaults") {
                 *bindings = Bindings::default();
+                *editor = BindingEditor::default();
                 actions.push(Action::BindingsChanged);
             }
             ui.separator();
@@ -623,28 +649,36 @@ fn input_window(
                     tab.end();
                 }
                 if let Some(tab) = ui.tab_item("Cabinet") {
-                    ui.text_disabled(
-                        "Not every machine has every control: a racing cabinet reads                          the wheel and pedals, a fighting one reads the stick.",
-                    );
+                    ui.text_wrapped("All signals are shown. The loaded game determines which ones are used.");
                     ui.separator();
-                    for control in Control::ALL {
-                        let sources: Vec<String> = bindings
-                            .sources(*control)
-                            .iter()
-                            .map(ToString::to_string)
-                            .collect();
-                        let bound = if sources.is_empty() {
-                            "-".to_string()
-                        } else {
-                            sources.join(", ")
-                        };
-                        binding_row(
-                            ui,
-                            control.label(),
-                            &bound,
-                            *awaiting == Some(Awaiting::Control(*control)),
-                            || *awaiting = Some(Awaiting::Control(*control)),
-                        );
+                    ui.text_wrapped("Comma = alternatives; & = simultaneous. Signed axis: pad:LeftStickX; inverted: pad:LeftStickX~; half axis: pad:RightStickX-. Keyboard axis: keys:ArrowLeft/ArrowRight.");
+                    if let Some(signal) = editor.signal {
+                        ui.text(signal.label());
+                        ui.input_text("Expression", &mut editor.text).build();
+                        if ui.button("Apply") {
+                            match bindings.set_expression(signal, &editor.text) {
+                                Ok(()) => { editor.error=None; actions.push(Action::BindingsChanged); }
+                                Err(e) => editor.error=Some(e),
+                            }
+                        }
+                        ui.same_line();
+                        if ui.button("Cancel") { *editor=BindingEditor::default(); }
+                        if let Some(error)=&editor.error { ui.text_colored([1.0,0.4,0.3,1.0],error); }
+                        ui.separator();
+                    }
+                    for signal in Signal::ALL {
+                        let bound=&bindings.binding(*signal).text;
+                        binding_row(ui, signal.label(), if bound.is_empty() {"Unbound"} else {bound},
+                            editor.signal==Some(*signal), || {
+                                editor.signal=Some(*signal);
+                                editor.text=bound.clone();
+                                editor.error=None;
+                            });
+                        if let Some(usage) = signal.usage() {
+                            let _color = ui.push_style_color(imgui::StyleColor::Text, [0.6, 0.6, 0.6, 1.0]);
+                            ui.text_wrapped(usage);
+                            ui.spacing();
+                        }
                     }
                     tab.end();
                 }
@@ -662,7 +696,7 @@ fn binding_row(
     mut on_click: impl FnMut(),
 ) {
     ui.text(label);
-    ui.same_line_with_pos(220.0);
+    ui.same_line_with_pos(280.0);
     let caption = if listening {
         "  ...  ".to_string()
     } else {
@@ -670,8 +704,11 @@ fn binding_row(
     };
     let token =
         listening.then(|| ui.push_style_color(imgui::StyleColor::Button, [0.55, 0.42, 0.12, 1.0]));
-    if ui.button_with_size(caption, [300.0, 0.0]) {
+    if ui.button_with_size(caption, [ui.content_region_avail()[0].max(120.0), 0.0]) {
         on_click();
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(bound);
     }
     if let Some(token) = token {
         token.pop();

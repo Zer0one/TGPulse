@@ -1,19 +1,12 @@
-//! What the player presses, and what it means.
-//!
-//! The cabinets have physical controls a keyboard and a pad do not: a
-//! 270-degree wheel, an H-pattern shifter, a lightgun, handlebars. Rather than
-//! let every control scheme reach for keys and pad buttons itself, each names
-//! the abstract control it wants -- `Control::Button1`, `Control::Throttle` --
-//! and this resolves it through a table the player can change.
-//!
-//! Emulator hotkeys work the same way, in their own table, so they can be moved
-//! off keys a game wants.
+//! User-facing signal bindings and emulator hotkeys.
+//! The old Control identifiers are internal cabinet requests, not a second catalogue.
 
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::input::signals::{self, expression::Binding, Signal};
 use gilrs::{Axis, Button};
 use winit::keyboard::KeyCode;
 
@@ -37,7 +30,6 @@ pub enum Control {
     Coin1,
     Coin2,
     Start1,
-    Start2,
     Test,
     Service,
     // Daytona's four coloured view buttons.
@@ -59,112 +51,6 @@ pub enum Control {
     LeanLeft,
     LeanRight,
     ViewChange,
-}
-
-impl Control {
-    pub const ALL: &'static [Control] = &[
-        Control::Up,
-        Control::Down,
-        Control::Left,
-        Control::Right,
-        Control::Button1,
-        Control::Button2,
-        Control::Button3,
-        Control::Button4,
-        Control::Coin1,
-        Control::Coin2,
-        Control::Start1,
-        Control::Start2,
-        Control::Test,
-        Control::Service,
-        Control::ViewRed,
-        Control::ViewBlue,
-        Control::ViewYellow,
-        Control::ViewGreen,
-        Control::Throttle,
-        Control::Brake,
-        Control::SteerLeft,
-        Control::SteerRight,
-        Control::GearUp,
-        Control::GearDown,
-        Control::Fire,
-        Control::Reload,
-        Control::LeanLeft,
-        Control::LeanRight,
-        Control::ViewChange,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Control::Up => "Up",
-            Control::Down => "Down",
-            Control::Left => "Left",
-            Control::Right => "Right",
-            Control::Button1 => "Button 1",
-            Control::Button2 => "Button 2",
-            Control::Button3 => "Button 3",
-            Control::Button4 => "Button 4",
-            Control::Coin1 => "Coin 1",
-            Control::Coin2 => "Coin 2",
-            Control::Start1 => "Start 1",
-            Control::Start2 => "Start 2",
-            Control::Test => "Test",
-            Control::Service => "Service",
-            Control::ViewRed => "View (red)",
-            Control::ViewBlue => "View (blue)",
-            Control::ViewYellow => "View (yellow)",
-            Control::ViewGreen => "View (green)",
-            Control::Throttle => "Throttle",
-            Control::Brake => "Brake",
-            Control::SteerLeft => "Steer left",
-            Control::SteerRight => "Steer right",
-            Control::GearUp => "Gear up",
-            Control::GearDown => "Gear down",
-            Control::Fire => "Fire",
-            Control::Reload => "Reload",
-            Control::LeanLeft => "Lean left",
-            Control::LeanRight => "Lean right",
-            Control::ViewChange => "Change view",
-        }
-    }
-
-    fn key(self) -> &'static str {
-        match self {
-            Control::Up => "up",
-            Control::Down => "down",
-            Control::Left => "left",
-            Control::Right => "right",
-            Control::Button1 => "button1",
-            Control::Button2 => "button2",
-            Control::Button3 => "button3",
-            Control::Button4 => "button4",
-            Control::Coin1 => "coin1",
-            Control::Coin2 => "coin2",
-            Control::Start1 => "start1",
-            Control::Start2 => "start2",
-            Control::Test => "test",
-            Control::Service => "service",
-            Control::ViewRed => "view_red",
-            Control::ViewBlue => "view_blue",
-            Control::ViewYellow => "view_yellow",
-            Control::ViewGreen => "view_green",
-            Control::Throttle => "throttle",
-            Control::Brake => "brake",
-            Control::SteerLeft => "steer_left",
-            Control::SteerRight => "steer_right",
-            Control::GearUp => "gear_up",
-            Control::GearDown => "gear_down",
-            Control::Fire => "fire",
-            Control::Reload => "reload",
-            Control::LeanLeft => "lean_left",
-            Control::LeanRight => "lean_right",
-            Control::ViewChange => "view_change",
-        }
-    }
-
-    fn from_key(s: &str) -> Option<Control> {
-        Control::ALL.iter().copied().find(|c| c.key() == s)
-    }
 }
 
 /// Something the emulator itself does, rather than the machine.
@@ -263,7 +149,7 @@ impl fmt::Display for Source {
 /// Everything the player has bound.
 #[derive(Clone, Debug)]
 pub struct Bindings {
-    pub controls: BTreeMap<Control, Vec<Source>>,
+    pub controls: BTreeMap<Signal, Binding>,
     pub hotkeys: BTreeMap<Hotkey, KeyCode>,
 }
 
@@ -271,149 +157,7 @@ impl Default for Bindings {
     /// Match SM2-Emu's RetroPad positions where a cabinet control has the
     /// same meaning. Keyboard bindings retain their original layout.
     fn default() -> Self {
-        use Control as C;
-        let key = |k| Source::Key(k);
-        let pad = |b| Source::Pad(b);
-        let axis = |a, s| Source::PadAxis(a, s);
-
-        let controls = BTreeMap::from([
-            (
-                C::Up,
-                vec![
-                    key(KeyCode::ArrowUp),
-                    key(KeyCode::KeyW),
-                    pad(Button::DPadUp),
-                    axis(Axis::LeftStickY, Sign::Positive),
-                ],
-            ),
-            (
-                C::Down,
-                vec![
-                    key(KeyCode::ArrowDown),
-                    key(KeyCode::KeyS),
-                    pad(Button::DPadDown),
-                    axis(Axis::LeftStickY, Sign::Negative),
-                ],
-            ),
-            (
-                C::Left,
-                vec![
-                    key(KeyCode::ArrowLeft),
-                    key(KeyCode::KeyA),
-                    pad(Button::DPadLeft),
-                    axis(Axis::LeftStickX, Sign::Negative),
-                ],
-            ),
-            (
-                C::Right,
-                vec![
-                    key(KeyCode::ArrowRight),
-                    key(KeyCode::KeyD),
-                    pad(Button::DPadRight),
-                    axis(Axis::LeftStickX, Sign::Positive),
-                ],
-            ),
-            (C::Button1, vec![key(KeyCode::KeyJ), pad(Button::East)]),
-            (C::Button2, vec![key(KeyCode::KeyK), pad(Button::South)]),
-            (C::Button3, vec![key(KeyCode::KeyL), pad(Button::West)]),
-            (C::Button4, vec![key(KeyCode::KeyI), pad(Button::North)]),
-            (C::Coin1, vec![key(KeyCode::Digit5), pad(Button::Select)]),
-            (C::Coin2, vec![key(KeyCode::Digit6)]),
-            (
-                C::Start1,
-                vec![
-                    key(KeyCode::Enter),
-                    key(KeyCode::NumpadEnter),
-                    pad(Button::Start),
-                ],
-            ),
-            (C::Start2, vec![key(KeyCode::Digit2)]),
-            (C::Test, vec![key(KeyCode::F2), pad(Button::RightThumb)]),
-            // Not F1: a hotkey is resolved before the machine sees the key, so
-            // a control sharing one with the menu toggle can never fire.
-            (C::Service, vec![key(KeyCode::F8), pad(Button::LeftThumb)]),
-            (C::ViewRed, vec![key(KeyCode::KeyZ), pad(Button::West)]),
-            (C::ViewBlue, vec![key(KeyCode::KeyX), pad(Button::North)]),
-            (C::ViewYellow, vec![key(KeyCode::KeyC), pad(Button::East)]),
-            (C::ViewGreen, vec![key(KeyCode::KeyV)]),
-            (
-                C::Throttle,
-                vec![
-                    key(KeyCode::KeyW),
-                    key(KeyCode::ArrowUp),
-                    axis(Axis::RightZ, Sign::Positive),
-                    pad(Button::RightTrigger2),
-                ],
-            ),
-            (
-                C::Brake,
-                vec![
-                    key(KeyCode::KeyS),
-                    key(KeyCode::ArrowDown),
-                    axis(Axis::LeftZ, Sign::Positive),
-                    pad(Button::LeftTrigger2),
-                ],
-            ),
-            (
-                C::SteerLeft,
-                vec![
-                    key(KeyCode::ArrowLeft),
-                    key(KeyCode::KeyA),
-                    axis(Axis::LeftStickX, Sign::Negative),
-                ],
-            ),
-            (
-                C::SteerRight,
-                vec![
-                    key(KeyCode::ArrowRight),
-                    key(KeyCode::KeyD),
-                    axis(Axis::LeftStickX, Sign::Positive),
-                ],
-            ),
-            (
-                C::GearUp,
-                vec![key(KeyCode::KeyE), pad(Button::RightTrigger)],
-            ),
-            (
-                C::GearDown,
-                vec![key(KeyCode::KeyQ), pad(Button::LeftTrigger)],
-            ),
-            (
-                C::Fire,
-                vec![
-                    key(KeyCode::Space),
-                    pad(Button::South),
-                    pad(Button::RightTrigger),
-                    axis(Axis::RightZ, Sign::Positive),
-                ],
-            ),
-            (
-                C::Reload,
-                vec![
-                    key(KeyCode::KeyR),
-                    pad(Button::East),
-                    pad(Button::LeftTrigger),
-                    axis(Axis::LeftZ, Sign::Positive),
-                ],
-            ),
-            (
-                C::LeanLeft,
-                vec![
-                    key(KeyCode::ArrowLeft),
-                    key(KeyCode::KeyA),
-                    axis(Axis::LeftStickX, Sign::Negative),
-                ],
-            ),
-            (
-                C::LeanRight,
-                vec![
-                    key(KeyCode::ArrowRight),
-                    key(KeyCode::KeyD),
-                    axis(Axis::LeftStickX, Sign::Positive),
-                ],
-            ),
-            (C::ViewChange, vec![key(KeyCode::Space), pad(Button::South)]),
-        ]);
+        let controls = signals::defaults();
 
         let hotkeys = BTreeMap::from([
             (Hotkey::ToggleMenu, KeyCode::F1),
@@ -432,8 +176,13 @@ impl Default for Bindings {
 }
 
 impl Bindings {
-    pub fn sources(&self, control: Control) -> &[Source] {
-        self.controls.get(&control).map_or(&[], Vec::as_slice)
+    pub fn binding(&self, signal: Signal) -> &Binding {
+        &self.controls[&signal]
+    }
+    pub fn set_expression(&mut self, signal: Signal, text: &str) -> Result<(), String> {
+        self.controls
+            .insert(signal, Binding::parse(text, signal.signed())?);
+        Ok(())
     }
 
     pub fn hotkey(&self, hotkey: Hotkey) -> Option<KeyCode> {
@@ -446,11 +195,6 @@ impl Bindings {
             .iter()
             .find(|(_, bound)| **bound == key)
             .map(|(hotkey, _)| *hotkey)
-    }
-
-    /// Replaces every source bound to a control.
-    pub fn bind(&mut self, control: Control, sources: Vec<Source>) {
-        self.controls.insert(control, sources);
     }
 
     pub fn bind_hotkey(&mut self, hotkey: Hotkey, key: KeyCode) {
@@ -470,7 +214,32 @@ impl Bindings {
             }
             return defaults;
         }
-        Self::load(path)
+        let bindings = Self::load(path);
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if !text.lines().any(|l| l.trim() == "format = signals-v1") {
+                let backup = path.with_extension("conf.pre-signals");
+                // Never overwrite an earlier backup.
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&backup)
+                {
+                    Ok(mut file) => {
+                        use std::io::Write;
+                        if file.write_all(text.as_bytes()).is_ok() {
+                            if let Err(e) = bindings.save(path) {
+                                log::warn!("Cannot save migrated bindings: {e}");
+                            }
+                        }
+                    }
+                    Err(e) => log::warn!(
+                        "Cannot back up {}; migration remains in memory: {e}",
+                        path.display()
+                    ),
+                }
+            }
+        }
+        bindings
     }
 
     pub fn path() -> PathBuf {
@@ -485,6 +254,10 @@ impl Bindings {
             return Self::default();
         };
         let mut bindings = Self::default();
+        let modern = text.lines().any(|l| l.trim() == "format = signals-v1");
+        if !modern {
+            bindings.migrate_keyboard(&text);
+        }
         for (number, line) in text.lines().enumerate() {
             let line = line.split('#').next().unwrap_or("").trim();
             if line.is_empty() {
@@ -495,17 +268,20 @@ impl Bindings {
                 continue;
             };
             let (name, value) = (name.trim(), value.trim());
-            if let Some(control) = Control::from_key(name) {
-                let sources: Vec<Source> = value
-                    .split(',')
-                    .filter_map(|s| parse_source(s.trim()))
-                    .collect();
-                bindings.controls.insert(control, sources);
+            if name == "format" {
+                continue;
+            }
+            if let Some(signal) = Signal::from_key(name).filter(|_| modern) {
+                if let Err(e) = bindings.set_expression(signal, value) {
+                    log::warn!("Invalid binding {name}: {e}; keeping default");
+                }
             } else if let Some(hotkey) = Hotkey::from_key(name) {
                 if let Some(key) = parse_key(value) {
                     bindings.hotkeys.insert(hotkey, key);
+                } else if value.is_empty() {
+                    bindings.hotkeys.remove(&hotkey);
                 }
-            } else {
+            } else if modern {
                 log::warn!(target: "input", "{}:{}: unknown control '{name}'", path.display(), number + 1);
             }
         }
@@ -513,46 +289,152 @@ impl Bindings {
         bindings
     }
 
+    fn migrate_keyboard(&mut self, text: &str) {
+        // Import keyboard assignments once, keeping the new controller defaults.
+        let old: BTreeMap<&str, Vec<&str>> = text
+            .lines()
+            .filter_map(|l| l.split('#').next()?.split_once('='))
+            .map(|(k, v)| {
+                (
+                    k.trim(),
+                    v.split(',')
+                        .map(str::trim)
+                        .filter(|s| parse_key(s).is_some())
+                        .collect(),
+                )
+            })
+            .collect();
+        let mut merged: BTreeMap<Signal, Vec<&str>> = BTreeMap::new();
+        for (old_name, signal) in [
+            ("coin1", Signal::Coin),
+            ("coin2", Signal::Coin2),
+            ("start1", Signal::Start),
+            ("start2", Signal::Start2),
+            ("test", Signal::Test),
+            ("service", Signal::Service),
+            ("up", Signal::Up),
+            ("down", Signal::Down),
+            ("left", Signal::Left),
+            ("right", Signal::Right),
+            ("button1", Signal::Action1),
+            ("button2", Signal::Action2),
+            ("button3", Signal::Action3),
+            ("button4", Signal::Action4),
+            ("view_red", Signal::View1),
+            ("view_blue", Signal::View2),
+            ("view_yellow", Signal::View3),
+            ("view_green", Signal::View4),
+            ("gear_up", Signal::Action1),
+            ("gear_down", Signal::Action2),
+            ("fire", Signal::Action1),
+            ("reload", Signal::Action2),
+        ] {
+            if let Some(keys) = old.get(old_name) {
+                merged
+                    .entry(signal)
+                    .or_default()
+                    .extend(keys.iter().copied());
+            }
+        }
+        for (signal, mut keys) in merged {
+            keys.sort_unstable();
+            keys.dedup();
+            let pad: Vec<_> = signal
+                .default_text()
+                .split(',')
+                .map(str::trim)
+                .filter(|s| s.starts_with("pad:"))
+                .collect();
+            self.set_expression(
+                signal,
+                &keys.into_iter().chain(pad).collect::<Vec<_>>().join(", "),
+            )
+            .expect("valid migrated keys");
+        }
+        for (negative, positive, signals) in [(
+            "left",
+            "right",
+            &[
+                Signal::Steering,
+                Signal::Handle,
+                Signal::SkyX,
+                Signal::Curving,
+                Signal::Swing,
+            ][..],
+        )] {
+            if let (Some(neg), Some(pos)) = (old.get(negative), old.get(positive)) {
+                if !neg.is_empty() && !pos.is_empty() {
+                    let pairs: Vec<_> = (0..neg.len().max(pos.len()))
+                        .map(|i| format!("keys:{}/{}", neg[i % neg.len()], pos[i % pos.len()]))
+                        .collect();
+                    for &signal in signals {
+                        let pad: Vec<_> = signal
+                            .default_text()
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|s| s.starts_with("pad:"))
+                            .collect();
+                        self.set_expression(
+                            signal,
+                            &pairs
+                                .iter()
+                                .map(String::as_str)
+                                .chain(pad)
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        )
+                        .unwrap();
+                    }
+                }
+            }
+        }
+        for (direction, pedal, signal) in [
+            ("up", "throttle", Signal::Accelerator),
+            ("down", "brake", Signal::Brake),
+        ] {
+            if old.contains_key(direction) || old.contains_key(pedal) {
+                let mut keys = old.get(direction).cloned().unwrap_or_default();
+                keys.extend(old.get(pedal).cloned().unwrap_or_default());
+                keys.sort_unstable();
+                keys.dedup();
+                let pad: Vec<_> = signal
+                    .default_text()
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| s.starts_with("pad:"))
+                    .collect();
+                self.set_expression(
+                    signal,
+                    &keys.into_iter().chain(pad).collect::<Vec<_>>().join(", "),
+                )
+                .unwrap();
+            }
+        }
+    }
+
     pub fn save(&self, path: &Path) -> Result<(), String> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let mut out = String::from(
-            "# TGPulse input bindings.\n\
-             #\n\
-             # Each control takes a comma-separated list of sources. A source is a\n\
-             # key name, `pad:<button>`, or `pad:<axis>+` / `pad:<axis>-` for a stick\n\
-             # or trigger. Delete a line to go back to the shipped binding.\n\n",
-        );
-        out += "# Cabinet controls\n";
-        for (control, sources) in &self.controls {
-            let list: Vec<String> = sources.iter().map(source_token).collect();
-            out += &format!("{} = {}\n", control.key(), list.join(", "));
+        let mut out = String::from("# TGPulse: one signal list for all games.\n# Comma = alternatives; & = simultaneous chord.\n# pad:Axis = signed axis, pad:Axis~ = inverted, +/- = half axis.\n# keys:Negative/Positive = keyboard axis. Empty = unbound.\nformat = signals-v1\n\n");
+        for signal in Signal::ALL {
+            out += &format!(
+                "# {}\n{} = {}\n",
+                signal.label(),
+                signal.key(),
+                self.binding(*signal).text
+            );
         }
         out += "\n# Emulator hotkeys\n";
-        for (hotkey, key) in &self.hotkeys {
-            out += &format!("{} = {}\n", hotkey.key(), key_token(*key));
+        for hotkey in Hotkey::ALL {
+            let key = self.hotkey(*hotkey).map(key_token).unwrap_or_default();
+            out += &format!("{} = {}\n", hotkey.key(), key);
         }
         std::fs::write(path, out).map_err(|e| e.to_string())
     }
 }
 
-fn source_token(source: &Source) -> String {
-    match source {
-        Source::Key(k) => key_token(*k),
-        Source::Pad(b) => format!("pad:{}", pad_button_token(*b)),
-        Source::PadAxis(a, s) => format!(
-            "pad:{}{}",
-            pad_axis_token(*a),
-            match s {
-                Sign::Positive => "+",
-                Sign::Negative => "-",
-            }
-        ),
-    }
-}
-
-fn parse_source(token: &str) -> Option<Source> {
+pub(crate) fn parse_source(token: &str) -> Option<Source> {
     if let Some(rest) = token.strip_prefix("pad:") {
         if let Some(name) = rest.strip_suffix('+') {
             return pad_axis_from_token(name).map(|a| Source::PadAxis(a, Sign::Positive));
@@ -570,7 +452,7 @@ fn key_token(key: KeyCode) -> String {
     format!("{key:?}")
 }
 
-fn parse_key(token: &str) -> Option<KeyCode> {
+pub(crate) fn parse_key(token: &str) -> Option<KeyCode> {
     KEYS.iter()
         .copied()
         .find(|k| format!("{k:?}").eq_ignore_ascii_case(token))
@@ -589,10 +471,6 @@ fn key_name(key: KeyCode) -> String {
         }
     }
     raw
-}
-
-fn pad_button_token(button: Button) -> String {
-    format!("{button:?}")
 }
 
 fn pad_button_from_token(token: &str) -> Option<Button> {
@@ -624,10 +502,6 @@ fn pad_button_name(button: Button) -> &'static str {
         Button::DPadRight => "D-pad right",
         _ => "button",
     }
-}
-
-fn pad_axis_token(axis: Axis) -> String {
-    format!("{axis:?}")
 }
 
 fn pad_axis_from_token(token: &str) -> Option<Axis> {
@@ -765,67 +639,59 @@ impl FromStr for Source {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn bindings_round_trip_through_the_file() {
-        let dir = std::env::temp_dir().join("tgpulse-bindings-test");
-        let _ = std::fs::remove_dir_all(&dir);
-        let path = dir.join("input.conf");
-
+    fn all_signals_round_trip() {
+        let path =
+            std::env::temp_dir().join(format!("tgpulse-signals-{}.conf", std::process::id()));
         let mut written = Bindings::default();
-        written.bind_hotkey(Hotkey::SaveState, KeyCode::F8);
-        written.bind(
-            Control::Button1,
-            vec![
-                Source::Key(KeyCode::KeyZ),
-                Source::Pad(Button::North),
-                Source::PadAxis(Axis::RightZ, Sign::Positive),
-            ],
-        );
-        written.save(&path).expect("save");
-
+        written
+            .set_expression(
+                Signal::Gear1,
+                "KeyJ & KeyK, pad:RightStickX- & pad:RightStickY+",
+            )
+            .unwrap();
+        written.set_expression(Signal::Coin2, "").unwrap();
+        written.bind_hotkey(Hotkey::Reset, KeyCode::F5);
+        written.save(&path).unwrap();
         let read = Bindings::load(&path);
-        assert_eq!(read.hotkey(Hotkey::SaveState), Some(KeyCode::F8));
-        assert_eq!(
-            read.sources(Control::Button1),
-            written.sources(Control::Button1)
-        );
-        // Everything untouched still matches the defaults.
-        assert_eq!(
-            read.sources(Control::Coin1),
-            Bindings::default().sources(Control::Coin1)
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_key_drives_one_hotkey() {
-        let mut bindings = Bindings::default();
-        bindings.bind_hotkey(Hotkey::Reset, KeyCode::F5);
-        // F5 was Save state; taking it leaves Save state unbound rather than
-        // firing both.
-        assert_eq!(bindings.hotkey(Hotkey::Reset), Some(KeyCode::F5));
-        assert_eq!(bindings.hotkey(Hotkey::SaveState), None);
-    }
-
-    #[test]
-    fn default_pad_uses_sm2_common_positions() {
-        let bindings = Bindings::default();
-        for (control, source) in [
-            (Control::Button1, Source::Pad(Button::East)),
-            (Control::Button2, Source::Pad(Button::South)),
-            (Control::Button3, Source::Pad(Button::West)),
-            (Control::Throttle, Source::PadAxis(Axis::RightZ, Sign::Positive)),
-            (Control::Brake, Source::PadAxis(Axis::LeftZ, Sign::Positive)),
-            (Control::GearUp, Source::Pad(Button::RightTrigger)),
-            (Control::GearDown, Source::Pad(Button::LeftTrigger)),
-            (Control::Service, Source::Pad(Button::LeftThumb)),
-            (Control::Test, Source::Pad(Button::RightThumb)),
-            (Control::Fire, Source::Pad(Button::RightTrigger)),
-            (Control::Reload, Source::Pad(Button::LeftTrigger)),
-        ] {
-            assert!(bindings.sources(control).contains(&source), "{control:?}");
+        for signal in Signal::ALL {
+            assert_eq!(read.binding(*signal), written.binding(*signal));
         }
+        assert_eq!(read.hotkeys, written.hotkeys);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn invalid_binding_is_not_applied() {
+        let mut b = Bindings::default();
+        assert!(b.set_expression(Signal::Gear1, "KeyJ & nonsense").is_err());
+        assert_eq!(b.binding(Signal::Gear1).text, Signal::Gear1.default_text());
+    }
+    #[test]
+    fn migration_keeps_custom_keyboard_and_hotkey_uniqueness() {
+        let mut b = Bindings::default();
+        b.migrate_keyboard("coin1 = F12, pad:North");
+        assert_eq!(b.binding(Signal::Coin).text, "F12, pad:Select");
+        b.bind_hotkey(Hotkey::Reset, KeyCode::F5);
+        assert_eq!(b.hotkey(Hotkey::SaveState), None);
+    }
+
+    #[test]
+    fn migration_backs_up_original_once() {
+        let path =
+            std::env::temp_dir().join(format!("tgpulse-migrate-{}.conf", std::process::id()));
+        let backup = path.with_extension("conf.pre-signals");
+        let original = "coin1 = F12\nleft = KeyA\nright = KeyD\nfullscreen = F10\n";
+        std::fs::write(&path, original).unwrap();
+        let migrated = Bindings::load_or_create(&path);
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
+        assert!(migrated
+            .binding(Signal::Steering)
+            .text
+            .contains("keys:KeyA/KeyD"));
+        assert_eq!(migrated.hotkey(Hotkey::Fullscreen), Some(KeyCode::F10));
+        assert_eq!(Bindings::load_or_create(&path).controls, migrated.controls);
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), original);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(backup).unwrap();
     }
 }
