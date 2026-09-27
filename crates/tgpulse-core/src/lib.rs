@@ -26,3 +26,4 @@ pub mod sound;
 pub mod sound2a;
 pub mod system;
 pub mod tilemap;
+pub mod ym3438;
