@@ -10,7 +10,11 @@
 //! give steering, throttle and brake a travel of 0x20..0xe0, centred at 0x80 for
 //! the wheel and resting at 0x20 for both pedals.
 
+#[cfg(test)]
+mod player_tests;
+pub mod players;
 pub mod signals;
+use players::{PadAssignments, PadDevice, Player};
 use signals::Signal;
 use std::collections::{HashMap, HashSet};
 
@@ -114,6 +118,8 @@ pub struct InputState {
     // Cache logical events, not native codes: gilrs' unmapped-button fallback
     // can alias an SDL-mapped button (e.g. Xbox R3 and D-pad Right on macOS).
     pad_buttons: HashMap<gilrs::GamepadId, HashSet<gilrs::Button>>,
+    assignments: PadAssignments,
+    rumble_pad: Option<usize>,
     /// A single always-running rumble effect whose gain we scale, rather than
     /// rebuilding an effect every time the game changes force.
     rumble: Option<Effect>,
@@ -133,6 +139,9 @@ pub struct InputState {
     /// Mouse cursor as a fraction of the render area, [0, 1] left-to-right and
     /// top-to-bottom. Drives the lightgun aim.
     cursor: (f32, f32),
+    /// P2 gun cursor, independent of the P1 mouse and controller.
+    cursor_p2: (f32, f32),
+    cursor_p2_active: bool,
     /// Left mouse button (fire) and right (reload / point off-screen).
     mouse_fire: bool,
     mouse_reload: bool,
@@ -155,6 +164,7 @@ pub struct InputState {
     touch: Vec<(Control, f32)>,
     /// A pad the platform reports for itself.
     external: ExternalPad,
+    external_p2: ExternalPad,
 }
 
 /// A gamepad the platform hands over directly.
@@ -307,12 +317,13 @@ impl InputState {
         Self::with_gilrs(gilrs)
     }
 
-    fn with_gilrs(mut gilrs: Option<gilrs::Gilrs>) -> Self {
-        let rumble = gilrs.as_mut().and_then(Self::build_rumble);
-        Self {
+    fn with_gilrs(gilrs: Option<gilrs::Gilrs>) -> Self {
+        let mut state = Self {
             gilrs,
             pad_buttons: HashMap::new(),
-            rumble,
+            assignments: PadAssignments::default(),
+            rumble_pad: None,
+            rumble: None,
             rumble_gain: -1.0,
             rumble_enabled: false,
             keys: HashSet::new(),
@@ -323,6 +334,8 @@ impl InputState {
             accel: ANALOG_MIN,
             brake: ANALOG_MIN,
             cursor: (0.5, 0.5),
+            cursor_p2: (0.5, 0.5),
+            cursor_p2_active: false,
             mouse_fire: false,
             mouse_reload: false,
             scheme: ControlScheme::Racing,
@@ -334,7 +347,10 @@ impl InputState {
             bindings: Bindings::default(),
             touch: Vec::new(),
             external: ExternalPad::default(),
-        }
+            external_p2: ExternalPad::default(),
+        };
+        state.refresh_controllers();
+        state
     }
 
     /// Publishes what the on-screen controls are asking for. Called once a
@@ -401,6 +417,12 @@ impl InputState {
         self.cursor
     }
 
+    pub fn aim_p2(&self) -> Option<(f32, f32)> {
+        // Keep the idle single-player screen unchanged. A selected P2 pad or
+        // a moved/rebound P2 cursor makes the second reticle useful.
+        (self.pad_for(Player::Two).is_some() || self.cursor_p2_active).then_some(self.cursor_p2)
+    }
+
     /// Records the mouse buttons: left fires, right reloads (points off-screen).
     pub fn on_mouse_button(&mut self, left: Option<bool>, right: Option<bool>) {
         if let Some(l) = left {
@@ -418,8 +440,11 @@ impl InputState {
 
     /// Builds the one rumble effect we keep alive, at full magnitude. Force is
     /// applied by scaling its gain, which is cheap enough to do every frame.
-    fn build_rumble(g: &mut gilrs::Gilrs) -> Option<Effect> {
-        let pad = g.gamepads().next().map(|(id, _)| id)?;
+    fn build_rumble(g: &mut gilrs::Gilrs, selected: usize) -> Option<Effect> {
+        let pad = g
+            .gamepads()
+            .find(|(id, _)| usize::from(*id) == selected)
+            .map(|(id, _)| id)?;
         let eff = EffectBuilder::new()
             .add_effect(BaseEffect {
                 kind: BaseEffectType::Strong {
@@ -502,6 +527,57 @@ impl InputState {
 
     pub fn set_bindings(&mut self, bindings: Bindings) {
         self.bindings = bindings;
+        self.refresh_controllers();
+    }
+
+    pub fn controller_devices(&self) -> Vec<PadDevice> {
+        self.assignments.devices.clone()
+    }
+    pub fn controller_labels(&self) -> [String; 2] {
+        Player::ALL.map(|p| self.assignments.label(p))
+    }
+    /// Keep device identity/held state across library -> game, without carrying
+    /// the previous cabinet's gear, analog ramps or game routing into the new one.
+    pub fn retain_controllers_from(&mut self, previous: &mut Self) {
+        std::mem::swap(&mut self.gilrs, &mut previous.gilrs);
+        std::mem::swap(&mut self.assignments, &mut previous.assignments);
+        std::mem::swap(&mut self.pad_buttons, &mut previous.pad_buttons);
+        std::mem::swap(&mut self.rumble, &mut previous.rumble);
+        std::mem::swap(&mut self.rumble_pad, &mut previous.rumble_pad);
+        std::mem::swap(&mut self.external, &mut previous.external);
+        std::mem::swap(&mut self.external_p2, &mut previous.external_p2);
+        self.return_to_menu_held = previous.return_to_menu_held;
+        self.rumble_gain = -1.0;
+    }
+    fn refresh_controllers(&mut self) {
+        let connected = self
+            .gilrs
+            .as_ref()
+            .map(|g| {
+                g.gamepads()
+                    .map(|(id, pad)| {
+                        let uuid = pad
+                            .uuid()
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<String>();
+                        (usize::from(id), uuid, pad.name().to_owned())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.assignments.observe(connected);
+        self.assignments.resolve(&self.bindings.controllers);
+        let selected = self.assignments.id(Player::One);
+        if selected != self.rumble_pad {
+            if let Some(effect) = self.rumble.take() {
+                let _ = effect.stop();
+            }
+            self.rumble =
+                selected.and_then(|id| self.gilrs.as_mut().and_then(|g| Self::build_rumble(g, id)));
+            self.rumble_pad = selected;
+            self.rumble_gain = -1.0;
+        }
     }
 
     /// Whether any source bound to `control` is active. A stick counts as
@@ -535,15 +611,22 @@ impl InputState {
     }
 
     /// The travel of one pad axis, from whichever device is reporting it.
-    fn axis_value(&self, axis: gilrs::Axis) -> f32 {
-        let hardware = self.pad().map_or(0.0, |pad| {
+    fn external_for(&self, player: Player) -> &ExternalPad {
+        if player == Player::One {
+            &self.external
+        } else {
+            &self.external_p2
+        }
+    }
+    fn axis_value_for(&self, player: Player, axis: gilrs::Axis) -> f32 {
+        let hardware = self.pad_for(player).map_or(0.0, |pad| {
             mapped_axis_value(
                 axis,
                 pad.axis_code(axis).map(|_| pad.value(axis)),
                 |button| pad.button_data(button).map_or(0.0, |data| data.value()),
             )
         });
-        let external = self.external.axis(axis);
+        let external = self.external_for(player).axis(axis);
         if external.abs() > hardware.abs() {
             external
         } else {
@@ -558,18 +641,23 @@ impl InputState {
     }
 
     fn source_amount(&self, source: Source) -> f32 {
+        self.source_amount_for(Player::One, source)
+    }
+    fn source_amount_for(&self, player: Player, source: Source) -> f32 {
         match source {
             Source::Key(k) => f32::from(u8::from(self.held(k))),
             Source::Pad(b) => {
-                let hardware = self.pad().is_some_and(|pad| {
+                let hardware = self.pad_for(player).is_some_and(|pad| {
                     self.pad_buttons
                         .get(&pad.id())
                         .is_some_and(|buttons| buttons.contains(&b))
                 });
-                f32::from(u8::from(hardware || self.external.buttons.contains(&b)))
+                f32::from(u8::from(
+                    hardware || self.external_for(player).buttons.contains(&b),
+                ))
             }
             Source::PadAxis(a, sign) => {
-                let value = self.axis_value(a);
+                let value = self.axis_value_for(player, a);
                 // Triggers rest at zero and only travel positive; sticks rest
                 // centred and travel both ways. The deadzone differs to match.
                 let value = match sign {
@@ -590,9 +678,15 @@ impl InputState {
     }
 
     fn pad(&self) -> Option<gilrs::Gamepad<'_>> {
-        self.gilrs
-            .as_ref()
-            .and_then(|g| g.gamepads().next().map(|(_id, pad)| pad))
+        self.pad_for(Player::One)
+    }
+    fn pad_for(&self, player: Player) -> Option<gilrs::Gamepad<'_>> {
+        let selected = self.assignments.id(player)?;
+        self.gilrs.as_ref().and_then(|g| {
+            g.gamepads()
+                .find(|(id, _)| usize::from(*id) == selected)
+                .map(|(_, pad)| pad)
+        })
     }
 
     /// Moves `axis` toward `target` by at most `delta`.
@@ -632,6 +726,7 @@ impl InputState {
                 }
             }
         }
+        self.refresh_controllers();
 
         let active = self.bindings.return_to_menu.value(|atom| match atom {
             signals::expression::Atom::Source(source) => self.source_amount(*source),
@@ -996,6 +1091,14 @@ impl InputState {
         self.cursor.0 = (self.cursor.0 + step(self.signal(Signal::GunYaw)) / 495.0).clamp(0.0, 1.0);
         self.cursor.1 =
             (self.cursor.1 - step(self.signal(Signal::GunPitch)) / 383.0).clamp(0.0, 1.0);
+        self.cursor_p2_active |= step(self.signal_p2(Signal::GunYaw)) != 0.0
+            || step(self.signal_p2(Signal::GunPitch)) != 0.0
+            || self.signal_p2(Signal::Action1) > 0.5
+            || self.signal_p2(Signal::Action2) > 0.5;
+        self.cursor_p2.0 =
+            (self.cursor_p2.0 + step(self.signal_p2(Signal::GunYaw)) / 495.0).clamp(0.0, 1.0);
+        self.cursor_p2.1 =
+            (self.cursor_p2.1 - step(self.signal_p2(Signal::GunPitch)) / 383.0).clamp(0.0, 1.0);
         let (mut nx, mut ny) = self.cursor;
 
         fire |= self.on(Control::Fire);
@@ -1042,16 +1145,37 @@ impl InputState {
         out.gun_x = lerp(nx, xmin, xmax);
         out.gun_y = lerp(ny, ymin, ymax);
         out.gun_offscreen = reload;
+        let reload2 = self.serial_gun() && self.signal_p2(Signal::Action2) > 0.5;
+        let fire2 = reload2 || self.signal_p2(Signal::Action1) > 0.5;
+        let (nx2, ny2) = if reload2 { (0.0, 0.0) } else { self.cursor_p2 };
+        // SM2 games.xml: hotd uses IN2:01. hotdo/hotdp explicitly declare
+        // their own lightgun spec (no trigger override), hence use IN1:02.
+        if fire2 {
+            if self.game == "hotd" {
+                out.in2 &= !1;
+            } else {
+                out.in1 &= !2;
+            }
+        }
+        let (xmin2, xmax2, ymin2, ymax2) = if self.game.starts_with("hotd") {
+            (0x0a3, 0x254, 0x057, 0x17c)
+        } else if self.game == "vcop2" {
+            (0x086, 0x273, 0x024, 0x1a9)
+        } else {
+            (0x080, 0x273, 0x027, 0x1a9)
+        };
+        out.gun2_x = lerp(nx2, xmin2, xmax2);
+        out.gun2_y = lerp(ny2, ymin2, ymax2);
+        out.gun2_offscreen = reload2;
         // The mounted-gun cabinets (Gunblade, Rail Chase 2, Behind Enemy Lines)
         // read aim straight off the ADC instead of the gun interface board, so
-        // publish the same aim there as an 8-bit value. Player 2's gun stays
-        // centred: one mouse only drives player 1.
+        // publish both independent cursors there as 8-bit values.
         let byte = |t: f32| (t.clamp(0.0, 1.0) * 255.0) as u8;
         let axes = Axes {
             gun1x: byte(nx),
             gun1y: byte(ny),
-            gun2x: 0x80,
-            gun2y: 0x80,
+            gun2x: byte(nx2),
+            gun2y: byte(ny2),
             ..Default::default()
         };
         self.scatter(&axes, out);
@@ -1280,12 +1404,22 @@ mod tests {
                 let mut bindings = Bindings::default();
                 let signal = match control {
                     Control::Coin1 => Signal::Coin,
-                    Control::Coin2 => Signal::Coin2,
+                    Control::Coin2 => Signal::Coin,
                     Control::Test => Signal::Test,
                     Control::Service => Signal::Service,
                     _ => unreachable!(),
                 };
-                bindings.set_expression(signal, "F12").unwrap();
+                bindings
+                    .set_player_expression(
+                        if control == Control::Coin2 {
+                            Player::Two
+                        } else {
+                            Player::One
+                        },
+                        signal,
+                        "F12",
+                    )
+                    .unwrap();
                 input.set_bindings(bindings);
 
                 let mut out = Inputs::default();

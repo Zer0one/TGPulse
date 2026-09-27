@@ -373,6 +373,9 @@ impl App {
             Ok((mut session, config)) => {
                 self.config = config;
                 window.set_title(&format!("TGPulse - {}", session.title));
+                if let Some(mut input) = self.menu_input.take() {
+                    session.input.retain_controllers_from(&mut input);
+                }
                 session.input.set_bindings(self.bindings.clone());
                 self.session = Some(session);
                 self.menu_input = None;
@@ -831,6 +834,15 @@ impl App {
 
         let title = self.session.as_ref().map(|s| s.title.clone());
         self.gui.audio_sources = self.session.as_ref().map_or(&[], Session::audio_sources);
+        if let Some(input) = self
+            .session
+            .as_ref()
+            .map(|s| &s.input)
+            .or(self.menu_input.as_ref())
+        {
+            self.gui.controller_devices = input.controller_devices();
+            self.gui.controller_labels = input.controller_labels();
+        }
         // Destructured so the renderer, the interface, the settings and the
         // session are borrowed as the separate fields they are: a frame needs
         // several at once, and going through `self` methods would not allow it.
@@ -1080,7 +1092,16 @@ impl App {
                         target,
                         (x * SCREEN_W as f32) as i32,
                         (y * SCREEN_H as f32) as i32,
+                        0xFFFF_2020,
                     );
+                    if let Some((x, y)) = session.input.aim_p2() {
+                        draw_crosshair(
+                            target,
+                            (x * SCREEN_W as f32) as i32,
+                            (y * SCREEN_H as f32) as i32,
+                            0xFF20_A0FF,
+                        );
+                    }
                 }
                 Layers::Model2 {
                     triangles: if exact {
@@ -1209,11 +1230,10 @@ mod video_setting_tests {
     }
 }
 
-/// A lightgun crosshair, drawn into an ARGB `SCREEN_W`x`SCREEN_H` layer. Red
+/// A lightgun crosshair, drawn into an ARGB `SCREEN_W`x`SCREEN_H` layer. Coloured
 /// arms with a black edge, so it stays readable over any scene, and a gap in
 /// the middle so it does not hide what is being aimed at.
-fn draw_crosshair(buf: &mut [u32], cx: i32, cy: i32) {
-    const RED: u32 = 0xFFFF_2020;
+fn draw_crosshair(buf: &mut [u32], cx: i32, cy: i32, colour: u32) {
     const BLACK: u32 = 0xFF00_0000;
     const ARM: i32 = 12;
     const GAP: i32 = 3;
@@ -1225,15 +1245,15 @@ fn draw_crosshair(buf: &mut [u32], cx: i32, cy: i32) {
     };
     for d in GAP..=ARM {
         for &s in &[-d, d] {
-            put(cx + s, cy, RED);
-            put(cx + s, cy + 1, RED);
+            put(cx + s, cy, colour);
+            put(cx + s, cy + 1, colour);
             put(cx + s, cy - 1, BLACK);
             put(cx + s, cy + 2, BLACK);
-            put(cx, cy + s, RED);
-            put(cx + 1, cy + s, RED);
+            put(cx, cy + s, colour);
+            put(cx + 1, cy + s, colour);
             put(cx - 1, cy + s, BLACK);
             put(cx + 2, cy + s, BLACK);
         }
     }
-    put(cx, cy, RED);
+    put(cx, cy, colour);
 }

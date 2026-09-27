@@ -30,9 +30,7 @@ macro_rules! signals {
 }
 signals! {
     Coin, "Coin", "coin", false, "Digit5, pad:Select";
-    Coin2, "Coin 2", "coin2", false, "Digit6";
     Start, "Start", "start", false, "Enter, NumpadEnter, pad:Start";
-    Start2, "Start 2", "start2", false, "Digit2";
     Test, "Test", "test", false, "F2, pad:LeftThumb";
     Service, "Service", "service", false, "F8, pad:RightThumb";
     Up, "Joystick Up", "up", false, "ArrowUp, KeyW, pad:DPadUp";
@@ -89,6 +87,50 @@ pub fn defaults() -> BTreeMap<Signal, Binding> {
 }
 
 impl Signal {
+    /// One catalogue for both seats. Capability is not filtered by loaded game.
+    /// Enabled when at least one supported Model 1/2 cabinet has that P2 input.
+    pub fn supports_p2(self) -> bool {
+        matches!(
+            self,
+            Self::Coin
+                | Self::Start
+                | Self::Test
+                | Self::Service
+                | Self::Up
+                | Self::Down
+                | Self::Left
+                | Self::Right
+                | Self::Action1
+                | Self::Action2
+                | Self::Action3
+                | Self::SkyX
+                | Self::SkyY
+                | Self::GunYaw
+                | Self::GunPitch
+                | Self::BatSwing
+                | Self::Accelerator
+                | Self::Brake
+        )
+    }
+
+    pub fn p2_default_text(self) -> String {
+        if !self.supports_p2() {
+            return String::new();
+        }
+        match self {
+            Self::Coin => "Digit6, pad:Select".into(),
+            Self::Start => "Digit2, pad:Start".into(),
+            Self::Test | Self::Service => self.default_text().into(),
+            _ => self
+                .default_text()
+                .split(',')
+                .map(str::trim)
+                .filter(|s| s.starts_with("pad:"))
+                .collect::<Vec<_>>()
+                .join(", "),
+        }
+    }
+
     /// Game families, including their revisions. Kept with the public labels.
     pub fn usage(self) -> Option<&'static str> {
         match self {

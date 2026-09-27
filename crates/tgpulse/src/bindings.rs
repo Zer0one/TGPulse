@@ -6,6 +6,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::input::players::Player;
 use crate::input::signals::{self, expression::Binding, Signal};
 use gilrs::{Axis, Button};
 use winit::keyboard::KeyCode;
@@ -151,6 +152,9 @@ impl fmt::Display for Source {
 pub struct Bindings {
     pub return_to_menu: Binding,
     pub controls: BTreeMap<Signal, Binding>,
+    pub controls_p2: BTreeMap<Signal, Binding>,
+    /// "auto", "none", or a persistent device UUID:ordinal from the frontend.
+    pub controllers: [String; 2],
     pub hotkeys: BTreeMap<Hotkey, KeyCode>,
 }
 
@@ -174,6 +178,16 @@ impl Default for Bindings {
 
         Self {
             controls,
+            controls_p2: Signal::ALL
+                .iter()
+                .map(|&s| {
+                    (
+                        s,
+                        Binding::parse(&s.p2_default_text(), s.signed()).expect("valid P2 default"),
+                    )
+                })
+                .collect(),
+            controllers: ["auto".into(), "auto".into()],
             hotkeys,
             return_to_menu: Binding::parse("Escape, pad:Select & pad:Start", false)
                 .expect("valid return-to-menu default"),
@@ -182,6 +196,36 @@ impl Default for Bindings {
 }
 
 impl Bindings {
+    pub fn player_binding(&self, player: Player, signal: Signal) -> &Binding {
+        if player == Player::One {
+            self.binding(signal)
+        } else {
+            &self.controls_p2[&signal]
+        }
+    }
+    pub fn set_player_expression(
+        &mut self,
+        player: Player,
+        signal: Signal,
+        text: &str,
+    ) -> Result<(), String> {
+        if player == Player::One {
+            return self.set_expression(signal, text);
+        }
+        if !signal.supports_p2() {
+            return Err("No Player 2 counterpart for this signal".into());
+        }
+        self.controls_p2
+            .insert(signal, Binding::parse(text, signal.signed())?);
+        Ok(())
+    }
+    pub fn set_controller(&mut self, player: Player, key: String) {
+        let i = player.index();
+        if key != "auto" && key != "none" && self.controllers[1 - i] == key {
+            self.controllers[1 - i] = "none".into();
+        }
+        self.controllers[i] = key;
+    }
     pub fn binding(&self, signal: Signal) -> &Binding {
         &self.controls[&signal]
     }
@@ -222,8 +266,16 @@ impl Bindings {
         }
         let bindings = Self::load(path);
         if let Ok(text) = std::fs::read_to_string(path) {
-            if !text.lines().any(|l| l.trim() == "format = signals-v1") {
-                let backup = path.with_extension("conf.pre-signals");
+            if !text.lines().any(|l| l.trim() == "format = signals-v3") {
+                let backup = path.with_extension(
+                    if text.lines().any(|l| l.trim() == "format = signals-v2") {
+                        "conf.pre-model2-players"
+                    } else if text.lines().any(|l| l.trim() == "format = signals-v1") {
+                        "conf.pre-players"
+                    } else {
+                        "conf.pre-signals"
+                    },
+                );
                 // Never overwrite an earlier backup.
                 match std::fs::OpenOptions::new()
                     .write(true)
@@ -260,7 +312,13 @@ impl Bindings {
             return Self::default();
         };
         let mut bindings = Self::default();
-        let modern = text.lines().any(|l| l.trim() == "format = signals-v1");
+        let modern = text.lines().any(|l| {
+            matches!(
+                l.trim(),
+                "format = signals-v1" | "format = signals-v2" | "format = signals-v3"
+            )
+        });
+        let model1_players = text.lines().any(|l| l.trim() == "format = signals-v2");
         if !modern {
             bindings.migrate_keyboard(&text);
         }
@@ -277,7 +335,47 @@ impl Bindings {
             if name == "format" {
                 continue;
             }
-            if name == "return_to_menu" {
+            if name == "controller_p1" || name == "controller_p2" {
+                bindings.controllers[usize::from(name == "controller_p2")] = value.to_owned();
+            } else if modern && (name.starts_with("p2.") || name == "coin2" || name == "start2") {
+                let signal = match name {
+                    "coin2" => Some(Signal::Coin),
+                    "start2" => Some(Signal::Start),
+                    _ => Signal::from_key(&name[3..]),
+                };
+                match signal {
+                    Some(s) => {
+                        // v2 persisted disabled rows as empty. These signals
+                        // could not be edited there; enable their new defaults
+                        // once, without replacing any nonempty custom value.
+                        if model1_players
+                            && value.is_empty()
+                            && matches!(
+                                s,
+                                Signal::GunYaw
+                                    | Signal::GunPitch
+                                    | Signal::BatSwing
+                                    | Signal::Accelerator
+                                    | Signal::Brake
+                            )
+                        {
+                            continue;
+                        }
+                        let value = match (name, value) {
+                            ("coin2", "Digit6") => "Digit6, pad:Select",
+                            ("start2", "Digit2") => "Digit2, pad:Start",
+                            _ => value,
+                        };
+                        if let Err(e) = bindings.set_player_expression(Player::Two, s, value) {
+                            // Empty disabled rows are persisted for a complete catalogue.
+                            if !value.is_empty() {
+                                log::warn!("Invalid binding {name}: {e}");
+                            }
+                        }
+                    }
+                    None => log::warn!("Unknown P2 signal {name}"),
+                }
+            } else if name == "return_to_menu" {
                 match Binding::parse(value, false) {
                     Ok(binding) => bindings.return_to_menu = binding,
                     Err(e) => log::warn!("Invalid return_to_menu binding: {e}; keeping default"),
@@ -318,9 +416,7 @@ impl Bindings {
         let mut merged: BTreeMap<Signal, Vec<&str>> = BTreeMap::new();
         for (old_name, signal) in [
             ("coin1", Signal::Coin),
-            ("coin2", Signal::Coin2),
             ("start1", Signal::Start),
-            ("start2", Signal::Start2),
             ("test", Signal::Test),
             ("service", Signal::Service),
             ("up", Signal::Up),
@@ -345,6 +441,12 @@ impl Bindings {
                     .entry(signal)
                     .or_default()
                     .extend(keys.iter().copied());
+            }
+        }
+        for (name, signal) in [("coin2", Signal::Coin), ("start2", Signal::Start)] {
+            if let Some(keys) = old.get(name) {
+                self.set_player_expression(Player::Two, signal, &keys.join(", "))
+                    .unwrap();
             }
         }
         for (signal, mut keys) in merged {
@@ -427,13 +529,26 @@ impl Bindings {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let mut out = String::from("# TGPulse: one signal list for all games.\n# Comma = alternatives; & = simultaneous chord.\n# pad:Axis = signed axis, pad:Axis~ = inverted, +/- = half axis.\n# keys:Negative/Positive = keyboard axis. Empty = unbound.\nformat = signals-v1\n\n");
+        let mut out = String::from("# TGPulse: one signal list, independent player bindings.\n# Comma = alternatives; & = simultaneous chord.\n# pad:Axis = signed axis, pad:Axis~ = inverted, +/- = half axis.\n# keys:Negative/Positive = keyboard axis. Empty = unbound.\nformat = signals-v3\n\n");
+        out += &format!(
+            "controller_p1 = {}\ncontroller_p2 = {}\n\n# Cabinet P1\n",
+            self.controllers[0], self.controllers[1]
+        );
         for signal in Signal::ALL {
             out += &format!(
                 "# {}\n{} = {}\n",
                 signal.label(),
                 signal.key(),
                 self.binding(*signal).text
+            );
+        }
+        out += "\n# Cabinet P2 (unsupported signals are unbound)\n";
+        for &signal in Signal::ALL {
+            out += &format!(
+                "# {}\np2.{} = {}\n",
+                signal.label(),
+                signal.key(),
+                self.player_binding(Player::Two, signal).text
             );
         }
         out += "\n# Emulator hotkeys\n";
@@ -663,7 +778,13 @@ mod tests {
                 "KeyJ & KeyK, pad:RightStickX- & pad:RightStickY+",
             )
             .unwrap();
-        written.set_expression(Signal::Coin2, "").unwrap();
+        written
+            .set_player_expression(Player::Two, Signal::Coin, "")
+            .unwrap();
+        written
+            .set_player_expression(Player::Two, Signal::SkyX, "pad:RightStickX~")
+            .unwrap();
+        written.set_controller(Player::Two, "012345:1".into());
         written.bind_hotkey(Hotkey::Reset, KeyCode::F5);
         written.return_to_menu = Binding::parse("KeyQ, pad:Select & pad:North", false).unwrap();
         written.save(&path).unwrap();
@@ -672,6 +793,8 @@ mod tests {
             assert_eq!(read.binding(*signal), written.binding(*signal));
         }
         assert_eq!(read.hotkeys, written.hotkeys);
+        assert_eq!(read.controls_p2, written.controls_p2);
+        assert_eq!(read.controllers, written.controllers);
         assert_eq!(read.return_to_menu, written.return_to_menu);
         std::fs::remove_file(path).unwrap();
     }
@@ -680,6 +803,122 @@ mod tests {
         let mut b = Bindings::default();
         assert!(b.set_expression(Signal::Gear1, "KeyJ & nonsense").is_err());
         assert_eq!(b.binding(Signal::Gear1).text, Signal::Gear1.default_text());
+    }
+    #[test]
+    fn p2_defaults_share_pad_conventions_but_not_gameplay_keys() {
+        use crate::input::signals::expression::Atom;
+        let b = Bindings::default();
+        for &s in Signal::ALL {
+            let binding = b.player_binding(Player::Two, s);
+            if matches!(
+                s,
+                Signal::Coin | Signal::Start | Signal::Test | Signal::Service
+            ) {
+                continue;
+            }
+            assert_eq!(
+                binding.text,
+                if s.supports_p2() {
+                    s.default_text()
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|p| p.starts_with("pad:"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                } else {
+                    String::new()
+                }
+            );
+            assert_eq!(
+                binding.value(|a| match a {
+                    Atom::Source(Source::Key(_)) | Atom::Keys(_, _) => 1.0,
+                    _ => 0.0,
+                }),
+                0.0
+            );
+        }
+        let mut b = b;
+        assert!(b
+            .set_player_expression(Player::Two, Signal::ThrottleUp, "KeyW")
+            .is_err());
+        b.set_controller(Player::One, "uuid:1".into());
+        b.set_controller(Player::Two, "uuid:1".into());
+        assert_eq!(b.controllers, ["none", "uuid:1"]);
+    }
+    #[test]
+    fn old_coin_start_move_to_p2_without_losing_customizations() {
+        let path = std::env::temp_dir().join(format!(
+            "tgpulse-player-migration-{}.conf",
+            std::process::id()
+        ));
+        let original = "format = signals-v1\ncoin = F11\ncoin2 = F12, pad:North\nstart2 = \n";
+        std::fs::write(&path, original).unwrap();
+        let b = Bindings::load_or_create(&path);
+        assert_eq!(b.binding(Signal::Coin).text, "F11");
+        assert_eq!(
+            b.player_binding(Player::Two, Signal::Coin).text,
+            "F12, pad:North"
+        );
+        assert_eq!(b.player_binding(Player::Two, Signal::Start).text, "");
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("conf.pre-players")).unwrap(),
+            original
+        );
+        assert_eq!(Bindings::load(&path).controls_p2, b.controls_p2);
+        std::fs::write(
+            &path,
+            "format = signals-v1\ncoin2 = Digit6\nstart2 = Digit2\n",
+        )
+        .unwrap();
+        let b = Bindings::load(&path);
+        assert_eq!(
+            b.player_binding(Player::Two, Signal::Coin).text,
+            "Digit6, pad:Select"
+        );
+        assert_eq!(
+            b.player_binding(Player::Two, Signal::Start).text,
+            "Digit2, pad:Start"
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(path.with_extension("conf.pre-players")).unwrap();
+    }
+    #[test]
+    fn model2_p2_migration_only_fills_previously_disabled_rows_once() {
+        let path =
+            std::env::temp_dir().join(format!("tgpulse-model2-p2-{}.conf", std::process::id()));
+        let original = "format = signals-v2\naction1 = KeyU\np2.action1 = \np2.gun_yaw = \np2.gun_pitch = keys:KeyT/KeyG\np2.accelerator = \ncontroller_p2 = custom:1\n";
+        std::fs::write(&path, original).unwrap();
+        let mut b = Bindings::load_or_create(&path);
+        assert_eq!(b.binding(Signal::Action1).text, "KeyU");
+        assert_eq!(b.player_binding(Player::Two, Signal::Action1).text, "");
+        assert_eq!(
+            b.player_binding(Player::Two, Signal::GunYaw).text,
+            "pad:LeftStickX"
+        );
+        assert_eq!(
+            b.player_binding(Player::Two, Signal::GunPitch).text,
+            "keys:KeyT/KeyG"
+        );
+        assert_eq!(
+            b.player_binding(Player::Two, Signal::Accelerator).text,
+            "pad:RightZ+"
+        );
+        assert_eq!(b.controllers[1], "custom:1");
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("conf.pre-model2-players")).unwrap(),
+            original
+        );
+        b.set_player_expression(Player::Two, Signal::GunYaw, "")
+            .unwrap();
+        b.save(&path).unwrap();
+        assert_eq!(
+            Bindings::load_or_create(&path)
+                .player_binding(Player::Two, Signal::GunYaw)
+                .text,
+            ""
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_file(path.with_extension("conf.pre-model2-players")).unwrap();
     }
     #[test]
     fn existing_signals_file_inherits_shared_throttle_defaults() {
@@ -701,7 +940,14 @@ mod tests {
             loaded.binding(Signal::ThrottleDown).text,
             "KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-"
         );
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("conf.pre-players")).unwrap(),
+            original
+        );
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("format = signals-v3"));
+        std::fs::remove_file(path.with_extension("conf.pre-players")).unwrap();
         std::fs::remove_file(path).unwrap();
     }
     #[test]

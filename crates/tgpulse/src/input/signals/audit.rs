@@ -153,11 +153,20 @@ fn cabinets() -> Vec<Cabinet> {
         Joystick, [255;3], 0x10, true, true,
         &[(Action1,1,1),(Action2,1,2),(Action3,1,4)]);
     add(
-        "hpyagu98 rascot2 airwlkrs",
+        "hpyagu98 airwlkrs",
         Joystick,
         [255; 3],
         0x10,
         true,
+        true,
+        &[(Action1, 1, 2), (Action2, 1, 1), (Action3, 1, 4)],
+    );
+    add(
+        "rascot2",
+        Joystick,
+        [255; 3],
+        0x10,
+        false,
         true,
         &[(Action1, 1, 2), (Action2, 1, 1), (Action3, 1, 4)],
     );
@@ -247,7 +256,7 @@ fn cabinets() -> Vec<Cabinet> {
         Flight,
         [255; 3],
         0x10,
-        true,
+        false, // Gunner has no Start: user cabinet convention, unlike MAME's generic Start2 bit.
         true,
         &[(Action1, 1, 1), (Action2, 1, 2), (View1, 1, 0x10)],
     );
@@ -362,6 +371,203 @@ fn ports(out: &Inputs) -> [u8; 3] {
     [out.in0, out.in1, out.in2]
 }
 
+#[test]
+fn every_set_routes_p2_signals_without_changing_p1_or_single_seat_controls() {
+    use crate::input::players::Player;
+    for cabinet in cabinets() {
+        for game in cabinet.sets.split_whitespace() {
+            for &signal in S::ALL.iter().filter(|s| s.supports_p2()) {
+                let mut input = state(game, cabinet.scheme);
+                input
+                    .bindings
+                    .set_player_expression(
+                        Player::Two,
+                        signal,
+                        if signal.signed() {
+                            "keys:F11/F12"
+                        } else {
+                            "F12"
+                        },
+                    )
+                    .unwrap();
+                input.on_key(KeyCode::F12, true);
+                let mut out = Inputs::default();
+                input.poll(&mut out);
+                let mut expected = cabinet.idle;
+                let common = match signal {
+                    S::Coin if cabinet.coin2 => 2,
+                    S::Start if cabinet.start2 => 0x20,
+                    S::Test => {
+                        if game == "bel" {
+                            8
+                        } else {
+                            4
+                        }
+                    }
+                    S::Service => {
+                        if game == "bel" {
+                            4
+                        } else {
+                            8
+                        }
+                    }
+                    _ => 0,
+                };
+                expected[0] ^= common;
+                if cabinet.scheme == Scheme::Joystick
+                    && !game.starts_with("von")
+                    && game != "rascot2"
+                {
+                    expected[2] ^= match signal {
+                        S::Up => 0x20,
+                        S::Down => 0x10,
+                        S::Left => 0x80,
+                        S::Right => 0x40,
+                        _ => cabinet
+                            .buttons
+                            .iter()
+                            .find(|&&(s, p, _)| s == signal && p == 1)
+                            .map_or(0, |&(_, _, mask)| mask),
+                    };
+                } else if cabinet.scheme == Scheme::Gun {
+                    let reload = matches!(
+                        game,
+                        "vcop" | "vcopa" | "vcop2" | "hotd" | "hotdo" | "hotdp"
+                    ) && signal == S::Action2;
+                    if signal == S::Action1 || reload {
+                        let (port, mask) = if game == "hotd" { (2, 1) } else { (1, 2) };
+                        expected[port] ^= mask;
+                    }
+                    if game == "bel" && signal == S::Action2 {
+                        expected[1] ^= 0x20;
+                    }
+                    assert_eq!(out.gun2_offscreen, reload, "{game}: {signal:?}");
+                    assert!(!out.gun_offscreen, "P2 reload must not reload P1");
+                } else if game.starts_with("swa") || cabinet.scheme == Scheme::Sled {
+                    expected[1] ^= match signal {
+                        S::Action1 => 4,
+                        S::Action2 => 8,
+                        _ => 0,
+                    };
+                }
+                assert_eq!(ports(&out), expected, "{game}: P2 {signal:?}");
+                input.on_key(KeyCode::F12, false);
+                input.poll(&mut out);
+                assert_eq!(ports(&out), cabinet.idle, "{game}: P2 release {signal:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn p2_bats_and_sled_pedals_have_independent_full_range_adc_channels() {
+    use crate::input::players::Player;
+    for (games, signals) in [
+        ("dynabb dynabb97", &[(S::BatSwing, A::Bat1, A::Bat2)][..]),
+        (
+            "powsled powsledm powsledr",
+            &[(S::Accelerator, A::P1R, A::P2R), (S::Brake, A::P1L, A::P2L)][..],
+        ),
+    ] {
+        for game in games.split_whitespace() {
+            for &(signal, p1_role, p2_role) in signals {
+                let mut input = state(
+                    game,
+                    if game.starts_with("dynabb") {
+                        Scheme::Joystick
+                    } else {
+                        Scheme::Sled
+                    },
+                );
+                let roles = db_roles(game);
+                input.set_analog_roles(roles);
+                // Feed the same normalized axis path as a real controller;
+                // the default RightStickY/Z source strings are tested separately.
+                input
+                    .bindings
+                    .set_player_expression(Player::Two, signal, "pad:LeftStickX+")
+                    .unwrap();
+                let ch1 = roles.iter().position(|&r| r == p1_role).unwrap();
+                let ch2 = roles.iter().position(|&r| r == p2_role).unwrap();
+                let mut out = Inputs::default();
+                for (value, expected) in [(0.0, 0), (0.5, 128), (1.0, 255), (0.0, 0)] {
+                    input.external_p2.left_x = value;
+                    input.poll(&mut out);
+                    assert_eq!(out.analog[ch2], expected, "{game}: {signal:?}");
+                    assert_eq!(out.analog[ch1], 0, "{game}: P1 unaffected");
+                    assert_eq!(ports(&out), [255; 3]);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn p2_gun_calibrations_cursor_hold_and_mouse_isolation() {
+    for (game, xmin, xmax, ymin, ymax) in [
+        ("vcop", 0x80, 0x273, 0x27, 0x1a9),
+        ("vcopa", 0x80, 0x273, 0x27, 0x1a9),
+        ("vcop2", 0x86, 0x273, 0x24, 0x1a9),
+        ("hotd", 0xa3, 0x254, 0x57, 0x17c),
+        ("hotdo", 0xa3, 0x254, 0x57, 0x17c),
+        ("hotdp", 0xa3, 0x254, 0x57, 0x17c),
+    ] {
+        let mut input = state(game, Scheme::Gun);
+        let mut out = Inputs::default();
+        input.on_cursor(0.25, 0.75);
+        input.poll(&mut out);
+        let p1 = (out.gun_x, out.gun_y);
+        for (x, y, expected) in [(-1.0, 1.0, (xmin, ymin)), (1.0, -1.0, (xmax, ymax))] {
+            input.external_p2.left_x = x;
+            input.external_p2.left_y = y;
+            for _ in 0..60 {
+                input.poll(&mut out);
+            }
+            assert_eq!((out.gun2_x, out.gun2_y), expected, "{game}");
+            assert_eq!((out.gun_x, out.gun_y), p1);
+        }
+        input.external_p2.left_x = 0.0;
+        input.external_p2.left_y = 0.0;
+        input.poll(&mut out);
+        assert_eq!(
+            (out.gun2_x, out.gun2_y),
+            (xmax, ymax),
+            "cursor holds on release"
+        );
+        input.external_p2.buttons.insert(gilrs::Button::East);
+        input.poll(&mut out);
+        assert_eq!((out.gun2_x, out.gun2_y), (xmin, ymin));
+        input.external_p2.buttons.clear();
+        input.poll(&mut out);
+        assert_eq!(
+            (out.gun2_x, out.gun2_y),
+            (xmax, ymax),
+            "reload doesn't lose aim"
+        );
+    }
+    for (game, xrole, yrole, min, max) in [
+        ("gunblade", A::Gun2X, A::Gun2Y, [0x00, 0x11], [0x96, 0xae]),
+        ("bel", A::Gun2X, A::Gun2Y, [0x00, 0x11], [0x96, 0xae]),
+        ("rchase2", A::Gun2X, A::Gun2Y, [0xc7, 0xcb], [0x34, 0x1c]),
+        ("rchase2a", A::Gun2X, A::Gun2Y, [0x00, 0x00], [0xff, 0xff]),
+    ] {
+        let mut input = state(game, Scheme::Gun);
+        let roles = db_roles(game);
+        input.set_analog_roles(roles);
+        let xch = roles.iter().position(|&r| r == xrole).unwrap();
+        let ych = roles.iter().position(|&r| r == yrole).unwrap();
+        let mut out = Inputs::default();
+        for (x, y, expected) in [(-1.0, 1.0, min), (1.0, -1.0, max)] {
+            input.external_p2.left_x = x;
+            input.external_p2.left_y = y;
+            for _ in 0..60 {
+                input.poll(&mut out);
+            }
+            assert_eq!([out.analog[xch], out.analog[ych]], expected, "{game}");
+        }
+    }
+}
+
 fn db_roles(game: &str) -> [A; 8] {
     let db = include_str!("../../../../tgpulse-core/src/roms_db.dat");
     let header = db
@@ -455,7 +661,6 @@ fn all_sets_route_each_signal_without_digital_crosstalk() {
                 let mut expected = cabinet.idle;
                 let common = match signal {
                     S::Coin => 1,
-                    S::Coin2 if cabinet.coin2 => 2,
                     S::Test => {
                         if game == "bel" {
                             8
@@ -471,7 +676,6 @@ fn all_sets_route_each_signal_without_digital_crosstalk() {
                         }
                     }
                     S::Start => cabinet.start,
-                    S::Start2 if cabinet.start2 => 0x20,
                     _ => 0,
                 };
                 expected[0] ^= common;
@@ -547,6 +751,51 @@ fn default_indy_stcc_overrev_buttons_are_isolated() {
         input.set_pad_button(B::LeftTrigger, true);
         input.poll(&mut out);
         assert_eq!(ports(&out), [255; 3], "{game} conflicting shifts");
+    }
+}
+
+#[test]
+fn player_two_furniture_preserves_all_existing_cabinet_routes() {
+    use crate::input::players::Player;
+    for cabinet in cabinets() {
+        for game in cabinet.sets.split_whitespace() {
+            for signal in [S::Coin, S::Start, S::Test, S::Service] {
+                let mut input = state(game, cabinet.scheme);
+                let mut bindings = Bindings::default();
+                bindings
+                    .set_player_expression(Player::Two, signal, "F12")
+                    .unwrap();
+                input.set_bindings(bindings);
+                input.on_key(KeyCode::F12, true);
+                let mut out = Inputs::default();
+                input.poll(&mut out);
+                let mask = match signal {
+                    S::Coin if cabinet.coin2 => 2,
+                    S::Start if cabinet.start2 => 0x20,
+                    S::Test => {
+                        if game == "bel" {
+                            8
+                        } else {
+                            4
+                        }
+                    }
+                    S::Service => {
+                        if game == "bel" {
+                            4
+                        } else {
+                            8
+                        }
+                    }
+                    _ => 0,
+                };
+                let mut expected = cabinet.idle;
+                expected[0] ^= mask;
+                assert_eq!(ports(&out), expected, "{game}: P2 {signal:?}");
+                input.on_key(KeyCode::F12, false);
+                input.poll(&mut out);
+                assert_eq!(ports(&out), cabinet.idle);
+            }
+        }
     }
 }
 

@@ -20,6 +20,7 @@ use tgpulse_core::sound::AudioSource;
 use tgpulse_core::tilemap::{SCREEN_H, SCREEN_W};
 
 use crate::bindings::{Bindings, Hotkey, Source};
+use crate::input::players::{PadDevice, Player};
 use crate::input::signals::Signal;
 
 pub use renderer::Renderer;
@@ -227,6 +228,8 @@ mod gain_interaction_tests {
 
 pub struct Gui {
     context: imgui::Context,
+    pub controller_devices: Vec<PadDevice>,
+    pub controller_labels: [String; 2],
     /// The running machine's implemented outputs; empty in the library.
     pub audio_sources: &'static [AudioSource],
 
@@ -269,6 +272,7 @@ struct BindingEditor {
     return_to_menu: Option<String>,
     return_to_menu_error: Option<String>,
     signal: Option<Signal>,
+    player: Player,
     text: String,
     error: Option<String>,
 }
@@ -312,6 +316,8 @@ impl Gui {
             show_input: false,
             awaiting: None,
             binding_editor: BindingEditor::default(),
+            controller_devices: Vec::new(),
+            controller_labels: ["No controller".into(), "No controller".into()],
             show_debugger: panels.show_debugger,
             show_stats: panels.show_stats,
             entries: library::scan(&config.rom_dir),
@@ -529,6 +535,8 @@ impl Gui {
             input_window(
                 ui,
                 bindings,
+                &self.controller_devices,
+                &self.controller_labels,
                 &mut awaiting,
                 &mut binding_editor,
                 &mut show_input,
@@ -871,17 +879,39 @@ fn settings_window(
                 for source in audio_sources {
                     let reference = tgpulse_core::config::AudioGains::REFERENCE;
                     let (label, muted, gain, default) = match source {
-                        AudioSource::MultiPcm1 => {
-                            ("MultiPCM 1", &mut config.audio_mutes.multipcm1, &mut config.audio_gains.multipcm1, reference.multipcm1)
-                        }
-                        AudioSource::MultiPcm2 => {
-                            ("MultiPCM 2", &mut config.audio_mutes.multipcm2, &mut config.audio_gains.multipcm2, reference.multipcm2)
-                        }
-                        AudioSource::Scsp => ("SCSP", &mut config.audio_mutes.scsp, &mut config.audio_gains.scsp, reference.scsp),
-                        AudioSource::Ym3438 => ("FM (YM3438)", &mut config.audio_mutes.ym3438, &mut config.audio_gains.ym3438, reference.ym3438),
-                        AudioSource::Dsb => ("DSB (MPEG)", &mut config.audio_mutes.dsb, &mut config.audio_gains.dsb, reference.dsb),
+                        AudioSource::MultiPcm1 => (
+                            "MultiPCM 1",
+                            &mut config.audio_mutes.multipcm1,
+                            &mut config.audio_gains.multipcm1,
+                            reference.multipcm1,
+                        ),
+                        AudioSource::MultiPcm2 => (
+                            "MultiPCM 2",
+                            &mut config.audio_mutes.multipcm2,
+                            &mut config.audio_gains.multipcm2,
+                            reference.multipcm2,
+                        ),
+                        AudioSource::Scsp => (
+                            "SCSP",
+                            &mut config.audio_mutes.scsp,
+                            &mut config.audio_gains.scsp,
+                            reference.scsp,
+                        ),
+                        AudioSource::Ym3438 => (
+                            "FM (YM3438)",
+                            &mut config.audio_mutes.ym3438,
+                            &mut config.audio_gains.ym3438,
+                            reference.ym3438,
+                        ),
+                        AudioSource::Dsb => (
+                            "DSB (MPEG)",
+                            &mut config.audio_mutes.dsb,
+                            &mut config.audio_gains.dsb,
+                            reference.dsb,
+                        ),
                     };
-                    changed |= audio_gain_row(ui, label, gain, muted, default, audio_gain_reset_held);
+                    changed |=
+                        audio_gain_row(ui, label, gain, muted, default, audio_gain_reset_held);
                 }
             }
 
@@ -926,6 +956,8 @@ fn settings_window(
 fn input_window(
     ui: &imgui::Ui,
     bindings: &mut Bindings,
+    devices: &[PadDevice],
+    controller_labels: &[String; 2],
     awaiting: &mut Option<Awaiting>,
     editor: &mut BindingEditor,
     open: &mut bool,
@@ -993,15 +1025,33 @@ fn input_window(
                     }
                     tab.end();
                 }
-                if let Some(tab) = ui.tab_item("Cabinet") {
+                for player in Player::ALL {
+                if let Some(tab) = ui.tab_item(if player == Player::One { "Cabinet P1" } else { "Cabinet P2" }) {
+                    let _id = ui.push_id_usize(player.index());
+                    let current = &bindings.controllers[player.index()];
+                    let preview = match current.as_str() {
+                        "auto" => format!("Auto — {}", controller_labels[player.index()]),
+                        "none" => "None (keyboard only)".into(),
+                        _ => controller_labels[player.index()].clone(),
+                    };
+                    if let Some(_combo) = ui.begin_combo("Controller", preview) {
+                        for (key, label) in [("auto", "Automatic (distinct device per player)"), ("none", "None (keyboard only)")]
+                            .into_iter().map(|(k,l)| (k.to_owned(), l.to_owned()))
+                            .chain(devices.iter().map(|d| (d.key.clone(), format!("{}{}", d.label, if d.connected { "" } else { " (disconnected)" })))) {
+                            if ui.selectable_config(&label).selected(bindings.controllers[player.index()] == key).build() {
+                                bindings.set_controller(player, key);
+                                actions.push(Action::BindingsChanged);
+                            }
+                        }
+                    }
                     ui.text_wrapped("All signals are shown. The loaded game determines which ones are used.");
                     ui.separator();
                     ui.text_wrapped("Comma = alternatives; & = simultaneous. Signed axis: pad:LeftStickX; inverted: pad:LeftStickX~; half axis: pad:RightStickX-. Keyboard axis: keys:ArrowLeft/ArrowRight.");
-                    if let Some(signal) = editor.signal {
+                    if let Some(signal) = editor.signal.filter(|s| editor.player == player && (player == Player::One || s.supports_p2())) {
                         ui.text(signal.label());
                         ui.input_text("Expression", &mut editor.text).build();
                         if ui.button("Apply") {
-                            match bindings.set_expression(signal, &editor.text) {
+                            match bindings.set_player_expression(player, signal, &editor.text) {
                                 Ok(()) => { editor.error=None; actions.push(Action::BindingsChanged); }
                                 Err(e) => editor.error=Some(e),
                             }
@@ -1012,24 +1062,115 @@ fn input_window(
                         ui.separator();
                     }
                     for signal in Signal::ALL {
-                        let bound=&bindings.binding(*signal).text;
-                        binding_row(ui, signal.label(), if bound.is_empty() {"Unbound"} else {bound},
-                            editor.signal==Some(*signal), || {
-                                editor.signal=Some(*signal);
-                                editor.text=bound.clone();
-                                editor.error=None;
-                            });
-                        if let Some(usage) = signal.usage() {
-                            let _color = ui.push_style_color(imgui::StyleColor::Text, [0.6, 0.6, 0.6, 1.0]);
-                            ui.text_wrapped(usage);
-                            ui.spacing();
-                        }
+                        cabinet_signal_row(ui, player, *signal, bindings, editor);
                     }
                     tab.end();
+                }
                 }
                 tabs.end();
             }
         });
+}
+
+fn cabinet_signal_row(
+    ui: &imgui::Ui,
+    player: Player,
+    signal: Signal,
+    bindings: &Bindings,
+    editor: &mut BindingEditor,
+) {
+    let enabled = player == Player::One || signal.supports_p2();
+    let _disabled = ui.begin_disabled(!enabled);
+    let bound = &bindings.player_binding(player, signal).text;
+    binding_row(
+        ui,
+        signal.label(),
+        if !enabled {
+            "Not available for P2"
+        } else if bound.is_empty() {
+            "Unbound"
+        } else {
+            bound
+        },
+        editor.player == player && editor.signal == Some(signal),
+        || {
+            editor.player = player;
+            editor.signal = Some(signal);
+            editor.text = bound.clone();
+            editor.error = None;
+        },
+    );
+    let usage = if player == Player::Two {
+        match signal {
+            Signal::SkyX | Signal::SkyY => Some("(Star Wars Arcade: Gunner)"),
+            Signal::Up | Signal::Down | Signal::Left | Signal::Right => Some("(Virtua Fighter; Model 2 local joystick games)"),
+            Signal::Accelerator | Signal::Brake => Some("(Power Sled: second seat pedals)"),
+            Signal::GunYaw | Signal::GunPitch => Some("(Virtua Cop 1/2, The House of the Dead, Gunblade NY, Rail Chase 2, Behind Enemy Lines)"),
+            Signal::BatSwing => Some("(Dynamite Baseball, Dynamite Baseball 97)"),
+            _ => None,
+        }
+    } else {
+        signal.usage()
+    };
+    if let Some(usage) = usage {
+        ui.text_disabled(usage);
+        ui.spacing();
+    }
+}
+
+#[cfg(test)]
+mod player_binding_tests {
+    use super::*;
+    #[test]
+    fn unsupported_p2_rows_are_visible_but_cannot_open_an_editor() {
+        let _lock = tests::IMGUI_TEST_LOCK.lock().unwrap();
+        for (player, signal, enabled) in [
+            (Player::One, Signal::Steering, true),
+            (Player::Two, Signal::Steering, false),
+            (Player::Two, Signal::SkyX, true),
+            (Player::Two, Signal::Service, true),
+            (Player::Two, Signal::GunYaw, true),
+            (Player::Two, Signal::GunPitch, true),
+            (Player::Two, Signal::BatSwing, true),
+            (Player::Two, Signal::Accelerator, true),
+            (Player::Two, Signal::Brake, true),
+            (Player::Two, Signal::Action4, false),
+        ] {
+            let mut context = imgui::Context::create();
+            context.set_ini_filename(None);
+            context.io_mut().display_size = [1000.0, 700.0];
+            context.fonts().build_rgba32_texture();
+            let bindings = Bindings::default();
+            let mut editor = BindingEditor::default();
+            let mut point = [0.0, 0.0];
+            for frame in 0..4 {
+                if frame >= 2 {
+                    context.io_mut().add_mouse_pos_event(point);
+                    context
+                        .io_mut()
+                        .add_mouse_button_event(imgui::MouseButton::Left, frame == 2);
+                }
+                let ui = context.frame();
+                ui.window("Player binding")
+                    .position([0.0, 0.0], imgui::Condition::Always)
+                    .size([900.0, 300.0], imgui::Condition::Always)
+                    .build(|| {
+                        let origin = ui.cursor_screen_pos();
+                        point = [origin[0] + 310.0, origin[1] + 8.0];
+                        cabinet_signal_row(ui, player, signal, &bindings, &mut editor);
+                        assert!(
+                            ui.cursor_screen_pos()[1] > origin[1],
+                            "disabled rows remain in the list"
+                        );
+                    });
+                context.render();
+            }
+            assert_eq!(editor.signal, enabled.then_some(signal));
+            if enabled {
+                assert_eq!(editor.player, player);
+            }
+        }
+    }
 }
 
 /// One "name.... binding" row whose right-hand side is the button.

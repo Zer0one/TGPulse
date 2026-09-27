@@ -2,6 +2,7 @@
 //! No physical button names belong in the game tables below.
 use super::{expression::Atom, Signal as S};
 use crate::bindings::{Control as C, Source};
+use crate::input::players::Player;
 use crate::input::{AnalogRole as A, Axes, ControlScheme as Scheme, InputState};
 use tgpulse_core::config::Inputs;
 
@@ -10,32 +11,60 @@ impl InputState {
         if self.game != game {
             self.special_shift = false;
             self.special_shift_held = false;
+            self.cursor_p2_active = false;
+            self.game = game.to_owned();
+            let rest_fraction = |role| {
+                let (min, max, rest, reverse) = self.positional_gun_range(role);
+                let fraction = (rest - min) as f32 / (max - min) as f32;
+                if reverse {
+                    1.0 - fraction
+                } else {
+                    fraction
+                }
+            };
+            self.cursor_p2 = (rest_fraction(A::Gun2X), rest_fraction(A::Gun2Y));
         }
-        self.game = game.to_owned();
     }
 
     pub(in crate::input) fn signal(&self, signal: S) -> f32 {
         self.sample_signal(signal, false, false)
     }
     fn sample_signal(&self, signal: S, keyboard_only: bool, pad_only: bool) -> f32 {
-        self.bindings.binding(signal).value(|atom| match atom {
-            Atom::Source(Source::Key(k)) if !pad_only => f32::from(u8::from(self.held(*k))),
-            Atom::Source(Source::Key(_)) => 0.0,
-            Atom::Source(s) if !keyboard_only => self.source_amount(*s),
-            Atom::Axis(axis, sign) if !keyboard_only => {
-                let v = self.axis_value(*axis) * sign;
-                if v.abs() > 0.15 {
-                    v
-                } else {
-                    0.0
+        self.sample_player_signal(Player::One, signal, keyboard_only, pad_only)
+    }
+    pub(in crate::input) fn signal_p2(&self, signal: S) -> f32 {
+        if !signal.supports_p2() {
+            return 0.0;
+        }
+        self.sample_player_signal(Player::Two, signal, false, false)
+    }
+    fn sample_player_signal(
+        &self,
+        player: Player,
+        signal: S,
+        keyboard_only: bool,
+        pad_only: bool,
+    ) -> f32 {
+        self.bindings
+            .player_binding(player, signal)
+            .value(|atom| match atom {
+                Atom::Source(Source::Key(k)) if !pad_only => f32::from(u8::from(self.held(*k))),
+                Atom::Source(Source::Key(_)) => 0.0,
+                Atom::Source(s) if !keyboard_only => self.source_amount_for(player, *s),
+                Atom::Axis(axis, sign) if !keyboard_only => {
+                    let v = self.axis_value_for(player, *axis) * sign;
+                    if v.abs() > 0.15 {
+                        v
+                    } else {
+                        0.0
+                    }
                 }
-            }
-            Atom::Keys(negative, positive) if !pad_only => {
-                f32::from(u8::from(self.held(*positive)))
-                    - f32::from(u8::from(self.held(*negative)))
-            }
-            _ => 0.0,
-        })
+                Atom::Keys(negative, positive) if !pad_only => {
+                    f32::from(u8::from(self.held(*positive)))
+                        - f32::from(u8::from(self.held(*negative)))
+                }
+                _ => 0.0,
+            })
     }
 
     fn steering_signal(&self) -> S {
@@ -48,12 +77,27 @@ impl InputState {
         }
     }
 
+    fn positional_gun_range(&self, role: A) -> (u8, u8, u8, bool) {
+        match (self.game.as_str(), role) {
+            ("gunblade" | "bel", A::Gun1X) => (0x69, 0xff, 0xb1, false),
+            ("gunblade" | "bel", A::Gun2X) => (0x00, 0x96, 0x50, false),
+            ("gunblade" | "bel", _) => (0x11, 0xae, 0x5f, false),
+            ("rchase2", A::Gun1X) => (0x3a, 0xca, 0x82, true),
+            ("rchase2", A::Gun2X) => (0x34, 0xc7, 0x7d, true),
+            ("rchase2", _) => (0x1c, 0xcb, 0x73, true),
+            _ => (0x00, 0xff, 0x80, false),
+        }
+    }
+
     pub(in crate::input) fn routed_amount(&self, control: C) -> f32 {
         let driving = matches!(self.scheme, Scheme::Racing | Scheme::Bike);
         let flight = self.scheme == Scheme::Flight;
         // The racing frontend has separate ramped-key and direct-axis paths.
         let axis_signal = self.steering_signal();
         match control {
+            C::Coin2 => return self.signal_p2(S::Coin),
+            C::Test => return self.signal(S::Test).max(self.signal_p2(S::Test)),
+            C::Service => return self.signal(S::Service).max(self.signal_p2(S::Service)),
             C::SteerLeft | C::SteerRight => {
                 let sign = if control == C::SteerLeft { -1.0 } else { 1.0 };
                 return (sign * self.sample_signal(axis_signal, false, true)).max(0.0);
@@ -100,13 +144,19 @@ impl InputState {
             }
             _ => {}
         }
-        let signal = match control {
+        self.signal(self.control_signal(control))
+    }
+
+    /// Shared semantic translation; the player only selects the binding/device.
+    fn control_signal(&self, control: C) -> S {
+        let flight = self.scheme == Scheme::Flight;
+        match control {
             C::Up => S::Up,
             C::Down => S::Down,
             C::Left => S::Left,
             C::Right => S::Right,
             C::Coin1 => S::Coin,
-            C::Coin2 => S::Coin2,
+            C::Coin2 => unreachable!(),
             C::Start1 => S::Start,
             C::Test => S::Test,
             C::Service => S::Service,
@@ -159,8 +209,7 @@ impl InputState {
             C::Reload => S::Action2,
             C::ViewChange => S::View4,
             C::SteerLeft | C::SteerRight | C::LeanLeft | C::LeanRight => unreachable!(),
-        };
-        self.signal(signal)
+        }
     }
 
     /// Override independent axes absent from the old scheme, retaining its
@@ -237,7 +286,14 @@ impl InputState {
                         hi,
                     )
                 }
-                A::Stick2X | A::Stick2Y if swa => return 127, // no second player binding
+                A::Stick2X | A::Stick2Y if swa => {
+                    return centered(
+                        -self.signal_p2(if role == A::Stick2X { S::SkyX } else { S::SkyY }),
+                        127,
+                        27,
+                        227,
+                    );
+                }
                 A::Throttle if swa || self.game.starts_with("wingwar") => {
                     // Two assignable half-axes drive one cabinet ADC. Centre
                     // at release is a gamepad adaptation, not MAME's idle value.
@@ -256,24 +312,14 @@ impl InputState {
             // Positional gun cabinets have calibrated ADC travel, not the
             // serial lightgun coordinates. rchase2a really differs from rchase2.
             A::Gun1X | A::Gun1Y | A::Gun2X | A::Gun2Y if !self.serial_gun() => {
-                let (min, max, rest, reverse) = match (self.game.as_str(), role) {
-                    ("gunblade" | "bel", A::Gun1X) => (0x69, 0xff, 0xb1, false),
-                    ("gunblade" | "bel", A::Gun2X) => (0x00, 0x96, 0x50, false),
-                    ("gunblade" | "bel", _) => (0x11, 0xae, 0x5f, false),
-                    ("rchase2", A::Gun1X) => (0x3a, 0xca, 0x82, true),
-                    ("rchase2", A::Gun2X) => (0x34, 0xc7, 0x7d, true),
-                    ("rchase2", _) => (0x1c, 0xcb, 0x73, true),
-                    _ => (0x00, 0xff, 0x80, false),
-                };
-                if matches!(role, A::Gun2X | A::Gun2Y) {
-                    return rest;
-                }
+                let (min, max, _rest, reverse) = self.positional_gun_range(role);
                 // Do not quantize to an intermediate 0..255 axis before
                 // applying the calibrated range (SM2 scales the cursor itself).
-                let raw = if role == A::Gun1X {
-                    self.cursor.0
-                } else {
-                    self.cursor.1
+                let raw = match role {
+                    A::Gun1X => self.cursor.0,
+                    A::Gun1Y => self.cursor.1,
+                    A::Gun2X => self.cursor_p2.0,
+                    _ => self.cursor_p2.1,
                 };
                 let fraction = if reverse { 1.0 - raw } else { raw };
                 (min as f32 + fraction * (max - min) as f32).round() as u8
@@ -286,6 +332,9 @@ impl InputState {
             A::Swing => centered(-self.signal(S::Swing), 128, 0, 255),
             A::Incline => axis(S::Inclining),
             A::Bat1 => (255.0 * self.signal(S::BatSwing)).round() as u8,
+            A::Bat2 => (255.0 * self.signal_p2(S::BatSwing)).round() as u8,
+            A::P2R => (255.0 * self.signal_p2(S::Accelerator)).round() as u8,
+            A::P2L => (255.0 * self.signal_p2(S::Brake)).round() as u8,
             _ => axes.by_role(role),
         }
     }
@@ -417,7 +466,12 @@ impl InputState {
                 write(&mut out.in1, bit, pressed(signal));
             }
         } else if self.game.starts_with("swa") {
-            write(&mut out.in0, 0x20, pressed(S::Start2));
+            // Gunner is the pilot's stick + two fire buttons only. MAME names
+            // IN0:20 Start2, but do not expose it as a gunner control (user's
+            // cabinet convention); Start, view and throttle belong to P1.
+            write(&mut out.in0, 0x20, false);
+            write(&mut out.in1, 0x04, self.signal_p2(S::Action1) > 0.5);
+            write(&mut out.in1, 0x08, self.signal_p2(S::Action2) > 0.5);
         } else if matches!(self.game.as_str(), "vr" | "vformula") {
             // Model 1 VR uses momentary, active-low shifts, NOT Daytona's
             // active-high H-gate code. Leave VR4 (bit 0) untouched.
@@ -450,10 +504,35 @@ impl InputState {
             write(&mut out.in0, 0x20, pressed(S::View1));
             write(&mut out.in1, 1, false);
         }
-        if (self.scheme == Scheme::Joystick && !self.game.starts_with("von"))
+        if (self.scheme == Scheme::Joystick
+            && !self.game.starts_with("von")
+            && self.game != "rascot2")
             || matches!(self.scheme, Scheme::Gun | Scheme::Sled)
         {
-            write(&mut out.in0, 0x20, pressed(S::Start2));
+            write(&mut out.in0, 0x20, self.signal_p2(S::Start) > 0.5);
+        }
+        if self.scheme == Scheme::Joystick
+            && !self.game.starts_with("von")
+            && self.game != "rascot2"
+        {
+            // Local second player, not a linked cabinet. Virtual On's IN2 is
+            // P1's right stick; Royal Ascot II has only one gameplay panel.
+            out.in2 = 0xff;
+            for (mask, control) in [
+                (1, C::Button1),
+                (2, C::Button2),
+                (4, C::Button3),
+                (0x10, C::Down),
+                (0x20, C::Up),
+                (0x40, C::Right),
+                (0x80, C::Left),
+            ] {
+                write(
+                    &mut out.in2,
+                    mask,
+                    self.signal_p2(self.control_signal(control)) > 0.5,
+                );
+            }
         }
         // These boards have only two action buttons. In particular Bat Swing
         // must not also produce an unused third button in Dynamite Baseball.
@@ -462,6 +541,7 @@ impl InputState {
             || self.game.starts_with("zerogun")
         {
             out.in1 |= 0x0c;
+            out.in2 |= 0x0c;
         }
         if self.game == "segawski" {
             out.in0 |= 0x10;
@@ -495,6 +575,7 @@ impl InputState {
             out.gun_offscreen = false;
             write(&mut out.in1, 1, pressed(S::Action1) || self.mouse_fire);
             write(&mut out.in1, 0x10, pressed(S::Action2) || self.mouse_reload);
+            write(&mut out.in1, 0x20, self.signal_p2(S::Action2) > 0.5);
         }
         if self.game == "segawski" || self.game == "waverunr" {
             out.in0 |= 2; // single coin input, not Coin 2
@@ -502,6 +583,8 @@ impl InputState {
         if self.scheme == Scheme::Sled {
             // Do not let Action 3 operate the second seat's Entry input.
             out.in1 |= 0xfc;
+            write(&mut out.in1, 4, self.signal_p2(S::Action1) > 0.5);
+            write(&mut out.in1, 8, self.signal_p2(S::Action2) > 0.5);
             write(&mut out.in0, 0x80, pressed(S::Action4));
         }
     }
