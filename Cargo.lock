@@ -2123,9 +2123,18 @@ dependencies = [
  "serde-big-array",
  "sha1",
  "sharc",
+ "tgpulse-z80",
  "v60",
  "z80",
  "zip",
+]
+
+[[package]]
+name = "tgpulse-z80"
+version = "1.0.2"
+dependencies = [
+ "bincode",
+ "serde",
 ]
 
 [[package]]

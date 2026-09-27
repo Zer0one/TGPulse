@@ -1,8 +1,18 @@
 MAME reference implementations adapted in:
   crates/tgpulse-core/src/sega3155338.rs — copyright-holder Dirk Best
   crates/tgpulse-core/src/msm6253.rs — copyright-holder AJR
+  crates/tgpulse-core/src/model1io2.rs — copyright-holder Dirk Best
+  crates/tgpulse-core/src/tmpz84c015.rs — copyright-holder hap;
+    daisy-chain arbitration reference: copyright-holder Juergen Buchmueller
+  crates/tgpulse-core/src/z80ctc.rs — copyright-holder Wilbert Pol;
+    based on the original version (c) 1997 Tatsuyuki Satoh
+  crates/tgpulse-core/src/z80pio.rs — copyright-holder Curt Coder
+  crates/tgpulse-core/src/z80sio.rs — copyright-holders Curt Coder,
+    Joakim Larsson Edstrom
 
-Copyright holders: Dirk Best, AJR (respective components above).
+Copyright holders: Dirk Best, AJR, hap, Juergen Buchmueller, Wilbert Pol,
+Tatsuyuki Satoh, Curt Coder, Joakim Larsson Edstrom
+(respective components above).
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are

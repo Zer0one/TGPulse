@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/i960",
     "crates/v60",
+    "crates/z80",
     "crates/mb86233",
     "crates/mb86235",
     "crates/sharc",

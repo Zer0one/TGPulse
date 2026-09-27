@@ -23,8 +23,6 @@ pub const V60_HZ: u32 = 16_000_000;
 /// the queues stay bounded instead of the V60 flooding the TGP.
 pub const COPRO_FIFO_DEPTH: usize = 16;
 
-const IO_STATUS: usize = 0x21;
-
 pub struct Model1System {
     pub main_cpu: V60,
     pub tgp_cpu: Mb86233,
@@ -40,7 +38,10 @@ pub struct Model1System {
     pub colorxlat_ram: Vec<u8>,
     /// The I/O board: a Z80 with its own firmware, which owns the dual-port
     /// RAM it shares with the V60 and the 93C45 the operator settings live in.
-    pub ioboard: crate::model1io::IoBoard,
+    pub ioboard: crate::model1board::IoBoard,
+    /// Transient CPU-bus context, never charged by debugger/renderer reads.
+    v60_access_active: bool,
+    v60_wait_cycles: u32,
 
     pub sound: SoundSystem,
     pub inputs: Inputs,
@@ -128,11 +129,14 @@ impl Model1System {
         (self.nvram.len(), self.ioboard.eeprom().data.len() * 2)
     }
 
-    pub fn new(roms: &Model1Roms) -> Self {
+    pub fn new(roms: &Model1Roms) -> Result<Self, crate::model1io2::BusError> {
         Self::with_config(roms, Config::default())
     }
 
-    pub fn with_config(roms: &Model1Roms, config: Config) -> Self {
+    pub fn with_config(
+        roms: &Model1Roms,
+        config: Config,
+    ) -> Result<Self, crate::model1io2::BusError> {
         let mut video = crate::model1_video::Model1VideoState::new();
         video.smooth_shadows = config.smooth_shadows;
         // The 93C45 on the I/O board holds the operator settings. The romset
@@ -145,8 +149,7 @@ impl Model1System {
                 eeprom.data[word] = u16::from_le_bytes([chunk[0], chunk[1]]);
             }
         }
-        let mut ioboard = crate::model1io::IoBoard::new(&roms.iocpu, eeprom);
-        ioboard.dpram_mut()[IO_STATUS] = 0x40;
+        let ioboard = crate::model1board::IoBoard::new(roms.ioboard_kind, &roms.iocpu, eeprom)?;
 
         // Battery-backed work RAM (RAMA). Use a shipped factory image when present
         // (NetMerc); otherwise retain our zero-filled boot state. Games initialise bytes
@@ -161,7 +164,7 @@ impl Model1System {
             vec![0x00; 0x10000]
         };
 
-        Self {
+        Ok(Self {
             main_cpu: V60::new(),
             tgp_cpu: Mb86233::new(),
 
@@ -175,6 +178,8 @@ impl Model1System {
             palette_ram: vec![0; 0x4000],
             colorxlat_ram: vec![0; 0xc000],
             ioboard,
+            v60_access_active: false,
+            v60_wait_cycles: 0,
 
             sound: SoundSystem::new(roms.sndcpu.clone(), roms.mpcm1.clone(), roms.mpcm2.clone()),
             inputs: Inputs::default(),
@@ -222,10 +227,13 @@ impl Model1System {
             copro_fifo_write_latch: 0,
             copro_stall: false,
             fifo_events: VecDeque::new(),
-        }
+        })
     }
 
-    pub fn run_slice(&mut self, cycles: i32) {
+    pub fn run_slice(&mut self, cycles: i32) -> Result<(), crate::model1io2::BusError> {
+        if let Some(error) = self.ioboard.fault() {
+            return Err(error);
+        }
         const QUANTUM: i32 = 64;
 
         let mut remaining = cycles;
@@ -237,16 +245,17 @@ impl Model1System {
             if self.copro_fifo_in.len() <= COPRO_FIFO_DEPTH {
                 self.sync_irq();
                 let mut cpu = std::mem::replace(&mut self.main_cpu, V60::new());
+                self.v60_access_active = true;
                 cpu.run(self, step);
+                self.v60_access_active = false;
+                self.v60_wait_cycles = 0;
                 self.main_cpu = cpu;
                 self.sync_irq();
             }
 
-            // The I/O board runs alongside. Its Z80 is clocked at 4 MHz against
-            // the V60's 16 MHz, so it advances a quarter as far.
-            self.ioboard.set_inputs(self.inputs);
-            self.ioboard
-                .run(step as i64 * crate::model1io::Z80_HZ as i64 / V60_HZ as i64);
+            // Each revision retains the fractional ratio of its own board
+            // clock to the V60, independently of CPU instruction overshoot.
+            self.ioboard.run_main_cycles(step as u32, self.inputs)?;
             self.drive_cmd = self.ioboard.drive_cmd();
 
             // Step the TGP in the same fine lockstep so the FIFO handshakes
@@ -275,11 +284,13 @@ impl Model1System {
 
             remaining -= step;
         }
+        Ok(())
     }
 
-    pub fn run_frame(&mut self) {
-        self.run_slice(CYCLES_PER_FRAME);
+    pub fn run_frame(&mut self) -> Result<(), crate::model1io2::BusError> {
+        self.run_slice(CYCLES_PER_FRAME)?;
         self.trigger_vblank();
+        Ok(())
     }
 
     pub fn trigger_vblank(&mut self) {
@@ -660,6 +671,15 @@ impl Model1System {
             0x900000..=0x903fff => self.palette_ram[(address - 0x900000) as usize],
             0x910000..=0x91bfff => self.colorxlat_ram[(address - 0x910000) as usize],
             0xc00000..=0xc00fff if address & 1 == 0 => {
+                // MAME model1_state::dpram_r charges one V60 cycle per
+                // low-byte read. Without it Wing War times out just before
+                // the advanced board completes its initial EEPROM transfer.
+                // Keep board-1 timing unchanged until its separate audit.
+                if self.v60_access_active
+                    && self.ioboard.kind() == crate::model1board::Kind::WingWar
+                {
+                    self.v60_wait_cycles += 1;
+                }
                 let idx = ((address - 0xc00000) >> 1) as usize & 0x7ff;
 
                 self.ioboard.dpram()[idx]
@@ -730,6 +750,9 @@ impl Model1System {
 }
 
 impl Bus for Model1System {
+    fn take_wait_cycles(&mut self) -> u32 {
+        std::mem::take(&mut self.v60_wait_cycles)
+    }
     /// Live GLUE interrupt line: asserted while any raised level is still
     /// pending. The ISR's `E00000` acknowledge clears `irq_status` mid-run, so
     /// the CPU consults this instead of re-taking its latched line after `reti`.
@@ -859,6 +882,7 @@ mod persistence_tests {
 
     fn empty_roms() -> Model1Roms {
         Model1Roms {
+            ioboard_kind: crate::model1board::Kind::Original,
             nvram_default: vec![],
             maincpu: vec![],
             tgp: vec![],
@@ -875,7 +899,7 @@ mod persistence_tests {
 
     #[test]
     fn timer_retains_last_read_count_when_stopped() {
-        let mut sys = Model1System::new(&empty_roms());
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
         for index in 0..2 {
             let period = 0xe00008 + index as u32 * 2;
             let count = 0xe0000c + index as u32 * 2;
@@ -899,7 +923,7 @@ mod persistence_tests {
     fn factory_nvram_is_overridden_by_saved_nvram() {
         let mut roms = empty_roms();
         roms.nvram_default = vec![0x5a; 0x10000];
-        let mut sys = Model1System::new(&roms);
+        let mut sys = Model1System::new(&roms).unwrap();
         assert_eq!(sys.nvram, roms.nvram_default);
         sys.set_nvram_blocks(&vec![0xa5; 0x10000], &[]);
         assert_eq!(sys.nvram, vec![0xa5; 0x10000]);
@@ -910,28 +934,60 @@ mod persistence_tests {
         let mut roms = empty_roms();
         for size in [0, 1, 0x10001] {
             roms.nvram_default = vec![0xff; size];
-            assert_eq!(Model1System::new(&roms).nvram, vec![0; 0x10000]);
+            assert_eq!(Model1System::new(&roms).unwrap().nvram, vec![0; 0x10000]);
         }
     }
 
     #[test]
     fn nvram_container_round_trips_complete_eeprom() {
-        let roms = empty_roms();
-        let mut original = Model1System::new(&roms);
-        original.nvram[0] = 0x5a;
-        original.nvram[0xffff] = 0xa5;
-        for (index, word) in original.ioboard.eeprom_mut().data.iter_mut().enumerate() {
-            *word = 0xa500 | index as u16;
+        for kind in [
+            crate::model1board::Kind::Original,
+            crate::model1board::Kind::WingWar,
+        ] {
+            let mut roms = empty_roms();
+            roms.ioboard_kind = kind;
+            roms.iocpu = vec![0; 0x10000];
+            let mut original = Model1System::new(&roms).unwrap();
+            original.nvram[0] = 0x5a;
+            original.nvram[0xffff] = 0xa5;
+            for (index, word) in original.ioboard.eeprom_mut().data.iter_mut().enumerate() {
+                *word = 0xa500 | index as u16;
+            }
+            let (backup, eeprom) = original.nvram_blocks();
+            assert_eq!(eeprom.len(), 128);
+            let blob = crate::nvram::encode(&backup, &eeprom);
+            let mut restored = Model1System::new(&roms).unwrap();
+            let (backup_len, eeprom_len) = restored.nvram_sizes();
+            let (loaded_backup, loaded_eeprom) =
+                crate::nvram::decode(&blob, backup_len, eeprom_len)
+                    .expect("a Model 1 save must be accepted by the next instance");
+            restored.set_nvram_blocks(&loaded_backup, &loaded_eeprom);
+            assert_eq!(restored.nvram_blocks(), (backup, eeprom));
         }
-        let (backup, eeprom) = original.nvram_blocks();
-        assert_eq!(eeprom.len(), 128);
-        let blob = crate::nvram::encode(&backup, &eeprom);
-        let mut restored = Model1System::new(&roms);
-        let (backup_len, eeprom_len) = restored.nvram_sizes();
-        let (loaded_backup, loaded_eeprom) = crate::nvram::decode(&blob, backup_len, eeprom_len)
-            .expect("a Model 1 save must be accepted by the next instance");
-        restored.set_nvram_blocks(&loaded_backup, &loaded_eeprom);
-        assert_eq!(restored.nvram_blocks(), (backup, eeprom));
+    }
+
+    #[test]
+    fn advanced_dpram_waits_only_charge_cpu_low_byte_reads() {
+        let mut roms = empty_roms();
+        roms.ioboard_kind = crate::model1board::Kind::WingWar;
+        roms.iocpu = vec![0; 0x10000];
+        let mut sys = Model1System::new(&roms).unwrap();
+        sys.read_u32(0xc00000);
+        assert_eq!(sys.take_wait_cycles(), 0); // debugger/host inspection
+        sys.v60_access_active = true;
+        sys.write_u8(0xc00042, 0x5a);
+        assert_eq!(sys.read_u8(0xc00042), 0x5a);
+        assert_eq!(sys.take_wait_cycles(), 1);
+        assert_eq!(sys.read_u8(0xc00043), 0xff);
+        assert_eq!(sys.take_wait_cycles(), 0);
+        sys.read_u16(0xc00042);
+        assert_eq!(sys.take_wait_cycles(), 1);
+        sys.read_u32(0xc00042);
+        assert_eq!(sys.take_wait_cycles(), 2);
+        let mut original = Model1System::new(&empty_roms()).unwrap();
+        original.v60_access_active = true;
+        original.read_u32(0xc00042);
+        assert_eq!(original.take_wait_cycles(), 0); // existing timing isolated
     }
 }
 

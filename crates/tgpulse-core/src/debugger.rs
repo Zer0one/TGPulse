@@ -108,10 +108,13 @@ impl Debugger {
         }
     }
 
-    fn step_frame(&mut self) {
+    fn step_frame(&mut self) -> bool {
         match &mut self.machine {
             Machine::Model1(sys) => {
-                sys.run_slice(crate::model1::CYCLES_PER_FRAME);
+                if let Err(error) = sys.run_slice(crate::model1::CYCLES_PER_FRAME) {
+                    out!(self, "error cmd=run reason={error}");
+                    return false;
+                }
                 sys.trigger_vblank();
             }
             Machine::Model2(sys) => {
@@ -120,23 +123,26 @@ impl Debugger {
             }
         }
         self.frames += 1;
+        true
     }
 
-    /// Runs up to `frames` frames, returning early if a breakpoint fires.
-    /// Only the i960 has breakpoints; a Model 1 run always goes the distance.
-    fn run(&mut self, frames: u64) -> Option<u32> {
+    /// Runs up to `frames` frames, stopping on a breakpoint or board fault.
+    /// `step_frame` has already emitted the diagnostic when this returns Err.
+    fn run(&mut self, frames: u64) -> Result<Option<u32>, ()> {
         if let Machine::Model2(sys) = &mut self.machine {
             sys.main_cpu.bp_hit = None;
         }
         for _ in 0..frames {
-            self.step_frame();
+            if !self.step_frame() {
+                return Err(());
+            }
             if let Machine::Model2(sys) = &mut self.machine {
                 if let Some(pc) = sys.main_cpu.bp_hit {
-                    return Some(pc);
+                    return Ok(Some(pc));
                 }
             }
         }
-        None
+        Ok(None)
     }
 
     /// The cabinet inputs, which both boards keep in the same encoding.
@@ -242,7 +248,7 @@ impl Debugger {
 
         let machine = if def.is_some_and(|d| d.board.is_model1()) {
             let roms = loader::load_model1_zip(&cfg.rom_path)?;
-            let sys = Model1System::with_config(&roms, cfg);
+            let sys = Model1System::with_config(&roms, cfg).map_err(|e| e.to_string())?;
             Machine::Model1(Box::new(sys))
         } else {
             let roms = loader::load_model2_zip(&cfg.rom_path)?;
@@ -309,12 +315,13 @@ impl Debugger {
             "run" => {
                 let n = arg(0).and_then(num).unwrap_or(1) as u64;
                 match self.run(n) {
-                    Some(pc) => out!(
+                    Ok(Some(pc)) => out!(
                         self,
                         "run stopped=breakpoint pc={pc:08X} frame={}",
                         self.frames
                     ),
-                    None => out!(self, "run stopped=frames frame={}", self.frames),
+                    Ok(None) => out!(self, "run stopped=frames frame={}", self.frames),
+                    Err(()) => out!(self, "run stopped=error frame={}", self.frames),
                 }
             }
 
@@ -328,8 +335,9 @@ impl Debugger {
                 let hit = self.run(max);
                 self.sys().main_cpu.breakpoints.retain(|a| *a != addr);
                 match hit {
-                    Some(pc) => out!(self, "until hit=1 pc={pc:08X} frame={}", self.frames),
-                    None => out!(self, "until hit=0 frame={} note=not-reached", self.frames),
+                    Ok(Some(pc)) => out!(self, "until hit=1 pc={pc:08X} frame={}", self.frames),
+                    Ok(None) => out!(self, "until hit=0 frame={} note=not-reached", self.frames),
+                    Err(()) => out!(self, "until hit=0 frame={} note=error", self.frames),
                 }
             }
 
@@ -374,7 +382,9 @@ impl Debugger {
                 self.sys().main_cpu.trace = Some((vec![0u32; n as usize], 0));
                 self.sys().main_cpu.trace_frozen = false;
                 while !self.sys().main_cpu.trace_frozen {
-                    self.step_frame();
+                    if !self.step_frame() {
+                        return true;
+                    }
                     if self.frames > 4000 {
                         break;
                     }
@@ -656,17 +666,23 @@ impl Debugger {
                 for i in 0..5 {
                     for _ in 0..12 {
                         self.inputs().in0 &= !0x01;
-                        self.step_frame();
+                        if !self.step_frame() {
+                            return true;
+                        }
                     }
                     self.inputs().in0 |= 0x01;
                     for _ in 0..48 {
-                        self.step_frame();
+                        if !self.step_frame() {
+                            return true;
+                        }
                     }
                     let _ = i;
                 }
                 for _ in 0..12 {
                     self.inputs().in0 &= !start_bit;
-                    self.step_frame();
+                    if !self.step_frame() {
+                        return true;
+                    }
                 }
                 self.inputs().in0 |= start_bit;
                 out!(
@@ -727,7 +743,9 @@ impl Debugger {
                 let n = arg(0).and_then(num).unwrap_or(120) as u64;
                 for _ in 0..n {
                     self.inputs().in0 &= !0x04;
-                    self.step_frame();
+                    if !self.step_frame() {
+                        return true;
+                    }
                 }
                 self.inputs().in0 |= 0x04;
                 out!(self, "testmenu held={n} frame={}", self.frames);

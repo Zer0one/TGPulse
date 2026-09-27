@@ -1,0 +1,12 @@
+[package]
+name = "tgpulse-z80"
+version = "1.0.2"
+edition = "2021"
+license = "MIT"
+description = "Local z80 1.0.2 adaptation for the advanced Model 1 I/O board"
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+bincode = { workspace = true }

@@ -25,3 +25,4 @@ serde-big-array = { workspace = true }
 sha1 = "0.10"
 zip = { workspace = true }
 z80 = "1"
+tgpulse-z80 = { path = "../z80" }

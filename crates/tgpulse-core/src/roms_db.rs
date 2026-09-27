@@ -367,6 +367,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn advanced_board_selection_has_exact_firmware_regions() {
+        for game in GAMES.iter().filter(|g| g.board.is_model1()) {
+            let firmware: Vec<_> = game
+                .loads
+                .iter()
+                .filter(|l| l.region == "ioboard:iocpu")
+                .collect();
+            if crate::model1board::Kind::for_set(&game.name) == crate::model1board::Kind::WingWar {
+                assert_eq!(firmware.len(), 1);
+                assert_eq!(firmware[0].file, "epr-16891.6");
+                assert_eq!(firmware[0].len, 0x10000);
+                assert!(game
+                    .regions
+                    .iter()
+                    .any(|(name, size, _)| name == "ioboard:iocpu" && *size == 0x10000));
+            } else if matches!(game.name.as_str(), "wingwar360" | "netmerc") {
+                assert!(firmware.is_empty());
+            } else {
+                assert_eq!(firmware.len(), 1);
+                assert!(firmware[0].file.starts_with("epr-14869"));
+            }
+        }
+    }
+
+    #[test]
     fn netmerc_sound_reload_uses_only_declared_prefix() {
         let game = GAMES.iter().find(|game| game.name == "netmerc").unwrap();
         let mut dest = vec![0; 0xc0000];

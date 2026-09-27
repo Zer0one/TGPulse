@@ -3924,6 +3924,7 @@ R m1audio:pcm1 400000 00
 R m1audio:pcm2 400000 00
 R polygons 1000000 00
 R copro_data 200000 00
+R ioboard:iocpu 10000 00
 L copro_tables opr14742.bin 0 20000 4w
 L copro_tables opr14743.bin 2 20000 4w
 L other_data opr-14744.58 0 20000 4w
@@ -3965,6 +3966,7 @@ L copro_data mpr-16741.39 0 80000 4b
 L copro_data mpr-16742.40 1 80000 4b
 L copro_data mpr-16739.41 2 80000 4b
 L copro_data mpr-16740.42 3 80000 4b
+L ioboard:iocpu epr-16891.6 0 10000 p
 G wingwar360 m1 flight stickx sticky throttle
 T Wing War R360 (US)	1994	Sega
 R copro_tables 40000 00
@@ -4037,6 +4039,7 @@ R m1audio:pcm1 400000 00
 R m1audio:pcm2 400000 00
 R polygons 1000000 00
 R copro_data 200000 00
+R ioboard:iocpu 10000 00
 L copro_tables opr14742.bin 0 20000 4w
 L copro_tables opr14743.bin 2 20000 4w
 L other_data opr-14744.58 0 20000 4w
@@ -4078,6 +4081,7 @@ L copro_data mpr-16741.39 0 80000 4b
 L copro_data mpr-16742.40 1 80000 4b
 L copro_data mpr-16739.41 2 80000 4b
 L copro_data mpr-16740.42 3 80000 4b
+L ioboard:iocpu epr-16891.6 0 10000 p
 G wingwaru m1 flight stickx sticky throttle
 T Wing War (US)	1994	Sega
 R copro_tables 40000 00
@@ -4092,6 +4096,7 @@ R m1audio:pcm1 400000 00
 R m1audio:pcm2 400000 00
 R polygons 1000000 00
 R copro_data 200000 00
+R ioboard:iocpu 10000 00
 L copro_tables opr14742.bin 0 20000 4w
 L copro_tables opr14743.bin 2 20000 4w
 L other_data opr-14744.58 0 20000 4w
@@ -4133,6 +4138,7 @@ L copro_data mpr-16741.39 0 80000 4b
 L copro_data mpr-16742.40 1 80000 4b
 L copro_data mpr-16739.41 2 80000 4b
 L copro_data mpr-16740.42 3 80000 4b
+L ioboard:iocpu epr-16891.6 0 10000 p
 G zerogun m2b joystick
 T Zero Gunner (Export, Model 2B)	1997	Psikyo
 R maincpu 200000 00

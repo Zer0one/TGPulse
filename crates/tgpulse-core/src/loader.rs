@@ -144,6 +144,7 @@ fn build_model2(
 fn build_model1(
     mut regions: std::collections::HashMap<String, Vec<u8>>,
     ioboard_config: Vec<u8>,
+    ioboard_kind: crate::model1board::Kind,
 ) -> Model1Roms {
     let take = |r: &mut std::collections::HashMap<String, Vec<u8>>, name: &str, size: usize| {
         r.remove(name).unwrap_or_else(|| vec![0u8; size])
@@ -154,6 +155,7 @@ fn build_model1(
             .collect()
     };
     Model1Roms {
+        ioboard_kind,
         maincpu: {
             let mut m = take(&mut regions, "maincpu", 0x2000000);
             // The V60 region is ROMREGION_ERASEFF; build_regions already filled
@@ -259,12 +261,18 @@ pub fn load_model1_zip(path: &str) -> Result<Model1Roms, String> {
     // Z80 firmware mirrors it into dpram so the game boots configured.
     let ioboard_config = read_chip(&mut archive, "vr_defaults.nv").unwrap_or_default();
     let regions = crate::roms_db::build_regions(def, &mut archive)?;
-    Ok(build_model1(regions, ioboard_config))
+    Ok(build_model1(
+        regions,
+        ioboard_config,
+        crate::model1board::Kind::for_set(&def.name),
+    ))
 }
 
 /// Loads Star Wars Arcade, building the V60 memory image
 /// `ROM_START(swa)` lays it out.
 pub struct Model1Roms {
+    /// Selected from the identified ROM set, not a file path or frontend setting.
+    pub ioboard_kind: crate::model1board::Kind,
     /// Factory battery-backed RAM image (NetMerc). Saved user NVRAM wins.
     pub nvram_default: Vec<u8>,
     /// "maincpu": the V60's whole 32MB address image. The reset vector lives at
@@ -352,7 +360,10 @@ mod model1_tests {
         let regions = [("nvram".to_owned(), factory.clone())]
             .into_iter()
             .collect();
-        assert_eq!(build_model1(regions, vec![]).nvram_default, factory);
+        assert_eq!(
+            build_model1(regions, vec![], crate::model1board::Kind::Original).nvram_default,
+            factory
+        );
     }
 
     // No copyrighted ROM fixture is shipped. Run explicitly with a user-owned
