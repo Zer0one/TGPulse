@@ -4,11 +4,11 @@
 
 //! Memory access-related traits and structs.
 
-use crate::{CpuDetails, M68000};
-use crate::addressing_modes::{EffectiveAddress, AddressingMode};
+use crate::addressing_modes::{AddressingMode, EffectiveAddress};
 use crate::exception::{ACCESS_ERROR, ADDRESS_ERROR};
 use crate::instruction::Size;
 use crate::utils::IsEven;
+use crate::{CpuDetails, M68000};
 
 /// Return type of M68000's read memory methods. `Err(Vector::AddressError or AccessError as u8)` if an address or
 /// access (bus) error occured. Alias for `Result<T, u8>`.
@@ -66,7 +66,10 @@ pub trait MemoryAccess {
     /// Returns a [MemoryIter] starting at the given address that will be used to decode instructions.
     #[must_use]
     fn iter_u16(&mut self, addr: u32) -> MemoryIter<Self> {
-        MemoryIter { memory: self, next_addr: addr }
+        MemoryIter {
+            memory: self,
+            next_addr: addr,
+        }
     }
 
     /// Called when the CPU executes a RESET instruction.
@@ -96,77 +99,129 @@ impl<M: MemoryAccess + ?Sized> Iterator for MemoryIter<'_, M> {
 }
 
 impl<CPU: CpuDetails> M68000<CPU> {
-    pub(super) fn get_byte<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M, ea: &mut EffectiveAddress, exec_time: &mut usize) -> GetResult<u8> {
+    pub(super) fn get_byte<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+        ea: &mut EffectiveAddress,
+        exec_time: &mut usize,
+    ) -> GetResult<u8> {
         match ea.mode {
             AddressingMode::Drd(reg) => Ok(self.regs.d[reg as usize].0 as u8),
             AddressingMode::Immediate(imm) => {
                 *exec_time += CPU::EA_IMMEDIATE;
                 Ok(imm as u8)
-            },
-            _ => memory.get_byte(self.get_effective_address(ea, exec_time)).ok_or(ACCESS_ERROR),
+            }
+            _ => memory
+                .get_byte(self.get_effective_address(ea, exec_time))
+                .ok_or(ACCESS_ERROR),
         }
     }
 
-    pub(super) fn get_word<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M, ea: &mut EffectiveAddress, exec_time: &mut usize) -> GetResult<u16> {
+    pub(super) fn get_word<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+        ea: &mut EffectiveAddress,
+        exec_time: &mut usize,
+    ) -> GetResult<u16> {
         match ea.mode {
             AddressingMode::Drd(reg) => Ok(self.regs.d[reg as usize].0 as u16),
             AddressingMode::Ard(reg) => Ok(self.regs.a(reg) as u16),
             AddressingMode::Immediate(imm) => {
                 *exec_time += CPU::EA_IMMEDIATE;
                 Ok(imm as u16)
-            },
+            }
             _ => {
                 let addr = self.get_effective_address(ea, exec_time).even()?;
                 memory.get_word(addr).ok_or(ACCESS_ERROR)
-            },
+            }
         }
     }
 
-    pub(super) fn get_long<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M, ea: &mut EffectiveAddress, exec_time: &mut usize) -> GetResult<u32> {
+    pub(super) fn get_long<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+        ea: &mut EffectiveAddress,
+        exec_time: &mut usize,
+    ) -> GetResult<u32> {
         match ea.mode {
             AddressingMode::Drd(reg) => Ok(self.regs.d[reg as usize].0),
             AddressingMode::Ard(reg) => Ok(self.regs.a(reg)),
             AddressingMode::Immediate(imm) => {
                 *exec_time += CPU::EA_IMMEDIATE + 4;
                 Ok(imm)
-            },
+            }
             _ => {
                 let addr = self.get_effective_address(ea, exec_time).even()?;
                 let r = memory.get_long(addr).ok_or(ACCESS_ERROR);
                 *exec_time += 4;
                 r
-            },
+            }
         }
     }
 
-    pub(super) fn set_byte<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M, ea: &mut EffectiveAddress, exec_time: &mut usize, value: u8) -> SetResult {
+    pub(super) fn set_byte<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+        ea: &mut EffectiveAddress,
+        exec_time: &mut usize,
+        value: u8,
+    ) -> SetResult {
         match ea.mode {
-            AddressingMode::Drd(reg) => { self.regs.d_byte(reg, value); Ok(()) },
-            _ => memory.set_byte(self.get_effective_address(ea, exec_time), value).ok_or(ACCESS_ERROR),
+            AddressingMode::Drd(reg) => {
+                self.regs.d_byte(reg, value);
+                Ok(())
+            }
+            _ => memory
+                .set_byte(self.get_effective_address(ea, exec_time), value)
+                .ok_or(ACCESS_ERROR),
         }
     }
 
-    pub(super) fn set_word<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M, ea: &mut EffectiveAddress, exec_time: &mut usize, value: u16) -> SetResult {
+    pub(super) fn set_word<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+        ea: &mut EffectiveAddress,
+        exec_time: &mut usize,
+        value: u16,
+    ) -> SetResult {
         match ea.mode {
-            AddressingMode::Drd(reg) => { self.regs.d_word(reg, value); Ok(()) },
-            AddressingMode::Ard(reg) => { self.regs.a_mut(reg).0 = value as i16 as u32; Ok(()) },
+            AddressingMode::Drd(reg) => {
+                self.regs.d_word(reg, value);
+                Ok(())
+            }
+            AddressingMode::Ard(reg) => {
+                self.regs.a_mut(reg).0 = value as i16 as u32;
+                Ok(())
+            }
             _ => {
                 let addr = self.get_effective_address(ea, exec_time).even()?;
                 memory.set_word(addr, value).ok_or(ACCESS_ERROR)
-            },
+            }
         }
     }
 
-    pub(super) fn set_long<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M, ea: &mut EffectiveAddress, exec_time: &mut usize, value: u32) -> SetResult {
+    pub(super) fn set_long<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+        ea: &mut EffectiveAddress,
+        exec_time: &mut usize,
+        value: u32,
+    ) -> SetResult {
         match ea.mode {
-            AddressingMode::Drd(reg) => { self.regs.d[reg as usize].0 = value; Ok(()) },
-            AddressingMode::Ard(reg) => { self.regs.a_mut(reg).0 = value; Ok(()) },
+            AddressingMode::Drd(reg) => {
+                self.regs.d[reg as usize].0 = value;
+                Ok(())
+            }
+            AddressingMode::Ard(reg) => {
+                self.regs.a_mut(reg).0 = value;
+                Ok(())
+            }
             _ => {
                 let addr = self.get_effective_address(ea, exec_time).even()?;
                 let r = memory.set_long(addr, value).ok_or(ACCESS_ERROR);
                 *exec_time += 4;
                 r
-            },
+            }
         }
     }
 
@@ -211,19 +266,30 @@ impl<CPU: CpuDetails> M68000<CPU> {
     }
 
     /// Pushes the given 16-bits value on the stack.
-    pub(super) fn push_word<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M, value: u16) -> SetResult {
+    pub(super) fn push_word<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+        value: u16,
+    ) -> SetResult {
         let addr = self.ariwpr(7, Size::Word);
         memory.set_word(addr.even()?, value).ok_or(ACCESS_ERROR)
     }
 
     /// Pushes the given 32-bits value on the stack.
-    pub(super) fn push_long<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M, value: u32) -> SetResult {
+    pub(super) fn push_long<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+        value: u32,
+    ) -> SetResult {
         let addr = self.ariwpr(7, Size::Long);
         memory.set_long(addr.even()?, value).ok_or(ACCESS_ERROR)
     }
 
     /// Creates a new memory iterator starting at the current Program Counter.
-    pub(super) fn iter_from_pc<'a, M: MemoryAccess + ?Sized>(&self, memory: &'a mut M) -> MemoryIter<'a, M> {
+    pub(super) fn iter_from_pc<'a, M: MemoryAccess + ?Sized>(
+        &self,
+        memory: &'a mut M,
+    ) -> MemoryIter<'a, M> {
         memory.iter_u16(self.regs.pc.0)
     }
 }

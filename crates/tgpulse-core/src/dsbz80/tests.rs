@@ -83,7 +83,9 @@ fn uart_8n1_transmission_occupies_ten_bits_of_sixteen_wire_ticks() {
     u.write(0xa5).unwrap();
     // Independent framing oracle: start, eight LSB-first data bits, stop.
     // 160 ticks at the configured 500 kHz wire clock = 320 microseconds.
-    let bits = [false, true, false, true, false, false, true, false, true, true];
+    let bits = [
+        false, true, false, true, false, false, true, false, true, true,
+    ];
     for expected in bits {
         for _ in 0..16 {
             u.tick();
@@ -162,7 +164,10 @@ fn uart_internal_reset_is_not_hardware_reset_and_modes_fail_explicitly() {
     u.control(0x4e).unwrap();
     u.control(0x37).unwrap();
     assert_eq!(u.read(), 7);
-    assert_eq!(u.control(0x3f), Err(uart::Error::UnsupportedUartCommand(0x3f)));
+    assert_eq!(
+        u.control(0x3f),
+        Err(uart::Error::UnsupportedUartCommand(0x3f))
+    );
 }
 
 #[test]

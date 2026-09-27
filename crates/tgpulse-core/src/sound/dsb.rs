@@ -53,7 +53,10 @@ impl Conversion {
         let mut previous = self.time;
         self.time % 2 == 0
             && valid_sample(&self.last)
-            && self.area.iter().all(|a| a.unsigned_abs() <= u64::from(limit) * (self.time % 448))
+            && self
+                .area
+                .iter()
+                .all(|a| a.unsigned_abs() <= u64::from(limit) * (self.time % 448))
             && self.pending.iter().all(|(t, s)| {
                 let valid = *t > previous && *t % 625 == 0 && valid_sample(s);
                 previous = *t;

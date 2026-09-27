@@ -60,7 +60,8 @@ impl FmPath {
             }
             let fifths = step * 4 + usize::from(self.conversion.fifths);
             self.conversion.fifths = (fifths % 5) as u8;
-            self.chip.advance_with_output((fifths / 5) as u32, |frame| self.conversion.last = frame);
+            self.chip
+                .advance_with_output((fifths / 5) as u32, |frame| self.conversion.last = frame);
             cycles -= step;
             self.conversion.pcm_remaining -= step as u16;
             if self.conversion.pcm_remaining == 0 {
@@ -161,5 +162,4 @@ mod tests {
             assert_eq!(fm.snapshot(), good);
         }
     }
-
 }

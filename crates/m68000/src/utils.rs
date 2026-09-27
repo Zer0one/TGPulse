@@ -24,7 +24,7 @@ pub const fn bits(d: u16, beg: u16, end: u16) -> u16 {
 }
 
 /// Trait to see if an integer is even or not.
-pub trait IsEven : Sized {
+pub trait IsEven: Sized {
     fn is_even(self) -> bool;
     fn even(self) -> Result<Self, u8>;
 }
@@ -109,7 +109,7 @@ impl SliceAs for &[u16] {
 }
 
 /// TODO: use carrying_add and borrow_sub of feature(bigint_helper_methods) when stable.
-pub trait CarryingOps<S, U> : Sized + Integer {
+pub trait CarryingOps<S, U>: Sized + Integer {
     fn carryingadd(self, rhs: Self, carry: bool) -> (Self, bool);
     fn borrowingsub(self, rhs: Self, borrow: bool) -> (Self, bool);
 
@@ -195,9 +195,15 @@ impl_carrying_ops_unsigned!(u16, i16, u16);
 impl_carrying_ops_signed!(i32, i32, u32);
 impl_carrying_ops_unsigned!(u32, i32, u32);
 
-pub trait Integer : Copy + PartialEq + PartialOrd +
-                    BitAnd<Output = Self> + BitOr<Output = Self> + BitXor<Output = Self> +
-                    Shl<Output = Self> {
+pub trait Integer:
+    Copy
+    + PartialEq
+    + PartialOrd
+    + BitAnd<Output = Self>
+    + BitOr<Output = Self>
+    + BitXor<Output = Self>
+    + Shl<Output = Self>
+{
     const ZERO: Self;
     const SIGN_BIT_MASK: Self;
 }

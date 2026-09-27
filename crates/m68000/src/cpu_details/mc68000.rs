@@ -14,16 +14,16 @@ impl CpuDetails for Mc68000 {
     const VECTOR_RESET: usize = 40;
     fn vector_execution_time(vector: u8) -> usize {
         match vector {
-            2 => 50, // Access Error
-            3 => 50, // Address Error
-            4 => 34, // Illegal
-            5 => 38, // Zero Divide
-            6 => 40, // Chk
-            7 => 34, // Trapv
-            8 => 34, // Privilege Violation
-            9 => 34, // Trace
-            24..=31 => 44, // Interrupt
-            32..=47 => 34, // Trap
+            2 => 50,                 // Access Error
+            3 => 50,                 // Address Error
+            4 => 34,                 // Illegal
+            5 => 38,                 // Zero Divide
+            6 => 40,                 // Chk
+            7 => 34,                 // Trapv
+            8 => 34,                 // Privilege Violation
+            9 => 34,                 // Trace
+            24..=31 => 44,           // Interrupt
+            32..=47 => 34,           // Trap
             _ => Self::VECTOR_RESET, // TODO: what to return with the other vectors?
         }
     }

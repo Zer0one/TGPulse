@@ -96,22 +96,22 @@
 
 pub mod addressing_modes;
 pub mod assembler;
+pub mod cpu_details;
 pub mod decoder;
 pub mod disassembler;
 pub mod exception;
-pub mod cpu_details;
 pub mod instruction;
 mod interpreter;
 mod interpreter_disassembler;
 mod interpreter_fast;
 pub mod isa;
 pub mod memory_access;
-pub mod status_register;
 pub mod state;
+pub mod status_register;
 pub mod utils;
 
-use exception::{Exception, Vector};
 pub use cpu_details::{CpuDetails, StackFormat};
+use exception::{Exception, Vector};
 pub use memory_access::MemoryAccess;
 use status_register::StatusRegister;
 

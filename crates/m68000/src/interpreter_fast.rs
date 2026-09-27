@@ -2,11 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use crate::{CpuDetails, M68000, MemoryAccess};
 use crate::exception::{Exception, Vector};
 use crate::instruction::*;
 use crate::interpreter::InterpreterResult;
 use crate::isa::Isa;
+use crate::{CpuDetails, MemoryAccess, M68000};
 
 impl<CPU: CpuDetails> M68000<CPU> {
     /// Runs the CPU for **at least** the given number of cycles.
@@ -36,7 +36,11 @@ impl<CPU: CpuDetails> M68000<CPU> {
     /// If you ask to execute 4 cycles but the next instruction takes 6 cycles to execute, it will be executed
     /// and 6 is returned, along with the vector that occured if any.
     /// It is the caller's responsibility to handle the extra cycles.
-    pub fn cycle_until_exception<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M, cycles: usize) -> (usize, Option<u8>) {
+    pub fn cycle_until_exception<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+        cycles: usize,
+    ) -> (usize, Option<u8>) {
         let mut total = 0;
 
         while total < cycles {
@@ -55,7 +59,10 @@ impl<CPU: CpuDetails> M68000<CPU> {
     ///
     /// Returns the number of cycles executed and the exception that occured.
     /// If exception is None, this means the CPU has executed a STOP instruction.
-    pub fn loop_until_exception_stop<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> (usize, Option<u8>) {
+    pub fn loop_until_exception_stop<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+    ) -> (usize, Option<u8>) {
         let mut total_cycles = 0;
 
         loop {
@@ -91,7 +98,10 @@ impl<CPU: CpuDetails> M68000<CPU> {
     ///
     /// This method may or may not execute any instruction.
     /// For example, if an Access Error occurs during instruction fetch, the exception is returned and no instruction is executed.
-    pub fn interpreter_exception<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> (usize, Option<u8>) {
+    pub fn interpreter_exception<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+    ) -> (usize, Option<u8>) {
         if self.stop {
             return (0, None);
         }
@@ -118,14 +128,17 @@ impl<CPU: CpuDetails> M68000<CPU> {
                 } else {
                     None
                 }
-            },
+            }
             Err(e) => Some(e),
         };
 
         (cycle_count, exception)
     }
 
-    fn fast_unknown_instruction<M: MemoryAccess + ?Sized>(&mut self, _: &mut M) -> InterpreterResult {
+    fn fast_unknown_instruction<M: MemoryAccess + ?Sized>(
+        &mut self,
+        _: &mut M,
+    ) -> InterpreterResult {
         self.execute_unknown_instruction()
     }
 
@@ -136,7 +149,8 @@ impl<CPU: CpuDetails> M68000<CPU> {
 
     fn fast_add<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> InterpreterResult {
         let mut iter = self.iter_from_pc(memory);
-        let (reg, dir, size, am) = register_direction_size_effective_address(self.current_opcode, &mut iter);
+        let (reg, dir, size, am) =
+            register_direction_size_effective_address(self.current_opcode, &mut iter);
         self.regs.pc.0 = iter.next_addr;
         self.execute_add(memory, reg, dir, size, am)
     }
@@ -169,7 +183,8 @@ impl<CPU: CpuDetails> M68000<CPU> {
 
     fn fast_and<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> InterpreterResult {
         let mut iter = self.iter_from_pc(memory);
-        let (reg, dir, size, am) = register_direction_size_effective_address(self.current_opcode, &mut iter);
+        let (reg, dir, size, am) =
+            register_direction_size_effective_address(self.current_opcode, &mut iter);
         self.regs.pc.0 = iter.next_addr;
         self.execute_and(memory, reg, dir, size, am)
     }
@@ -277,7 +292,8 @@ impl<CPU: CpuDetails> M68000<CPU> {
 
     fn fast_cmp<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> InterpreterResult {
         let mut iter = self.iter_from_pc(memory);
-        let (reg, _, size, am) = register_direction_size_effective_address(self.current_opcode, &mut iter);
+        let (reg, _, size, am) =
+            register_direction_size_effective_address(self.current_opcode, &mut iter);
         self.regs.pc.0 = iter.next_addr;
         self.execute_cmp(memory, reg, size, am)
     }
@@ -329,7 +345,8 @@ impl<CPU: CpuDetails> M68000<CPU> {
 
     fn fast_eor<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> InterpreterResult {
         let mut iter = self.iter_from_pc(memory);
-        let (reg, _, size, am) = register_direction_size_effective_address(self.current_opcode, &mut iter);
+        let (reg, _, size, am) =
+            register_direction_size_effective_address(self.current_opcode, &mut iter);
         self.regs.pc.0 = iter.next_addr;
         self.execute_eor(memory, reg, size, am)
     }
@@ -411,7 +428,8 @@ impl<CPU: CpuDetails> M68000<CPU> {
 
     fn fast_move<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> InterpreterResult {
         let mut iter = self.iter_from_pc(memory);
-        let (size, amdst, amsrc) = size_effective_address_effective_address(self.current_opcode, &mut iter);
+        let (size, amdst, amsrc) =
+            size_effective_address_effective_address(self.current_opcode, &mut iter);
         self.regs.pc.0 = iter.next_addr;
         self.execute_move(memory, size, amdst, amsrc)
     }
@@ -451,14 +469,16 @@ impl<CPU: CpuDetails> M68000<CPU> {
 
     fn fast_movem<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> InterpreterResult {
         let mut iter = self.iter_from_pc(memory);
-        let (dir, size, am, list) = direction_size_effective_address_list(self.current_opcode, &mut iter);
+        let (dir, size, am, list) =
+            direction_size_effective_address_list(self.current_opcode, &mut iter);
         self.regs.pc.0 = iter.next_addr;
         self.execute_movem(memory, dir, size, am, list)
     }
 
     fn fast_movep<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> InterpreterResult {
         let mut iter = self.iter_from_pc(memory);
-        let (data, dir, size, addr, disp) = register_direction_size_register_displacement(self.current_opcode, &mut iter);
+        let (data, dir, size, addr, disp) =
+            register_direction_size_register_displacement(self.current_opcode, &mut iter);
         self.regs.pc.0 = iter.next_addr;
         self.execute_movep(memory, data, dir, size, addr, disp)
     }
@@ -516,7 +536,8 @@ impl<CPU: CpuDetails> M68000<CPU> {
 
     fn fast_or<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> InterpreterResult {
         let mut iter = self.iter_from_pc(memory);
-        let (reg, dir, size, am) = register_direction_size_effective_address(self.current_opcode, &mut iter);
+        let (reg, dir, size, am) =
+            register_direction_size_effective_address(self.current_opcode, &mut iter);
         self.regs.pc.0 = iter.next_addr;
         self.execute_or(memory, reg, dir, size, am)
     }
@@ -610,7 +631,8 @@ impl<CPU: CpuDetails> M68000<CPU> {
 
     fn fast_sub<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> InterpreterResult {
         let mut iter = self.iter_from_pc(memory);
-        let (reg, dir, size, am) = register_direction_size_effective_address(self.current_opcode, &mut iter);
+        let (reg, dir, size, am) =
+            register_direction_size_effective_address(self.current_opcode, &mut iter);
         self.regs.pc.0 = iter.next_addr;
         self.execute_sub(memory, reg, dir, size, am)
     }

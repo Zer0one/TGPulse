@@ -1001,7 +1001,10 @@ mod indexed_tests {
     struct AbsoluteOperand;
     impl Bus for AbsoluteOperand {
         fn read_u8(&mut self, addr: u32) -> u8 {
-            [0xc1, 0xf3, 0, 2, 0, 0].get(addr as usize).copied().unwrap_or(0)
+            [0xc1, 0xf3, 0, 2, 0, 0]
+                .get(addr as usize)
+                .copied()
+                .unwrap_or(0)
         }
         fn write_u8(&mut self, _: u32, _: u8) {}
     }

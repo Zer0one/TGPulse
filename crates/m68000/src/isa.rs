@@ -5,8 +5,8 @@
 //! ISA definition and helper structs to decode, disassemble and interpret (internal only) the instructions.
 
 use crate::decoder::DECODER;
-use crate::memory_access::{MemoryAccess, MemoryIter};
 use crate::instruction::*;
+use crate::memory_access::{MemoryAccess, MemoryIter};
 
 /// ISA of the M68000.
 ///
@@ -107,7 +107,10 @@ impl Isa {
     /// Privileged instructions are not traced (MC68000UM 6.3.8 Tracing).
     pub const fn is_privileged(self) -> bool {
         use Isa::*;
-        matches!(self, Andisr | Eorisr | Movesr | Moveusp | Orisr | Reset | Rte | Stop)
+        matches!(
+            self,
+            Andisr | Eorisr | Movesr | Moveusp | Orisr | Reset | Rte | Stop
+        )
     }
 }
 
@@ -149,90 +152,268 @@ pub struct IsaEntry<M: MemoryAccess + ?Sized> {
 impl<M: MemoryAccess + ?Sized> IsaEntry<M> {
     /// The array that maps instructions to their [IsaEntry] entry. Index it using the [Isa] enum.
     pub const ISA_ENTRY: [IsaEntry<M>; Isa::_Size as usize] = [
-        IsaEntry { /* isa: Isa::Unknown,*/ decode: Operands::new_no_operands, },
-        IsaEntry { /* isa: Isa::Abcd,*/    decode: Operands::new_register_size_mode_register, },
-        IsaEntry { /* isa: Isa::Add,*/     decode: Operands::new_register_direction_size_effective_address, },
-        IsaEntry { /* isa: Isa::Adda,*/    decode: Operands::new_register_size_effective_address, },
-        IsaEntry { /* isa: Isa::Addi,*/    decode: Operands::new_size_effective_address_immediate, },
-        IsaEntry { /* isa: Isa::Addq,*/    decode: Operands::new_data_size_effective_address, },
-        IsaEntry { /* isa: Isa::Addx,*/    decode: Operands::new_register_size_mode_register, },
-        IsaEntry { /* isa: Isa::And,*/     decode: Operands::new_register_direction_size_effective_address, },
-        IsaEntry { /* isa: Isa::Andi,*/    decode: Operands::new_size_effective_address_immediate, },
-        IsaEntry { /* isa: Isa::Andiccr,*/ decode: Operands::new_immediate, },
-        IsaEntry { /* isa: Isa::Andisr,*/  decode: Operands::new_immediate, },
-        IsaEntry { /* isa: Isa::Asm,*/     decode: Operands::new_direction_effective_address, },
-        IsaEntry { /* isa: Isa::Asr,*/     decode: Operands::new_rotation_direction_size_mode_register, },
-        IsaEntry { /* isa: Isa::Bcc,*/     decode: Operands::new_condition_displacement, },
-        IsaEntry { /* isa: Isa::Bchg,*/    decode: Operands::new_effective_address_count, },
-        IsaEntry { /* isa: Isa::Bclr,*/    decode: Operands::new_effective_address_count, },
-        IsaEntry { /* isa: Isa::Bra,*/     decode: Operands::new_displacement, },
-        IsaEntry { /* isa: Isa::Bset,*/    decode: Operands::new_effective_address_count, },
-        IsaEntry { /* isa: Isa::Bsr,*/     decode: Operands::new_displacement, },
-        IsaEntry { /* isa: Isa::Btst,*/    decode: Operands::new_effective_address_count, },
-        IsaEntry { /* isa: Isa::Chk,*/     decode: Operands::new_register_effective_address, },
-        IsaEntry { /* isa: Isa::Clr,*/     decode: Operands::new_size_effective_address, },
-        IsaEntry { /* isa: Isa::Cmp,*/     decode: Operands::new_register_direction_size_effective_address, },
-        IsaEntry { /* isa: Isa::Cmpa,*/    decode: Operands::new_register_size_effective_address, },
-        IsaEntry { /* isa: Isa::Cmpi,*/    decode: Operands::new_size_effective_address_immediate, },
-        IsaEntry { /* isa: Isa::Cmpm,*/    decode: Operands::new_register_size_register, },
-        IsaEntry { /* isa: Isa::Dbcc,*/    decode: Operands::new_condition_register_displacement, },
-        IsaEntry { /* isa: Isa::Divs,*/    decode: Operands::new_register_effective_address, },
-        IsaEntry { /* isa: Isa::Divu,*/    decode: Operands::new_register_effective_address, },
-        IsaEntry { /* isa: Isa::Eor,*/     decode: Operands::new_register_direction_size_effective_address, },
-        IsaEntry { /* isa: Isa::Eori,*/    decode: Operands::new_size_effective_address_immediate, },
-        IsaEntry { /* isa: Isa::Eoriccr,*/ decode: Operands::new_immediate, },
-        IsaEntry { /* isa: Isa::Eorisr,*/  decode: Operands::new_immediate, },
-        IsaEntry { /* isa: Isa::Exg,*/     decode: Operands::new_register_opmode_register, },
-        IsaEntry { /* isa: Isa::Ext,*/     decode: Operands::new_opmode_register, },
-        IsaEntry { /* isa: Isa::Illegal,*/ decode: Operands::new_no_operands, },
-        IsaEntry { /* isa: Isa::Jmp,*/     decode: Operands::new_effective_address, },
-        IsaEntry { /* isa: Isa::Jsr,*/     decode: Operands::new_effective_address, },
-        IsaEntry { /* isa: Isa::Lea,*/     decode: Operands::new_register_effective_address, },
-        IsaEntry { /* isa: Isa::Link,*/    decode: Operands::new_register_displacement, },
-        IsaEntry { /* isa: Isa::Lsm,*/     decode: Operands::new_direction_effective_address, },
-        IsaEntry { /* isa: Isa::Lsr,*/     decode: Operands::new_rotation_direction_size_mode_register, },
-        IsaEntry { /* isa: Isa::Move,*/    decode: Operands::new_size_effective_address_effective_address, },
-        IsaEntry { /* isa: Isa::Movea,*/   decode: Operands::new_size_register_effective_address, },
-        IsaEntry { /* isa: Isa::Moveccr,*/ decode: Operands::new_effective_address, },
-        IsaEntry { /* isa: Isa::Movefsr,*/ decode: Operands::new_effective_address, },
-        IsaEntry { /* isa: Isa::Movesr,*/  decode: Operands::new_effective_address, },
-        IsaEntry { /* isa: Isa::Moveusp,*/ decode: Operands::new_direction_register, },
-        IsaEntry { /* isa: Isa::Movem,*/   decode: Operands::new_direction_size_effective_address_list, },
-        IsaEntry { /* isa: Isa::Movep,*/   decode: Operands::new_register_direction_size_register_displacement, },
-        IsaEntry { /* isa: Isa::Moveq,*/   decode: Operands::new_register_data, },
-        IsaEntry { /* isa: Isa::Muls,*/    decode: Operands::new_register_effective_address, },
-        IsaEntry { /* isa: Isa::Mulu,*/    decode: Operands::new_register_effective_address, },
-        IsaEntry { /* isa: Isa::Nbcd,*/    decode: Operands::new_effective_address, },
-        IsaEntry { /* isa: Isa::Neg,*/     decode: Operands::new_size_effective_address, },
-        IsaEntry { /* isa: Isa::Negx,*/    decode: Operands::new_size_effective_address, },
-        IsaEntry { /* isa: Isa::Nop,*/     decode: Operands::new_no_operands, },
-        IsaEntry { /* isa: Isa::Not,*/     decode: Operands::new_size_effective_address, },
-        IsaEntry { /* isa: Isa::Or,*/      decode: Operands::new_register_direction_size_effective_address, },
-        IsaEntry { /* isa: Isa::Ori,*/     decode: Operands::new_size_effective_address_immediate, },
-        IsaEntry { /* isa: Isa::Oriccr,*/  decode: Operands::new_immediate, },
-        IsaEntry { /* isa: Isa::Orisr,*/   decode: Operands::new_immediate, },
-        IsaEntry { /* isa: Isa::Pea,*/     decode: Operands::new_effective_address, },
-        IsaEntry { /* isa: Isa::Reset,*/   decode: Operands::new_no_operands, },
-        IsaEntry { /* isa: Isa::Rom,*/     decode: Operands::new_direction_effective_address, },
-        IsaEntry { /* isa: Isa::Ror,*/     decode: Operands::new_rotation_direction_size_mode_register, },
-        IsaEntry { /* isa: Isa::Roxm,*/    decode: Operands::new_direction_effective_address, },
-        IsaEntry { /* isa: Isa::Roxr,*/    decode: Operands::new_rotation_direction_size_mode_register, },
-        IsaEntry { /* isa: Isa::Rte,*/     decode: Operands::new_no_operands, },
-        IsaEntry { /* isa: Isa::Rtr,*/     decode: Operands::new_no_operands, },
-        IsaEntry { /* isa: Isa::Rts,*/     decode: Operands::new_no_operands, },
-        IsaEntry { /* isa: Isa::Sbcd,*/    decode: Operands::new_register_size_mode_register, },
-        IsaEntry { /* isa: Isa::Scc,*/     decode: Operands::new_condition_effective_address, },
-        IsaEntry { /* isa: Isa::Stop,*/    decode: Operands::new_immediate, },
-        IsaEntry { /* isa: Isa::Sub,*/     decode: Operands::new_register_direction_size_effective_address, },
-        IsaEntry { /* isa: Isa::Suba,*/    decode: Operands::new_register_size_effective_address, },
-        IsaEntry { /* isa: Isa::Subi,*/    decode: Operands::new_size_effective_address_immediate, },
-        IsaEntry { /* isa: Isa::Subq,*/    decode: Operands::new_data_size_effective_address, },
-        IsaEntry { /* isa: Isa::Subx,*/    decode: Operands::new_register_size_mode_register, },
-        IsaEntry { /* isa: Isa::Swap,*/    decode: Operands::new_register, },
-        IsaEntry { /* isa: Isa::Tas,*/     decode: Operands::new_effective_address, },
-        IsaEntry { /* isa: Isa::Trap,*/    decode: Operands::new_vector, },
-        IsaEntry { /* isa: Isa::Trapv,*/   decode: Operands::new_no_operands, },
-        IsaEntry { /* isa: Isa::Tst,*/     decode: Operands::new_size_effective_address, },
-        IsaEntry { /* isa: Isa::Unlk,*/    decode: Operands::new_register, },
+        IsaEntry {
+            /* isa: Isa::Unknown,*/ decode: Operands::new_no_operands,
+        },
+        IsaEntry {
+            /* isa: Isa::Abcd,*/ decode: Operands::new_register_size_mode_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Add,*/
+            decode: Operands::new_register_direction_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Adda,*/ decode: Operands::new_register_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Addi,*/ decode: Operands::new_size_effective_address_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Addq,*/ decode: Operands::new_data_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Addx,*/ decode: Operands::new_register_size_mode_register,
+        },
+        IsaEntry {
+            /* isa: Isa::And,*/
+            decode: Operands::new_register_direction_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Andi,*/ decode: Operands::new_size_effective_address_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Andiccr,*/ decode: Operands::new_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Andisr,*/ decode: Operands::new_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Asm,*/ decode: Operands::new_direction_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Asr,*/ decode: Operands::new_rotation_direction_size_mode_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Bcc,*/ decode: Operands::new_condition_displacement,
+        },
+        IsaEntry {
+            /* isa: Isa::Bchg,*/ decode: Operands::new_effective_address_count,
+        },
+        IsaEntry {
+            /* isa: Isa::Bclr,*/ decode: Operands::new_effective_address_count,
+        },
+        IsaEntry {
+            /* isa: Isa::Bra,*/ decode: Operands::new_displacement,
+        },
+        IsaEntry {
+            /* isa: Isa::Bset,*/ decode: Operands::new_effective_address_count,
+        },
+        IsaEntry {
+            /* isa: Isa::Bsr,*/ decode: Operands::new_displacement,
+        },
+        IsaEntry {
+            /* isa: Isa::Btst,*/ decode: Operands::new_effective_address_count,
+        },
+        IsaEntry {
+            /* isa: Isa::Chk,*/ decode: Operands::new_register_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Clr,*/ decode: Operands::new_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Cmp,*/
+            decode: Operands::new_register_direction_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Cmpa,*/ decode: Operands::new_register_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Cmpi,*/ decode: Operands::new_size_effective_address_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Cmpm,*/ decode: Operands::new_register_size_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Dbcc,*/ decode: Operands::new_condition_register_displacement,
+        },
+        IsaEntry {
+            /* isa: Isa::Divs,*/ decode: Operands::new_register_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Divu,*/ decode: Operands::new_register_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Eor,*/
+            decode: Operands::new_register_direction_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Eori,*/ decode: Operands::new_size_effective_address_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Eoriccr,*/ decode: Operands::new_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Eorisr,*/ decode: Operands::new_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Exg,*/ decode: Operands::new_register_opmode_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Ext,*/ decode: Operands::new_opmode_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Illegal,*/ decode: Operands::new_no_operands,
+        },
+        IsaEntry {
+            /* isa: Isa::Jmp,*/ decode: Operands::new_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Jsr,*/ decode: Operands::new_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Lea,*/ decode: Operands::new_register_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Link,*/ decode: Operands::new_register_displacement,
+        },
+        IsaEntry {
+            /* isa: Isa::Lsm,*/ decode: Operands::new_direction_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Lsr,*/ decode: Operands::new_rotation_direction_size_mode_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Move,*/
+            decode: Operands::new_size_effective_address_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Movea,*/ decode: Operands::new_size_register_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Moveccr,*/ decode: Operands::new_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Movefsr,*/ decode: Operands::new_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Movesr,*/ decode: Operands::new_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Moveusp,*/ decode: Operands::new_direction_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Movem,*/ decode: Operands::new_direction_size_effective_address_list,
+        },
+        IsaEntry {
+            /* isa: Isa::Movep,*/
+            decode: Operands::new_register_direction_size_register_displacement,
+        },
+        IsaEntry {
+            /* isa: Isa::Moveq,*/ decode: Operands::new_register_data,
+        },
+        IsaEntry {
+            /* isa: Isa::Muls,*/ decode: Operands::new_register_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Mulu,*/ decode: Operands::new_register_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Nbcd,*/ decode: Operands::new_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Neg,*/ decode: Operands::new_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Negx,*/ decode: Operands::new_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Nop,*/ decode: Operands::new_no_operands,
+        },
+        IsaEntry {
+            /* isa: Isa::Not,*/ decode: Operands::new_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Or,*/
+            decode: Operands::new_register_direction_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Ori,*/ decode: Operands::new_size_effective_address_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Oriccr,*/ decode: Operands::new_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Orisr,*/ decode: Operands::new_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Pea,*/ decode: Operands::new_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Reset,*/ decode: Operands::new_no_operands,
+        },
+        IsaEntry {
+            /* isa: Isa::Rom,*/ decode: Operands::new_direction_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Ror,*/ decode: Operands::new_rotation_direction_size_mode_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Roxm,*/ decode: Operands::new_direction_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Roxr,*/ decode: Operands::new_rotation_direction_size_mode_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Rte,*/ decode: Operands::new_no_operands,
+        },
+        IsaEntry {
+            /* isa: Isa::Rtr,*/ decode: Operands::new_no_operands,
+        },
+        IsaEntry {
+            /* isa: Isa::Rts,*/ decode: Operands::new_no_operands,
+        },
+        IsaEntry {
+            /* isa: Isa::Sbcd,*/ decode: Operands::new_register_size_mode_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Scc,*/ decode: Operands::new_condition_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Stop,*/ decode: Operands::new_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Sub,*/
+            decode: Operands::new_register_direction_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Suba,*/ decode: Operands::new_register_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Subi,*/ decode: Operands::new_size_effective_address_immediate,
+        },
+        IsaEntry {
+            /* isa: Isa::Subq,*/ decode: Operands::new_data_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Subx,*/ decode: Operands::new_register_size_mode_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Swap,*/ decode: Operands::new_register,
+        },
+        IsaEntry {
+            /* isa: Isa::Tas,*/ decode: Operands::new_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Trap,*/ decode: Operands::new_vector,
+        },
+        IsaEntry {
+            /* isa: Isa::Trapv,*/ decode: Operands::new_no_operands,
+        },
+        IsaEntry {
+            /* isa: Isa::Tst,*/ decode: Operands::new_size_effective_address,
+        },
+        IsaEntry {
+            /* isa: Isa::Unlk,*/ decode: Operands::new_register,
+        },
     ];
 }

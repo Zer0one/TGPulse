@@ -46,9 +46,7 @@ pub fn init(app: &AndroidApp) {
 }
 
 /// Runs `f` against the activity's JNI environment.
-fn with_jni<T>(
-    f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>,
-) -> Option<T> {
+fn with_jni<T>(f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>) -> Option<T> {
     let handle = HANDLE.get()?;
     let vm = unsafe { jni::JavaVM::from_raw(handle.0 as *mut jni::sys::JavaVM) }.ok()?;
     let mut env = vm.attach_current_thread().ok()?;
@@ -114,7 +112,10 @@ fn shared_root() -> Option<PathBuf> {
 
 /// The library's home once the grant is held: `<shared>/TGPulse/roms`.
 pub fn shared_rom_dir() -> Option<PathBuf> {
-    shared_root().map(|root| root.join(SHARED_DIR).join(tgpulse_core::library::DEFAULT_DIR))
+    shared_root().map(|root| {
+        root.join(SHARED_DIR)
+            .join(tgpulse_core::library::DEFAULT_DIR)
+    })
 }
 
 /// Turns the display between the two landscapes.

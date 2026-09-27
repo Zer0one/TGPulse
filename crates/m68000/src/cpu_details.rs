@@ -70,7 +70,7 @@ pub enum StackFormat {
 /// - `FALSE_NO_BRANCH` means the test is false and the branch is not taken in a DBcc instruction.
 ///
 /// `JMP_*`, `JSR_*`, `LEA_*` and `PEA_*` timings are based on the addressing mode.
-pub trait CpuDetails : Default {
+pub trait CpuDetails: Default {
     /// The stack format to use.
     const STACK_FORMAT: StackFormat;
 

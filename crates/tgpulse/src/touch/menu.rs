@@ -240,21 +240,22 @@ impl Menu {
         let gap = 0.012 * h;
 
         let mut right = w - margin;
-        let mut header_button = |this: &mut Self, button: Button, label: &'static str, wide: f32| {
-            let width = bar * wide;
-            right -= width;
-            this.buttons.push((
-                button,
-                Rect {
-                    x: right,
-                    y: margin,
-                    w: width,
-                    h: bar,
-                },
-                label,
-            ));
-            right -= gap;
-        };
+        let mut header_button =
+            |this: &mut Self, button: Button, label: &'static str, wide: f32| {
+                let width = bar * wide;
+                right -= width;
+                this.buttons.push((
+                    button,
+                    Rect {
+                        x: right,
+                        y: margin,
+                        w: width,
+                        h: bar,
+                    },
+                    label,
+                ));
+                right -= gap;
+            };
 
         match self.screen {
             Screen::Settings => {
@@ -518,7 +519,13 @@ impl Menu {
         line: f32,
     ) {
         if entries.is_empty() {
-            text_at(dl, self.list.x, self.list.y + line, "No romsets found.", TEXT);
+            text_at(
+                dl,
+                self.list.x,
+                self.list.y + line,
+                "No romsets found.",
+                TEXT,
+            );
             text_at(
                 dl,
                 self.list.x,
@@ -545,7 +552,13 @@ impl Menu {
                         h: self.row_h - 4.0,
                     };
                     draw_rect(dl, rect, false, radius);
-                    text_at(dl, rect.x + margin * 0.5, y + line * 0.35, &entry.title, TEXT);
+                    text_at(
+                        dl,
+                        rect.x + margin * 0.5,
+                        y + line * 0.35,
+                        &entry.title,
+                        TEXT,
+                    );
                     let mut detail = entry.set.clone();
                     if !entry.year.is_empty() {
                         detail.push_str(&format!("   {}", entry.year));
@@ -664,14 +677,22 @@ mod tests {
         let menu = menu(Screen::Settings, false);
         for row in &menu.settings {
             if row.setting.stepped() {
-                assert!(row.minus.is_some() && row.plus.is_some(), "{:?}", row.setting);
+                assert!(
+                    row.minus.is_some() && row.plus.is_some(),
+                    "{:?}",
+                    row.setting
+                );
                 let minus = row.minus.unwrap();
                 assert!(matches!(
                     menu.pick(minus.x + minus.w * 0.5, minus.y + minus.h * 0.5),
                     Target::MenuAdjust(s, -1) if s == row.setting
                 ));
             } else {
-                assert!(row.minus.is_none() && row.plus.is_none(), "{:?}", row.setting);
+                assert!(
+                    row.minus.is_none() && row.plus.is_none(),
+                    "{:?}",
+                    row.setting
+                );
                 assert!(matches!(
                     menu.pick(row.value.x + row.value.w * 0.5, row.value.y + row.value.h * 0.5),
                     Target::MenuAdjust(s, 0) if s == row.setting
@@ -712,7 +733,10 @@ mod tests {
         assert_eq!(config.volume, 0, "volume went negative");
         config.volume = VOLUME_MAX as u32;
         Setting::Volume.apply(&mut config, 1);
-        assert_eq!(config.volume, VOLUME_MAX as u32, "volume passed the maximum");
+        assert_eq!(
+            config.volume, VOLUME_MAX as u32,
+            "volume passed the maximum"
+        );
     }
 
     /// A two-state setting flips whichever way it is tapped.

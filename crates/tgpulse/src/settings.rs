@@ -121,8 +121,11 @@ impl Settings {
                 "model1_address_out" => settings.network.address_out = value.into(),
                 "model1_port_in" | "model1_port_out" => match value.parse::<u16>() {
                     Ok(port) if port != 0 => {
-                        if name == "model1_port_in" { settings.network.port_in = port; }
-                        else { settings.network.port_out = port; }
+                        if name == "model1_port_in" {
+                            settings.network.port_in = port;
+                        } else {
+                            settings.network.port_out = port;
+                        }
                     }
                     _ => log::warn!(target: "settings", "bad {name} '{value}' (want 1..65535)"),
                 },
@@ -250,7 +253,9 @@ impl Settings {
              model1_port_in = {}\n\
              model1_address_out = {}\n\
              model1_port_out = {}\n",
-            self.nvram.as_ref().map_or_else(String::new, |p| p.to_string_lossy().into_owned()),
+            self.nvram
+                .as_ref()
+                .map_or_else(String::new, |p| p.to_string_lossy().into_owned()),
             self.ssaa,
             on_off(self.fullscreen),
             on_off(self.srgb),
@@ -289,15 +294,26 @@ pub struct Profile {
 }
 impl Default for Profile {
     fn default() -> Self {
-        Self { path: Settings::path(), settings: Settings::default(), launch_dir: PathBuf::from(".") }
+        Self {
+            path: Settings::path(),
+            settings: Settings::default(),
+            launch_dir: PathBuf::from("."),
+        }
     }
 }
 impl Profile {
     pub fn resolve(&self, path: &Path) -> PathBuf {
-        if path.is_absolute() { path.to_owned() } else { self.launch_dir.join(path) }
+        if path.is_absolute() {
+            path.to_owned()
+        } else {
+            self.launch_dir.join(path)
+        }
     }
     pub fn nvram_file(&self) -> Option<NvramFile> {
-        self.settings.nvram.as_ref().map(|p| NvramFile(self.resolve(p)))
+        self.settings
+            .nvram
+            .as_ref()
+            .map(|p| NvramFile(self.resolve(p)))
     }
 }
 
@@ -305,7 +321,8 @@ impl Profile {
 pub struct NvramFile(pub PathBuf);
 impl NvramFile {
     pub fn load(&self, backup_len: usize, eeprom_len: usize) -> Result<(Vec<u8>, Vec<u8>), String> {
-        let blob = std::fs::read(&self.0).map_err(|e| format!("cannot read NVRAM {}: {e}", self.0.display()))?;
+        let blob = std::fs::read(&self.0)
+            .map_err(|e| format!("cannot read NVRAM {}: {e}", self.0.display()))?;
         tgpulse_core::nvram::decode(&blob, backup_len, eeprom_len)
             .ok_or_else(|| format!("invalid/incompatible NVRAM: {}", self.0.display()))
     }
@@ -321,7 +338,8 @@ mod tests {
 
     #[test]
     fn explicit_nvram_reads_and_writes_only_its_selected_file() {
-        let dir = std::env::temp_dir().join(format!("tgpulse-nvram-profile-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("tgpulse-nvram-profile-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let master = NvramFile(dir.join("master.nv"));
         let slave = NvramFile(dir.join("slave.nv"));
@@ -374,7 +392,9 @@ mod tests {
             ..Settings::default()
         };
         settings.save(&path).unwrap();
-        assert!(!std::fs::read_to_string(&path).unwrap().contains("model1_network"));
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("model1_network"));
         assert_eq!(Settings::load(&path), settings);
         for mode in [Widescreen::Off, Widescreen::On, Widescreen::Auto] {
             let mut settings = settings.clone();

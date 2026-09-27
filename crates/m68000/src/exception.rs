@@ -4,8 +4,8 @@
 
 //! Exception processing.
 
-use crate::{CpuDetails, M68000, MemoryAccess, StackFormat};
 use crate::interpreter::InterpreterResult;
+use crate::{CpuDetails, MemoryAccess, StackFormat, M68000};
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
@@ -79,13 +79,13 @@ pub enum Vector {
 
 const fn get_vector_priority(vector: u8) -> u8 {
     match vector {
-        3 => 0, // Address error.
-        2 => 1, // Access Error.
-        9 => 2, // Trace.
-        24..=31 => 3, // Interrupt.
+        3 => 0,        // Address error.
+        2 => 1,        // Access Error.
+        9 => 2,        // Trace.
+        24..=31 => 3,  // Interrupt.
         64..=255 => 3, // User Interrupt.
-        4 => 4, // Illegal.
-        8 => 5, // Privilege.
+        4 => 4,        // Illegal.
+        8 => 5,        // Privilege.
         // Even though Reset has the highest priority, it is given a high number.
         // The point is to make the reset vector be processed first,
         // and the reset processing clears all the pending exceptions.
@@ -94,8 +94,9 @@ const fn get_vector_priority(vector: u8) -> u8 {
 }
 
 const fn is_interrupt(vector: u8) -> bool {
-    vector >= Vector::Level1Interrupt as u8 && vector <= Vector::Level7Interrupt as u8 ||
-    vector >= Vector::Level1OnChipInterrupt as u8 && vector <= Vector::Level7OnChipInterrupt as u8
+    vector >= Vector::Level1Interrupt as u8 && vector <= Vector::Level7Interrupt as u8
+        || vector >= Vector::Level1OnChipInterrupt as u8
+            && vector <= Vector::Level7OnChipInterrupt as u8
 }
 
 /// M68000 exception, with a vector number and a priority.
@@ -149,9 +150,10 @@ impl Ord for Exception {
 impl<CPU: CpuDetails> M68000<CPU> {
     /// Requests the CPU to process the given exception.
     pub fn exception(&mut self, ex: Exception) {
-        if ex.vector == Vector::ResetSspPc as u8 ||
-           ex.vector == Vector::Trace as u8 ||
-           ex.is_interrupt() {
+        if ex.vector == Vector::ResetSspPc as u8
+            || ex.vector == Vector::Trace as u8
+            || ex.is_interrupt()
+        {
             self.stop = false;
         }
 
@@ -160,8 +162,12 @@ impl<CPU: CpuDetails> M68000<CPU> {
 
     /// Resets the CPU by fetching the reset vectors.
     fn reset<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> usize {
-        self.regs.ssp.0 = memory.get_long(0).expect("An exception occured when reading initial SSP.");
-        self.regs.pc.0  = memory.get_long(4).expect("An exception occured when reading initial PC.");
+        self.regs.ssp.0 = memory
+            .get_long(0)
+            .expect("An exception occured when reading initial SSP.");
+        self.regs.pc.0 = memory
+            .get_long(4)
+            .expect("An exception occured when reading initial PC.");
         self.regs.sr.t = false;
         self.regs.sr.s = true;
         self.regs.sr.interrupt_mask = 7;
@@ -171,7 +177,10 @@ impl<CPU: CpuDetails> M68000<CPU> {
     }
 
     /// Attempts to process all the pending exceptions
-    pub(super) fn process_pending_exceptions<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M) -> usize {
+    pub(super) fn process_pending_exceptions<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+    ) -> usize {
         // TODO: use extract_if when stable.
         let mut to_process = Vec::new();
 
@@ -208,7 +217,10 @@ impl<CPU: CpuDetails> M68000<CPU> {
                 Err(e) => {
                     if e == ACCESS_ERROR {
                         if exception.vector == ACCESS_ERROR {
-                            panic!("An access error occured during access error processing (at {:#X})", self.regs.pc);
+                            panic!(
+                                "An access error occured during access error processing (at {:#X})",
+                                self.regs.pc
+                            );
                         }
 
                         if exception.is_interrupt() {
@@ -221,7 +233,7 @@ impl<CPU: CpuDetails> M68000<CPU> {
                     }
 
                     0
-                },
+                }
             };
         }
 
@@ -238,7 +250,11 @@ impl<CPU: CpuDetails> M68000<CPU> {
     ///
     /// TODO: the timing may not be perfect here. If two words can be pushed but not the third, then the time taken to push
     /// the first two words is not counted.
-    fn process_exception<M: MemoryAccess + ?Sized>(&mut self, memory: &mut M, vector: u8) -> InterpreterResult {
+    fn process_exception<M: MemoryAccess + ?Sized>(
+        &mut self,
+        memory: &mut M,
+        vector: u8,
+    ) -> InterpreterResult {
         let sr = self.regs.sr.into();
         self.regs.sr.t = false;
         self.regs.sr.s = true;
@@ -251,16 +267,18 @@ impl<CPU: CpuDetails> M68000<CPU> {
                 self.push_long(memory, self.regs.pc.0)?;
                 self.push_word(memory, sr)?;
 
-                if vector == 2 || vector == 3 { // TODO: Long format.
+                if vector == 2 || vector == 3 {
+                    // TODO: Long format.
                     self.push_word(memory, self.current_opcode)?;
                     self.push_long(memory, 0)?; // Access address
                     self.push_word(memory, 0)?; // function code
-                    // MC68000UM 6.3.9.1: It is the responsibility of the error handler routine
-                    // to clean up the stack and determine where to continue execution.
+                                                // MC68000UM 6.3.9.1: It is the responsibility of the error handler routine
+                                                // to clean up the stack and determine where to continue execution.
                 }
-            },
+            }
             StackFormat::SCC68070 => {
-                if vector == 2 || vector == 3 { // TODO: Long format.
+                if vector == 2 || vector == 3 {
+                    // TODO: Long format.
                     self.push_word(memory, 0)?; // Internal information
                     self.push_word(memory, self.current_opcode)?; // IRC
                     self.push_word(memory, self.current_opcode)?; // IR
@@ -272,13 +290,14 @@ impl<CPU: CpuDetails> M68000<CPU> {
                     self.push_word(memory, 0)?; // MM
                     self.push_word(memory, 0)?; // SSW
                     self.push_word(memory, 0xF000 | (vector as u16 * 4))?;
-                } else { // Short format
+                } else {
+                    // Short format
                     self.push_word(memory, vector as u16 * 4)?;
                 }
 
                 self.push_long(memory, self.regs.pc.0)?;
                 self.push_word(memory, sr)?;
-            },
+            }
         }
 
         self.regs.pc.0 = memory.get_long(vector as u32 * 4).ok_or(ACCESS_ERROR)?;

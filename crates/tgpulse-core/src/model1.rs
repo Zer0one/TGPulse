@@ -44,7 +44,9 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 impl From<crate::sound::SerialError> for Error {
-    fn from(e: crate::sound::SerialError) -> Self { Self::Serial(e) }
+    fn from(e: crate::sound::SerialError) -> Self {
+        Self::Serial(e)
+    }
 }
 
 pub const CPU_HZ: u32 = 16_000_000;
@@ -295,7 +297,9 @@ impl Model1System {
         if let Some(error) = self.ioboard.fault() {
             return Err(error.into());
         }
-        if let Some(error) = self.sound.serial_fault() { return Err(error.into()); }
+        if let Some(error) = self.sound.serial_fault() {
+            return Err(error.into());
+        }
         if let Some(error) = self.sound.dsb_fault() {
             return Err(error.into());
         }
@@ -347,7 +351,9 @@ impl Model1System {
 
             self.advance_timers(step as u32);
             self.sound.run(step, CPU_HZ);
-            if let Some(error) = self.sound.serial_fault() { return Err(error.into()); }
+            if let Some(error) = self.sound.serial_fault() {
+                return Err(error.into());
+            }
             if let Some(error) = self.sound.dsb_fault() {
                 return Err(error.into());
             }
@@ -1018,10 +1024,14 @@ mod persistence_tests {
         absent.write_u32(0xb00000, 0x12345678);
         assert_eq!(absent.read_u32(0xb00000), u32::MAX);
         roms.comm_board = true;
-        let mut sys = Model1System::with_config(&roms, Config {
-            cabinet: crate::config::Cabinet::Twin,
-            ..Config::default()
-        }).unwrap();
+        let mut sys = Model1System::with_config(
+            &roms,
+            Config {
+                cabinet: crate::config::Cabinet::Twin,
+                ..Config::default()
+            },
+        )
+        .unwrap();
         sys.write_u32(0xb00008, 0x12345678);
         assert_eq!(sys.read_u32(0xb00008), 0x12345678);
         sys.write_u16(0xb00ffe, 0xbeef);
@@ -1046,7 +1056,8 @@ mod persistence_tests {
         for (index, value) in [0x1234u32, 0x5678].into_iter().enumerate() {
             // Polygon upload, destination 0, length 1, then end-of-list.
             for (word, data) in [5u32, 0x800000, 1, value, 0xf].into_iter().enumerate() {
-                sys.display_list[index][word * 4..word * 4 + 4].copy_from_slice(&data.to_le_bytes());
+                sys.display_list[index][word * 4..word * 4 + 4]
+                    .copy_from_slice(&data.to_le_bytes());
             }
         }
         sys.trigger_vblank();
@@ -1063,7 +1074,14 @@ mod persistence_tests {
             for cabinet in [crate::config::Cabinet::Single, crate::config::Cabinet::Twin] {
                 let mut roms = empty_roms();
                 roms.comm_board = supported;
-                let mut sys = Model1System::with_config(&roms, Config { cabinet, ..Config::default() }).unwrap();
+                let mut sys = Model1System::with_config(
+                    &roms,
+                    Config {
+                        cabinet,
+                        ..Config::default()
+                    },
+                )
+                .unwrap();
                 let fitted = supported && cabinet == crate::config::Cabinet::Twin;
                 assert_eq!(sys.comm.is_some(), fitted);
                 let (bl, el) = sys.nvram_sizes();
@@ -1231,7 +1249,10 @@ mod persistence_tests {
         sys.raise_irq(1);
         sys.run_slice(64).unwrap();
         assert_eq!(sys.main_cpu.irq_taken, 2);
-        assert_eq!((sys.last_irq, sys.main_cpu.irq_vector, sys.irq_status), (3, 3, 0));
+        assert_eq!(
+            (sys.last_irq, sys.main_cpu.irq_vector, sys.irq_status),
+            (3, 3, 0)
+        );
         assert!(sys.main_cpu.halted);
         assert_eq!(sys.main_cpu.pc(), 2);
     }
@@ -1364,8 +1385,11 @@ mod persistence_tests {
                 }
                 assert_eq!(split.tgp_cpu.pc, 321, "ALU {alu}, chunk {chunk}");
                 assert_eq!(split.tgp_clock_remainder, whole.tgp_clock_remainder);
-                assert_eq!(bincode::serialize(&split.tgp_cpu).unwrap(),
-                    bincode::serialize(&whole.tgp_cpu).unwrap(), "ALU {alu}, chunk {chunk}");
+                assert_eq!(
+                    bincode::serialize(&split.tgp_cpu).unwrap(),
+                    bincode::serialize(&whole.tgp_cpu).unwrap(),
+                    "ALU {alu}, chunk {chunk}"
+                );
                 // Three more TGP clocks execute two instructions, carrying -1.
                 split.run_slice(1).unwrap();
                 assert_eq!((split.tgp_cpu.pc, split.tgp_cpu.icount), (323, -1));
@@ -1386,15 +1410,27 @@ mod persistence_tests {
         sys.tgp_program = vec![8 << 21; 1024]; // two-cycle FML
         sys.tgp_program[0] = 0; // one-cycle LAB, so the first slice overshoots
         sys.run_slice(1).unwrap();
-        assert_eq!((sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder), (2, -1, 1));
+        assert_eq!(
+            (sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder),
+            (2, -1, 1)
+        );
         sys.copro_fifo_out.extend([0; 17]); // external HALT
         sys.run_slice(1).unwrap();
-        assert_eq!((sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder), (2, 0, 0));
+        assert_eq!(
+            (sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder),
+            (2, 0, 0)
+        );
         sys.run_slice(65).unwrap();
-        assert_eq!((sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder), (2, 0, 1));
+        assert_eq!(
+            (sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder),
+            (2, 0, 1)
+        );
         sys.copro_fifo_out.clear();
         sys.run_slice(1).unwrap(); // only the new three clocks, no HALT-time burst
-        assert_eq!((sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder), (4, -1, 0));
+        assert_eq!(
+            (sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder),
+            (4, -1, 0)
+        );
     }
 
     #[test]
@@ -1416,7 +1452,11 @@ mod persistence_tests {
 
     #[test]
     fn fifo_empty_in_retries_without_committing_zero_and_resumes_on_data() {
-        for (opcode, expected) in [(0x20, 0xaabb_cc78), (0x22, 0xaabb_5678), (0x24, 0x1234_5678)] {
+        for (opcode, expected) in [
+            (0x20, 0xaabb_cc78),
+            (0x22, 0xaabb_5678),
+            (0x24, 0x1234_5678),
+        ] {
             let mut roms = empty_roms();
             // IN.B/H/W absolute 0xd80000,R0, followed by HALT.
             roms.maincpu = vec![opcode, 0x20, 0xf3, 0, 0, 0xd8, 0, 0];
@@ -1540,7 +1580,11 @@ mod persistence_tests {
     #[test]
     fn all_dpram_boards_charge_only_cpu_low_byte_reads() {
         let mut roms = empty_roms();
-        for kind in [crate::model1board::Kind::Original, crate::model1board::Kind::WingWar, crate::model1board::Kind::WingWarR360] {
+        for kind in [
+            crate::model1board::Kind::Original,
+            crate::model1board::Kind::WingWar,
+            crate::model1board::Kind::WingWarR360,
+        ] {
             roms.ioboard_kind = kind;
             roms.iocpu = vec![0; 0x10000];
             let mut sys = Model1System::new(&roms).unwrap();

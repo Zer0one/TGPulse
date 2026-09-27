@@ -14,16 +14,16 @@ impl CpuDetails for Scc68070 {
     const VECTOR_RESET: usize = 43;
     fn vector_execution_time(vector: u8) -> usize {
         match vector {
-            2 => 158, // Access Error
-            3 => 158, // Address Error
-            4 => 55, // Illegal
-            5 => 64, // Zero Divide
-            6 => 64, // Chk
-            7 => 55, // Trapv
-            8 => 55, // Privilege Violation
-            9 => 55, // Trace
-            24..=31 => 65, // Interrupt
-            32..=47 => 52, // Trap
+            2 => 158,                // Access Error
+            3 => 158,                // Address Error
+            4 => 55,                 // Illegal
+            5 => 64,                 // Zero Divide
+            6 => 64,                 // Chk
+            7 => 55,                 // Trapv
+            8 => 55,                 // Privilege Violation
+            9 => 55,                 // Trace
+            24..=31 => 65,           // Interrupt
+            32..=47 => 52,           // Trap
             _ => Self::VECTOR_RESET, // TODO: what to return with the other vectors?
         }
     }

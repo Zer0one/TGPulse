@@ -44,21 +44,68 @@ mod tests {
         std::fs::create_dir_all(dir.join("profiles")).unwrap();
         std::fs::create_dir_all(dir.join("sets")).unwrap();
         std::fs::write(dir.join("sets/vr.zip"), []).unwrap();
-        std::fs::write(dir.join("profiles/master.conf"), "volume = 20\nnvram = saves/master.nv\nmodel1_port_in = 25001\n").unwrap();
-        let args = ["--volume", "75", "--config", "profiles/master.conf", "--roms", "sets", "vr"];
-        let parsed = parse_profile(args.map(String::from).to_vec(), dir.clone(), dir.join("unused.conf")).unwrap();
+        std::fs::write(
+            dir.join("profiles/master.conf"),
+            "volume = 20\nnvram = saves/master.nv\nmodel1_port_in = 25001\n",
+        )
+        .unwrap();
+        let args = [
+            "--volume",
+            "75",
+            "--config",
+            "profiles/master.conf",
+            "--roms",
+            "sets",
+            "vr",
+        ];
+        let parsed = parse_profile(
+            args.map(String::from).to_vec(),
+            dir.clone(),
+            dir.join("unused.conf"),
+        )
+        .unwrap();
         assert_eq!(parsed.config.volume, 75);
         assert_eq!(parsed.config.rom_dir, dir.join("sets"));
         assert_eq!(parsed.profile.path, dir.join("profiles/master.conf"));
         assert_eq!(parsed.profile.settings.network.port_in, 25001);
-        assert_eq!(parsed.profile.nvram_file().unwrap().0, dir.join("saves/master.nv"));
-        assert!(matches!(parsed.command, Command::Run { rom: Some(p), .. } if p == dir.join("sets/vr.zip")));
+        assert_eq!(
+            parsed.profile.nvram_file().unwrap().0,
+            dir.join("saves/master.nv")
+        );
+        assert!(
+            matches!(parsed.command, Command::Run { rom: Some(p), .. } if p == dir.join("sets/vr.zip"))
+        );
         let direct = parse_from_at(vec!["sets/vr.zip".into()], Config::default(), &dir).unwrap();
-        assert!(matches!(direct.command, Command::Run { rom: Some(p), .. } if p == dir.join("sets/vr.zip")));
-        let debug = parse_from_at(["--debug", "sets/vr.zip", "-f", "script.txt"].map(String::from).to_vec(), Config::default(), &dir).unwrap();
-        assert!(matches!(debug.command, Command::Debug { script: Script::File(p), .. } if p == dir.join("script.txt")));
-        for args in [vec!["--config", "missing.conf"], vec!["--config", "profiles/master.conf"], vec!["--config", "profiles/master.conf", "--config", "profiles/master.conf"]] {
-            assert!(parse_profile(args.into_iter().map(String::from).collect(), dir.clone(), dir.join("unused.conf")).is_err());
+        assert!(
+            matches!(direct.command, Command::Run { rom: Some(p), .. } if p == dir.join("sets/vr.zip"))
+        );
+        let debug = parse_from_at(
+            ["--debug", "sets/vr.zip", "-f", "script.txt"]
+                .map(String::from)
+                .to_vec(),
+            Config::default(),
+            &dir,
+        )
+        .unwrap();
+        assert!(
+            matches!(debug.command, Command::Debug { script: Script::File(p), .. } if p == dir.join("script.txt"))
+        );
+        for args in [
+            vec!["--config", "missing.conf"],
+            vec!["--config", "profiles/master.conf"],
+            vec![
+                "--config",
+                "profiles/master.conf",
+                "--config",
+                "profiles/master.conf",
+            ],
+        ] {
+            assert!(parse_profile(
+                args.into_iter().map(String::from).collect(),
+                dir.clone(),
+                dir.join("unused.conf")
+            )
+            .is_err());
         }
         assert!(!dir.join("unused.conf").exists());
         std::fs::remove_dir_all(dir).unwrap();
@@ -182,7 +229,8 @@ pub struct Args {
 /// Parses `std::env::args`. The error is a message ready to print.
 pub fn parse() -> Result<Args, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let launch_dir = std::env::var_os("TGPULSE_LAUNCH_DIR").map(PathBuf::from)
+    let launch_dir = std::env::var_os("TGPULSE_LAUNCH_DIR")
+        .map(PathBuf::from)
         .unwrap_or(std::env::current_dir().map_err(|e| e.to_string())?);
     if !launch_dir.is_absolute() || !launch_dir.is_dir() {
         return Err("TGPULSE_LAUNCH_DIR must name an existing absolute directory".into());
@@ -190,7 +238,11 @@ pub fn parse() -> Result<Args, String> {
     parse_profile(args, launch_dir, crate::settings::Settings::path())
 }
 
-fn parse_profile(args: Vec<String>, launch_dir: PathBuf, default_path: PathBuf) -> Result<Args, String> {
+fn parse_profile(
+    args: Vec<String>,
+    launch_dir: PathBuf,
+    default_path: PathBuf,
+) -> Result<Args, String> {
     use crate::settings::{Profile, Settings};
     // Skip values of other options: an inline debugger command named --config
     // must not be mistaken for a profile selector.
@@ -201,12 +253,24 @@ fn parse_profile(args: Vec<String>, launch_dir: PathBuf, default_path: PathBuf) 
             "--config" => {
                 i += 1;
                 let value = args.get(i).ok_or("--config needs a value")?;
-                if selected.is_some() { return Err("--config may be specified only once".into()); }
+                if selected.is_some() {
+                    return Err("--config may be specified only once".into());
+                }
                 selected = Some(launch_dir.join(value));
             }
-            "--roms" | "--rom" | "-c" | "-f" | "--cabinet" | "--ssaa" | "--volume" |
-            "--rumble" | "--smooth-shadows" | "--widescreen" | "--widescreen-stretch-2d" | "--fullscreen" => i += 1,
-            _ => {},
+            "--roms"
+            | "--rom"
+            | "-c"
+            | "-f"
+            | "--cabinet"
+            | "--ssaa"
+            | "--volume"
+            | "--rumble"
+            | "--smooth-shadows"
+            | "--widescreen"
+            | "--widescreen-stretch-2d"
+            | "--fullscreen" => i += 1,
+            _ => {}
         }
         i += 1;
     }
@@ -226,15 +290,26 @@ fn parse_profile(args: Vec<String>, launch_dir: PathBuf, default_path: PathBuf) 
     let explicit = selected.is_some();
     let path = selected.unwrap_or(default_path);
     let settings = if explicit {
-        std::fs::read_to_string(&path).map_err(|e| format!("cannot read config {}: {e}", path.display()))?;
+        std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read config {}: {e}", path.display()))?;
         Settings::load(&path)
-    } else if !headless { Settings::load_or_create(&path) } else { Settings::default() };
-    if !headless || explicit { settings.apply_to(&mut base); }
+    } else if !headless {
+        Settings::load_or_create(&path)
+    } else {
+        Settings::default()
+    };
+    if !headless || explicit {
+        settings.apply_to(&mut base);
+    }
     let mut parsed = parse_from_at(args, base, &launch_dir)?;
     if settings.nvram.is_some() && matches!(parsed.command, Command::Run { rom: None, .. }) {
         return Err("a profile with nvram requires a romset on the command line".into());
     }
-    parsed.profile = Profile { path, settings, launch_dir };
+    parsed.profile = Profile {
+        path,
+        settings,
+        launch_dir,
+    };
     Ok(parsed)
 }
 
@@ -243,7 +318,11 @@ fn parse_from(args: Vec<String>, config: Config) -> Result<Args, String> {
     parse_from_at(args, config, &std::env::current_dir().unwrap())
 }
 
-fn parse_from_at(args: Vec<String>, mut config: Config, launch_dir: &std::path::Path) -> Result<Args, String> {
+fn parse_from_at(
+    args: Vec<String>,
+    mut config: Config,
+    launch_dir: &std::path::Path,
+) -> Result<Args, String> {
     let mut rom: Option<String> = None;
     let mut list = false;
     let mut debug = false;
@@ -262,7 +341,9 @@ fn parse_from_at(args: Vec<String>, mut config: Config, launch_dir: &std::path::
                 .ok_or_else(|| format!("{arg} needs a value"))
         };
         match arg {
-            "--config" => { next(&mut i)?; }
+            "--config" => {
+                next(&mut i)?;
+            }
             "--roms" => config.rom_dir = launch_dir.join(next(&mut i)?),
             "--rom" => rom = Some(next(&mut i)?),
             "--list" => list = true,
@@ -342,7 +423,11 @@ fn parse_from_at(args: Vec<String>, mut config: Config, launch_dir: &std::path::
         Command::Run { rom, panels }
     };
 
-    Ok(Args { command, config, profile: Default::default() })
+    Ok(Args {
+        command,
+        config,
+        profile: Default::default(),
+    })
 }
 
 /// Accepts either a path to an archive or a short set name to look up in the

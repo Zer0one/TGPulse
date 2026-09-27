@@ -99,8 +99,22 @@ impl StatusRegister {
     }
 
     const CONDITIONS: [fn(&Self) -> bool; 16] = [
-        Self::t,  Self::f,  Self::hi, Self::ls, Self::cc, Self::cs, Self::ne, Self::eq,
-        Self::vc, Self::vs, Self::pl, Self::mi, Self::ge, Self::lt, Self::gt, Self::le,
+        Self::t,
+        Self::f,
+        Self::hi,
+        Self::ls,
+        Self::cc,
+        Self::cs,
+        Self::ne,
+        Self::eq,
+        Self::vc,
+        Self::vs,
+        Self::pl,
+        Self::mi,
+        Self::ge,
+        Self::lt,
+        Self::gt,
+        Self::le,
     ];
 
     /// Tests the given condition from the raw bits of conditional instructions.
@@ -142,14 +156,14 @@ impl From<u16> for StatusRegister {
 
 impl From<StatusRegister> for u16 {
     fn from(sr: StatusRegister) -> u16 {
-        (sr.t as u16) << 15 |
-        (sr.s as u16) << 13 |
-        (sr.interrupt_mask as u16) << 8 |
-        (sr.x as u16) << 4 |
-        (sr.n as u16) << 3 |
-        (sr.z as u16) << 2 |
-        (sr.v as u16) << 1 |
-        (sr.c as u16)
+        (sr.t as u16) << 15
+            | (sr.s as u16) << 13
+            | (sr.interrupt_mask as u16) << 8
+            | (sr.x as u16) << 4
+            | (sr.n as u16) << 3
+            | (sr.z as u16) << 2
+            | (sr.v as u16) << 1
+            | (sr.c as u16)
     }
 }
 
@@ -194,16 +208,16 @@ impl std::ops::BitXorAssign<u16> for StatusRegister {
 
 pub(super) fn disassemble_conditional_test(test: u8) -> &'static str {
     match test {
-        0  => "T",
-        1  => "F",
-        2  => "HI",
-        3  => "LS",
-        4  => "CC",
-        5  => "CS",
-        6  => "NE",
-        7  => "EQ",
-        8  => "VC",
-        9  => "VS",
+        0 => "T",
+        1 => "F",
+        2 => "HI",
+        3 => "LS",
+        4 => "CC",
+        5 => "CS",
+        6 => "NE",
+        7 => "EQ",
+        8 => "VC",
+        9 => "VS",
         10 => "PL",
         11 => "MI",
         12 => "GE",

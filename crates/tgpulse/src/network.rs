@@ -419,7 +419,10 @@ mod tests {
         let rom = std::env::var("TGPULSE_MODEL1_ROM").expect("TGPULSE_MODEL1_ROM");
         eprintln!("Model 1 link probe ROM={rom}");
         let roms = loader::load_model1_zip(&rom).unwrap();
-        let mut fixtures = vec![("TGPULSE_MODEL1_MASTER_NVRAM", 1), ("TGPULSE_MODEL1_SLAVE_NVRAM", 2)];
+        let mut fixtures = vec![
+            ("TGPULSE_MODEL1_MASTER_NVRAM", 1),
+            ("TGPULSE_MODEL1_SLAVE_NVRAM", 2),
+        ];
         if std::env::var_os("TGPULSE_MODEL1_LIVE_NVRAM").is_some() {
             // MAME's relay participates in the ring but takes no player ID
             // and does not increment the participant count.
@@ -429,10 +432,14 @@ mod tests {
             .iter()
             .map(|(variable, _)| {
                 let nv = std::fs::read(std::env::var(variable).expect(variable)).unwrap();
-                let mut s = Model1System::with_config(&roms, tgpulse_core::config::Config {
-                    cabinet: tgpulse_core::config::Cabinet::Twin,
-                    ..Default::default()
-                }).unwrap();
+                let mut s = Model1System::with_config(
+                    &roms,
+                    tgpulse_core::config::Config {
+                        cabinet: tgpulse_core::config::Cabinet::Twin,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
                 let (a, b) = s.nvram_sizes();
                 let (a, b) = nvram::decode(&nv, a, b).unwrap();
                 s.set_nvram_blocks(&a, &b);
@@ -440,10 +447,15 @@ mod tests {
             })
             .collect();
         let listeners: Vec<_> = (0..systems.len())
-            .map(|_| TcpListener::bind("127.0.0.1:0").unwrap()).collect();
+            .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
+            .collect();
         let addresses: Vec<_> = listeners.iter().map(|s| s.local_addr().unwrap()).collect();
-        let mut nets: Vec<_> = listeners.into_iter().enumerate()
-            .map(|(i, listener)| Network::start(listener, addresses[(i + 1) % addresses.len()]).unwrap())
+        let mut nets: Vec<_> = listeners
+            .into_iter()
+            .enumerate()
+            .map(|(i, listener)| {
+                Network::start(listener, addresses[(i + 1) % addresses.len()]).unwrap()
+            })
             .collect();
         let mut linked_frames = 0;
         for frame in 0..2400 {
@@ -481,7 +493,12 @@ mod tests {
         if linked_frames < 600 {
             for ((variable, _), sys) in fixtures.iter().zip(&systems) {
                 let board = sys.comm.as_ref().unwrap();
-                eprintln!("{variable}: CN={:02x} FG={:02x} EEPROM={:02x?}", board.cn_read(), board.fg_read(), sys.nvram_blocks().1);
+                eprintln!(
+                    "{variable}: CN={:02x} FG={:02x} EEPROM={:02x?}",
+                    board.cn_read(),
+                    board.fg_read(),
+                    sys.nvram_blocks().1
+                );
             }
         }
         assert!(

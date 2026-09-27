@@ -449,7 +449,10 @@ mod tests {
                 .iter()
                 .filter(|l| l.region == "ioboard:iocpu")
                 .collect();
-            if matches!(crate::model1board::Kind::for_set(&game.name), crate::model1board::Kind::WingWar | crate::model1board::Kind::WingWarR360) {
+            if matches!(
+                crate::model1board::Kind::for_set(&game.name),
+                crate::model1board::Kind::WingWar | crate::model1board::Kind::WingWarR360
+            ) {
                 assert_eq!(firmware.len(), 1);
                 assert_eq!(firmware[0].file, "epr-16891.6");
                 assert_eq!(firmware[0].len, 0x10000);

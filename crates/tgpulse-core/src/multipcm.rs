@@ -684,8 +684,18 @@ mod state_tests {
         // Instrument zero in banked ROM: 64-sample loop, immediate attack,
         // sustained envelope, release enabled, pitch and amplitude LFOs.
         rom[..12].copy_from_slice(&[
-            if packed { 0x50 } else { 0x10 }, 1, 0, 0, 0, 0xff, 0xc0,
-            0x2b, 0xf0, 0, 0xfe, 3,
+            if packed { 0x50 } else { 0x10 },
+            1,
+            0,
+            0,
+            0,
+            0xff,
+            0xc0,
+            0x2b,
+            0xf0,
+            0,
+            0xfe,
+            3,
         ]);
         for i in 0..96 {
             rom[0x200100 + i] = (i as i16 * 7 - 96) as u8;
@@ -708,19 +718,28 @@ mod state_tests {
     fn serialized_active_voice_restores_samples_lfos_loop_and_release() {
         for packed in [false, true] {
             let mut original = fixture(packed);
-            for _ in 0..137 { original.generate(); }
+            for _ in 0..137 {
+                original.generate();
+            }
             assert!(original.slots[0].playing);
             assert_ne!(original.slots[0].offset, 0);
             assert_ne!(original.slots[0].pitch_lfo.phase, 0);
             assert_ne!(original.slots[0].amplitude_lfo.phase, 0);
             let blob = bytes(&original);
-            assert!(blob.len() < 16384, "ROM and lookup tables must not be stored");
+            assert!(
+                blob.len() < 16384,
+                "ROM and lookup tables must not be stored"
+            );
             let state: State = bincode::deserialize(&blob).unwrap();
             let mut restored = fixture(packed);
             restored.set_bank(0);
             reg(&mut restored, 4, 0);
             restored.restore(&state).unwrap();
-            assert_eq!(bytes(&restored), blob, "restore must not replay writes/key-on");
+            assert_eq!(
+                bytes(&restored),
+                blob,
+                "restore must not replay writes/key-on"
+            );
             let mut nonzero = false;
             for index in 0..4096 {
                 if index == 1024 {
@@ -733,7 +752,11 @@ mod state_tests {
                 }
                 let expected = original.generate();
                 nonzero |= expected != (0, 0);
-                assert_eq!(restored.generate(), expected, "packed={packed} sample={index}");
+                assert_eq!(
+                    restored.generate(),
+                    expected,
+                    "packed={packed} sample={index}"
+                );
             }
             assert!(nonzero);
             assert_eq!(bytes(&original), bytes(&restored));
@@ -743,7 +766,9 @@ mod state_tests {
     #[test]
     fn invalid_snapshot_rejection_is_atomic() {
         let mut chip = fixture(false);
-        for _ in 0..73 { chip.generate(); }
+        for _ in 0..73 {
+            chip.generate();
+        }
         let before = bytes(&chip);
         for field in 0..11 {
             let mut bad = chip.snapshot();

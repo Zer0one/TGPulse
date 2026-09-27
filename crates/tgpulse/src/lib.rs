@@ -82,7 +82,13 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
         ..Default::default()
     };
     storage::set_reverse_landscape(config.reverse_landscape);
-    if let Err(e) = app::run_with(event_loop, config, None, gui::StartupPanels::default(), profile) {
+    if let Err(e) = app::run_with(
+        event_loop,
+        config,
+        None,
+        gui::StartupPanels::default(),
+        profile,
+    ) {
         log::error!(target: "app", "{e}");
     }
 }

@@ -1,6 +1,5 @@
 use super::*;
 
-
 pub(super) fn write(chip: &mut Ym3438, register: u16, value: u8) {
     let port = ((register >> 8) * 2) as u8;
     chip.write(port, register as u8);

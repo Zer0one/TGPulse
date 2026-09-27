@@ -4,10 +4,10 @@
 
 //! Addressing mode-related structs, enums and functions.
 
-use crate::{CpuDetails, M68000, MemoryAccess};
-use crate::memory_access::MemoryIter;
 use crate::instruction::Size;
+use crate::memory_access::MemoryIter;
 use crate::utils::{bit, bits};
+use crate::{CpuDetails, MemoryAccess, M68000};
 
 /// Addressing modes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,34 +45,93 @@ pub enum AddressingMode {
 
 impl AddressingMode {
     /// New addressing mode from memory iterator.
-    pub fn from_memory<M: MemoryAccess + ?Sized>(mode: u16, reg: u8, size: Option<Size>, memory: &mut MemoryIter<M>) -> Self {
+    pub fn from_memory<M: MemoryAccess + ?Sized>(
+        mode: u16,
+        reg: u8,
+        size: Option<Size>,
+        memory: &mut MemoryIter<M>,
+    ) -> Self {
         match mode {
             0 => Self::Drd(reg),
             1 => Self::Ard(reg),
             2 => Self::Ari(reg),
             3 => Self::Ariwpo(reg),
             4 => Self::Ariwpr(reg),
-            5 => Self::Ariwd(reg, memory.next().unwrap().expect("An Access Error occured in Ariwd.") as i16),
-            6 => Self::Ariwi8(reg, BriefExtensionWord(memory.next().unwrap().expect("An Access Error occured in Ariwi8."))),
+            5 => Self::Ariwd(
+                reg,
+                memory
+                    .next()
+                    .unwrap()
+                    .expect("An Access Error occured in Ariwd.") as i16,
+            ),
+            6 => Self::Ariwi8(
+                reg,
+                BriefExtensionWord(
+                    memory
+                        .next()
+                        .unwrap()
+                        .expect("An Access Error occured in Ariwi8."),
+                ),
+            ),
             7 => match reg {
-                0 => Self::AbsShort(memory.next().unwrap().expect("An Access Error occured in AbsShort.")),
+                0 => Self::AbsShort(
+                    memory
+                        .next()
+                        .unwrap()
+                        .expect("An Access Error occured in AbsShort."),
+                ),
                 1 => {
-                    let high = (memory.next().unwrap().expect("An Access Error occured in AbsLong high.") as u32) << 16;
-                    let low = memory.next().unwrap().expect("An Access Error occured in AbsLong low.") as u32;
+                    let high = (memory
+                        .next()
+                        .unwrap()
+                        .expect("An Access Error occured in AbsLong high.")
+                        as u32)
+                        << 16;
+                    let low = memory
+                        .next()
+                        .unwrap()
+                        .expect("An Access Error occured in AbsLong low.")
+                        as u32;
                     Self::AbsLong(high | low)
-                },
-                2 => Self::Pciwd(memory.next_addr, memory.next().unwrap().expect("An Access Error occured in Pciwd.") as i16),
-                3 => Self::Pciwi8(memory.next_addr, BriefExtensionWord(memory.next().unwrap().expect("An Access Error occured in Pciwi8."))),
+                }
+                2 => Self::Pciwd(
+                    memory.next_addr,
+                    memory
+                        .next()
+                        .unwrap()
+                        .expect("An Access Error occured in Pciwd.") as i16,
+                ),
+                3 => Self::Pciwi8(
+                    memory.next_addr,
+                    BriefExtensionWord(
+                        memory
+                            .next()
+                            .unwrap()
+                            .expect("An Access Error occured in Pciwi8."),
+                    ),
+                ),
                 4 => {
                     if size.unwrap().is_long() {
-                        let high = (memory.next().unwrap().expect("An Access Error occured in Immediate high.") as u32) << 16;
-                        let low = memory.next().unwrap().expect("An Access Error occured in Immediate low.") as u32;
+                        let high = (memory
+                            .next()
+                            .unwrap()
+                            .expect("An Access Error occured in Immediate high.")
+                            as u32)
+                            << 16;
+                        let low = memory
+                            .next()
+                            .unwrap()
+                            .expect("An Access Error occured in Immediate low.")
+                            as u32;
                         Self::Immediate(high | low)
                     } else {
-                        let low = memory.next().unwrap().expect("An Access Error occured in Immediate.");
+                        let low = memory
+                            .next()
+                            .unwrap()
+                            .expect("An Access Error occured in Immediate.");
                         Self::Immediate(low as u32)
                     }
-                },
+                }
                 _ => panic!("[AddressingMode::from_memory] Wrong register {reg}"),
             },
             _ => panic!("[AddressingMode::from_memory] Wrong mode {mode}"),
@@ -88,7 +147,7 @@ impl AddressingMode {
             AddressingMode::Ari(reg) => Some(reg),
             AddressingMode::Ariwpo(reg) => Some(reg),
             AddressingMode::Ariwpr(reg) => Some(reg),
-            AddressingMode::Ariwd(reg, _)  => Some(reg),
+            AddressingMode::Ariwd(reg, _) => Some(reg),
             AddressingMode::Ariwi8(reg, _) => Some(reg),
             _ => None,
         }
@@ -146,7 +205,9 @@ impl AddressingMode {
             AddressingMode::Ariwd(reg, disp) => (5 << 3 | reg as u16, Box::new([disp as u16])),
             AddressingMode::Ariwi8(reg, bew) => (6 << 3 | reg as u16, Box::new([bew.0])),
             AddressingMode::AbsShort(addr) => (7 << 3, Box::new([addr])),
-            AddressingMode::AbsLong(addr) => (7 << 3 | 1, Box::new([(addr >> 16) as u16, addr as u16])),
+            AddressingMode::AbsLong(addr) => {
+                (7 << 3 | 1, Box::new([(addr >> 16) as u16, addr as u16]))
+            }
             AddressingMode::Pciwd(_, disp) => (7 << 3 | 2, Box::new([disp as u16])),
             AddressingMode::Pciwi8(_, bew) => (7 << 3 | 3, Box::new([bew.0])),
             AddressingMode::Immediate(imm) => {
@@ -155,7 +216,7 @@ impl AddressingMode {
                 } else {
                     (7 << 3 | 4, Box::new([imm as u16]))
                 }
-            },
+            }
         }
     }
 
@@ -172,10 +233,15 @@ impl AddressingMode {
             AddressingMode::Ari(reg) => ((reg as u16) << 9 | 2 << 6, Box::new([])),
             AddressingMode::Ariwpo(reg) => ((reg as u16) << 9 | 3 << 6, Box::new([])),
             AddressingMode::Ariwpr(reg) => ((reg as u16) << 9 | 4 << 6, Box::new([])),
-            AddressingMode::Ariwd(reg, disp) => ((reg as u16) << 9 | 5 << 6, Box::new([disp as u16])),
+            AddressingMode::Ariwd(reg, disp) => {
+                ((reg as u16) << 9 | 5 << 6, Box::new([disp as u16]))
+            }
             AddressingMode::Ariwi8(reg, bew) => ((reg as u16) << 9 | 6 << 6, Box::new([bew.0])),
             AddressingMode::AbsShort(addr) => (7 << 6, Box::new([addr])),
-            AddressingMode::AbsLong(addr) => (1 << 9 | 7 << 6, Box::new([(addr >> 16) as u16, addr as u16])),
+            AddressingMode::AbsLong(addr) => (
+                1 << 9 | 7 << 6,
+                Box::new([(addr >> 16) as u16, addr as u16]),
+            ),
             _ => panic!("{self:?} mode cannot be used as a destination mode."),
         }
     }
@@ -192,7 +258,7 @@ impl AddressingMode {
             AddressingMode::Ariwpo(reg) => reg <= 7 && modes.contains(&3),
             AddressingMode::Ariwpr(reg) => reg <= 7 && modes.contains(&4),
             AddressingMode::Ariwd(reg, _) => reg <= 7 && modes.contains(&5),
-            AddressingMode::Ariwi8(reg,_) => reg <= 7 && modes.contains(&6),
+            AddressingMode::Ariwi8(reg, _) => reg <= 7 && modes.contains(&6),
             AddressingMode::AbsShort(_) => modes.contains(&7) && regs.contains(&0),
             AddressingMode::AbsLong(_) => modes.contains(&7) && regs.contains(&1),
             AddressingMode::Pciwd(_, _) => modes.contains(&7) && regs.contains(&2),
@@ -319,50 +385,64 @@ impl<CPU: CpuDetails> M68000<CPU> {
     ///
     /// If the address has already been calculated (`ea.address` is Some), it is returned and no computation is performed.
     /// Otherwise the address is computed and assigned to `ea.address` and returned, or panic if the addressing mode is not in memory.
-    pub(super) fn get_effective_address(&mut self, ea: &mut EffectiveAddress, exec_time: &mut usize) -> u32 {
+    pub(super) fn get_effective_address(
+        &mut self,
+        ea: &mut EffectiveAddress,
+        exec_time: &mut usize,
+    ) -> u32 {
         if ea.address.is_none() {
             ea.address = match ea.mode {
                 AddressingMode::Ari(reg) => {
                     *exec_time += CPU::EA_ARI;
                     Some(self.regs.a(reg))
-                },
+                }
                 AddressingMode::Ariwpo(reg) => {
                     *exec_time += CPU::EA_ARIWPO;
                     Some(self.ariwpo(reg, ea.size.expect("ariwpo must have a size")))
-                },
+                }
                 AddressingMode::Ariwpr(reg) => {
                     *exec_time += CPU::EA_ARIWPR;
                     Some(self.ariwpr(reg, ea.size.expect("ariwpr must have a size")))
-                },
-                AddressingMode::Ariwd(reg, disp)  => {
+                }
+                AddressingMode::Ariwd(reg, disp) => {
                     *exec_time += CPU::EA_ARIWD;
                     Some(self.regs.a(reg).wrapping_add(disp as u32))
-                },
+                }
                 AddressingMode::Ariwi8(reg, bew) => {
                     *exec_time += CPU::EA_ARIWI8;
-                    Some(self.regs.a(reg).wrapping_add(bew.disp() as u32).wrapping_add(self.get_index_register(bew)))
-                },
+                    Some(
+                        self.regs
+                            .a(reg)
+                            .wrapping_add(bew.disp() as u32)
+                            .wrapping_add(self.get_index_register(bew)),
+                    )
+                }
                 AddressingMode::AbsShort(addr) => {
                     *exec_time += CPU::EA_ABSSHORT;
                     Some(addr as i16 as u32)
-                },
+                }
                 AddressingMode::AbsLong(addr) => {
                     *exec_time += CPU::EA_ABSLONG;
                     Some(addr)
-                },
+                }
                 AddressingMode::Pciwd(pc, disp) => {
                     *exec_time += CPU::EA_PCIWD;
                     Some(pc.wrapping_add(disp as u32))
-                },
+                }
                 AddressingMode::Pciwi8(pc, bew) => {
                     *exec_time += CPU::EA_PCIWI8;
-                    Some(pc.wrapping_add(bew.disp() as u32).wrapping_add(self.get_index_register(bew)))
-                },
+                    Some(
+                        pc.wrapping_add(bew.disp() as u32)
+                            .wrapping_add(self.get_index_register(bew)),
+                    )
+                }
                 _ => None,
             };
         }
 
-        ea.address.expect("[get_effective_address] Trying to read effective address of a value not in memory.")
+        ea.address.expect(
+            "[get_effective_address] Trying to read effective address of a value not in memory.",
+        )
     }
 
     const fn get_index_register(&self, bew: BriefExtensionWord) -> u32 {
@@ -372,13 +452,16 @@ impl<CPU: CpuDetails> M68000<CPU> {
         if bew.is_address_reg() {
             if long {
                 self.regs.a(reg)
-            } else { // Word
+            } else {
+                // Word
                 self.regs.a(reg) as i16 as u32
             }
-        } else { // Data register
+        } else {
+            // Data register
             if long {
                 self.regs.d[reg as usize].0
-            } else { // Word
+            } else {
+                // Word
                 self.regs.d[reg as usize].0 as i16 as u32
             }
         }

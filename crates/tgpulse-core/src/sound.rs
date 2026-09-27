@@ -33,10 +33,10 @@ mod dsb;
 mod fm;
 mod serial;
 mod state;
-pub use state::SoundState;
-pub use serial::SerialState;
 pub use crate::i8251::Error as SerialError;
 pub use dsb::DsbPathState;
+pub use serial::SerialState;
+pub use state::SoundState;
 #[cfg(test)]
 mod dsb_tests;
 use fm::FmPath;
@@ -297,7 +297,10 @@ mod mute_tests {
         reference.run(total as i32, 16_000_000);
         assert_eq!(reference.samples.len() as u64, expected_clocks / 224);
         assert_eq!(reference.remainder, 0);
-        assert_eq!(reference.main_fraction, total * u64::from(SND_CPU_HZ) % 16_000_000);
+        assert_eq!(
+            reference.main_fraction,
+            total * u64::from(SND_CPU_HZ) % 16_000_000
+        );
         assert!(reference.samples.iter().any(|s| *s != (0, 0)));
         for chunk in [1, 3, 64, 4097] {
             let mut sliced = sounding_board(0);
@@ -351,9 +354,8 @@ mod mute_tests {
         s.board.rom.resize(0x200, 0);
         s.board.rom[0x68..0x6c].copy_from_slice(&0x100u32.to_be_bytes());
         // IRQ2 handler: MOVE.B UART data,D0; STOP #$2700.
-        s.board.rom[0x100..0x10a].copy_from_slice(&[
-            0x10, 0x39, 0x00, 0xc2, 0x00, 0x01, 0x4e, 0x72, 0x27, 0x00,
-        ]);
+        s.board.rom[0x100..0x10a]
+            .copy_from_slice(&[0x10, 0x39, 0x00, 0xc2, 0x00, 0x01, 0x4e, 0x72, 0x27, 0x00]);
         s.board.uart_control(0x4e);
         s.board.uart_control(0x37);
         s.board.write8(0xc20003, 0x4e);
@@ -391,8 +393,10 @@ mod mute_tests {
         assert_eq!(state.conversion.time(), expected_sound_clocks * 2);
         assert_eq!(whole.samples.len() as u64, expected_sound_clocks / 224);
         assert_eq!(whole.samples, sliced.samples);
-        assert_eq!(bincode::serialize(&state).unwrap(),
-            bincode::serialize(&sliced.snapshot_dsb_path().unwrap()).unwrap());
+        assert_eq!(
+            bincode::serialize(&state).unwrap(),
+            bincode::serialize(&sliced.snapshot_dsb_path().unwrap()).unwrap()
+        );
         assert_eq!(whole.snapshot_fm_path(), sliced.snapshot_fm_path());
         assert!(whole.dsb_fault().is_none());
     }
@@ -595,13 +599,17 @@ impl SoundBoard {
 
     /// True while the driver has a byte waiting to be read back.
     pub fn uart_rx_ready(&self) -> bool {
-        if let Some(s) = &self.serial { return s.main.irq(); }
+        if let Some(s) = &self.serial {
+            return s.main.irq();
+        }
         self.tx.is_some()
     }
 
     /// True while the main board has a byte waiting for the driver.
     pub fn uart_rx_full(&self) -> bool {
-        if let Some(s) = &self.serial { return s.driver.irq(); }
+        if let Some(s) = &self.serial {
+            return s.driver.irq();
+        }
         !self.rx.is_empty()
     }
 
@@ -619,14 +627,22 @@ impl SoundBoard {
     }
 
     pub fn main_uart_read(&mut self) -> u8 {
-        self.serial.as_mut().map_or_else(|| self.tx.take().unwrap_or(0), |s| s.main.read())
+        self.serial
+            .as_mut()
+            .map_or_else(|| self.tx.take().unwrap_or(0), |s| s.main.read())
     }
     pub fn main_uart_status(&self) -> u8 {
-        self.serial.as_ref().map_or(5 | if self.tx.is_some() { 2 } else { 0 }, |s| s.main.status())
+        self.serial
+            .as_ref()
+            .map_or(5 | if self.tx.is_some() { 2 } else { 0 }, |s| {
+                s.main.status()
+            })
     }
 
     fn uart_status(&self) -> u8 {
-        if let Some(s) = &self.serial { return s.driver.status(); }
+        if let Some(s) = &self.serial {
+            return s.driver.status();
+        }
         let mut s = self
             .dsb
             .as_ref()
@@ -654,7 +670,9 @@ impl SoundBoard {
             // i8251: even register = data, odd = status (odd bytes of the word).
             0xc20001 => {
                 if let Some(s) = &mut self.serial {
-                    if s.driver.irq() { self.rx_read_count += 1; }
+                    if s.driver.irq() {
+                        self.rx_read_count += 1;
+                    }
                     return s.driver.read();
                 }
                 if !self.rx.is_empty() {
@@ -685,7 +703,9 @@ impl SoundBoard {
                 if let Some(s) = &mut self.serial {
                     let result = s.driver.write(val);
                     if result.is_ok() {
-                        if let Some(dsb) = &mut self.dsb { dsb.note_external_transmit(); }
+                        if let Some(dsb) = &mut self.dsb {
+                            dsb.note_external_transmit();
+                        }
                     }
                     s.latch(result);
                     return;
@@ -819,12 +839,18 @@ impl SoundSystem {
     /// Select at construction before running slices; Model 2 retains its HLE interface.
     pub(crate) fn enable_model1_serial(&mut self) {
         self.board.serial = Some(serial::SerialState::default());
-        if let Some(dsb) = &mut self.board.dsb { dsb.disconnect_sender(); }
+        if let Some(dsb) = &mut self.board.dsb {
+            dsb.disconnect_sender();
+        }
     }
     /// The wire/endpoints only; a full restore also needs CPU budgets and DSB state.
-    pub fn snapshot_serial(&self) -> Option<serial::SerialState> { self.board.serial.clone() }
+    pub fn snapshot_serial(&self) -> Option<serial::SerialState> {
+        self.board.serial.clone()
+    }
     pub fn restore_serial(&mut self, state: &serial::SerialState) -> Result<(), &'static str> {
-        if self.board.serial.is_none() || !state.valid() { return Err("invalid serial state"); }
+        if self.board.serial.is_none() || !state.valid() {
+            return Err("invalid serial state");
+        }
         self.board.serial = Some(state.clone());
         Ok(())
     }
@@ -983,13 +1009,19 @@ impl SoundSystem {
             while remaining > 0 {
                 let s = self.board.serial.as_ref().unwrap();
                 let step = remaining.min(s.to_edge());
-                if let Some(dsb) = &mut self.board.dsb { dsb.set_rx(s.driver.tx); }
+                if let Some(dsb) = &mut self.board.dsb {
+                    dsb.set_rx(s.driver.tx);
+                }
                 self.render_devices(step);
                 let s = self.board.serial.as_mut().unwrap();
-                for _ in 0..step { s.tick_sound(); }
+                for _ in 0..step {
+                    s.tick_sound();
+                }
                 remaining -= step;
             }
-        } else { self.render_devices(cycles); }
+        } else {
+            self.render_devices(cycles);
+        }
     }
     fn render_devices(&mut self, cycles: usize) {
         if self.board.dsb.is_some() {
@@ -1048,7 +1080,9 @@ impl SoundSystem {
 
     /// Runs the board for `i960_cycles` of main-board time.
     pub fn run(&mut self, i960_cycles: i32, i960_hz: u32) {
-        if self.serial_fault().is_some() { return; }
+        if self.serial_fault().is_some() {
+            return;
+        }
         if self.board.dsb.as_ref().is_some_and(|d| d.fault().is_some()) {
             return;
         }
@@ -1073,8 +1107,10 @@ impl SoundSystem {
             // inject a live RXRDY when it can be accepted by this instruction;
             // otherwise polling while masked would leave a phantom pending IRQ.
             if self.board.serial.as_ref().is_some_and(|s| s.driver.irq())
-                && self.cpu.regs.sr.interrupt_mask < 2 {
-                self.cpu.exception(Exception::from(Vector::Level2Interrupt as u8));
+                && self.cpu.regs.sr.interrupt_mask < 2
+            {
+                self.cpu
+                    .exception(Exception::from(Vector::Level2Interrupt as u8));
             }
             let reads_before = self.board.rx_read_count;
             let (used, exception) = self.cpu.interpreter_exception(&mut self.board);
@@ -1090,14 +1126,18 @@ impl SoundSystem {
             if used == 0 {
                 let rest = if self.board.serial.is_some() {
                     (self.remainder as usize).min(20)
-                } else { self.remainder as usize };
+                } else {
+                    self.remainder as usize
+                };
                 self.remainder -= rest as i64;
                 self.render_cycles(rest);
             } else {
                 self.remainder -= used as i64;
                 self.render_cycles(used);
             }
-            if self.serial_fault().is_some() || self.board.dsb.as_ref().is_some_and(|d| d.fault().is_some()) {
+            if self.serial_fault().is_some()
+                || self.board.dsb.as_ref().is_some_and(|d| d.fault().is_some())
+            {
                 break;
             }
         }
