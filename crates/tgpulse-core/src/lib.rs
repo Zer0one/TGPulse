@@ -8,6 +8,7 @@
 pub mod config;
 pub mod debugger;
 pub mod dsbz80;
+mod i8251;
 pub mod eeprom93c46;
 pub mod geometry;
 pub mod library;

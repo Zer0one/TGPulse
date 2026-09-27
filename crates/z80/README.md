@@ -5,15 +5,18 @@ Based on the already-used crates.io `z80` **1.0.2** by Kirjava:
 license and authors. It was copied from the existing Cargo cache, not downloaded
 or installed. Keep unrelated opcode code unformatted to make the delta readable.
 
-This separately named package is used by `model1io2::IoBoard`, with synthetic
-CPU/bus tests and bounded isolated firmware probes. The advanced board is
-selected for Wing War World/US/Japan; R360 and NetMerc remain separate milestones.
-See the board integration contract for the observed boot and gameplay limits.
-The original registry `z80` dependency remains in use by `model1io.rs`.
-Do not silently redirect existing consumers to this copy. Consolidation after
-board-2 validation is tracked in [the roadmap](../../docs/MODEL1_ROADMAP.md).
-The user selected this adaptation for the upcoming Star Wars DSB and as the
-destination of final consolidation; neither implies that migration is done.
+After consolidation the local package is named `z80` (formerly `tgpulse-z80`).
+Dependencies use an explicit path to this directory, not the registry package.
+This is now the shared CPU implementation for `model1io::IoBoard`,
+`model1io2::IoBoard` (Wing War and R360 wiring) and the Star Wars DSB. The
+registry `z80` dependency was removed during the user-requested consolidation;
+the original board retains its existing bus and cycle-debt scheduler and uses
+the optional hooks' defaults. No opcode or timing rewrite accompanies migration.
+Model 2 currently uses high-level I/O/drive handling, not either Z80 package;
+its sound CPUs are 68000. No Model 2 CPU implementation was replaced.
+See [the consolidation checkpoint](../../docs/MODEL1_ROADMAP.md#consolidate-the-z80-implementations)
+and board integration contract for verification boundaries. NetMerc remains a
+separate milestone. Unifying CPU code does not complete machine save states.
 
 Original `z80.rs` SHA-256:
 `e95042b2c07cadab457ffef155f87df29499bfb9cb96dc386623002b4602dc75`.
@@ -33,7 +36,7 @@ Local changes:
 - Isolated integration tests; upstream optional CP/M exerciser assets are not
   bundled or required by the workspace test suite.
 
-Run `cargo test --offline -p tgpulse-z80`. The 18 synthetic tests cover disabled
+Run `cargo test --offline -p z80`. The 18 synthetic tests cover disabled
 IRQ, DI/EI, live IM2 vector selection, IM1 acknowledgement, NMI priority, HALT,
 canonical RETI versus RETN, typed state validation and continued execution
 across 16 snapshot points in a block-copy/interrupt/I/O program. They run as

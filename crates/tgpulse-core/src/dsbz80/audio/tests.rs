@@ -1,6 +1,6 @@
 use super::*;
 use crate::dsbz80::{AudioSample, Board, FIRMWARE_SIZE};
-use tgpulse_z80::Z80_io;
+use z80::Z80_io;
 
 fn stream() -> Vec<u8> {
     crate::mpeg::tests::stream(6) // stereo, 32 kHz, five nonzero synthetic frames

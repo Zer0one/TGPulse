@@ -24,7 +24,7 @@ struct LightParam {
 
 pub(crate) struct Model1VideoState {
     tgp_ram: Vec<u16>,
-    poly_ram: Vec<u32>,
+    pub(crate) poly_ram: Vec<u32>,
     lightparams: [LightParam; 256],
     /// Config's smooth_shadows: blend MOIRE quads 50/50 instead of stippling.
     pub(crate) smooth_shadows: bool,

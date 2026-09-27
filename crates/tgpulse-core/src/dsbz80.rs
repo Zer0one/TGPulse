@@ -3,9 +3,9 @@
 //! CPU clock is MAME's estimate, not a verified oscillator measurement.
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
-use tgpulse_z80::{CpuState, Z80_io, Z80};
+use z80::{CpuState, Z80_io, Z80};
 mod audio;
-mod uart;
+use crate::i8251 as uart;
 pub use audio::SAMPLE_RATE;
 
 pub const CPU_HZ: u32 = 4_000_000;
@@ -30,6 +30,15 @@ impl std::fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+impl From<uart::Error> for Error {
+    fn from(error: uart::Error) -> Self {
+        match error {
+            uart::Error::UnsupportedUartMode(v) => Self::UnsupportedUartMode(v),
+            uart::Error::UnsupportedUartCommand(v) => Self::UnsupportedUartCommand(v),
+            uart::Error::TransmitFull => Self::TransmitFull,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Playback {
@@ -193,8 +202,8 @@ impl Z80_io for Bus {
         }
         let mut s = self.state.borrow_mut();
         let result = match address as u8 {
-            0xf0 => s.uart.write(value),
-            0xf1 => s.uart.control(value),
+            0xf0 => s.uart.write(value).map_err(Error::from),
+            0xf1 => s.uart.control(value).map_err(Error::from),
             port => s.playback.write(port, value),
         };
         if address as u8 == 0xe0 && value == 0 {
@@ -328,6 +337,13 @@ impl Board {
     pub fn connect_sender(&mut self) {
         self.cpu.io.state.get_mut().sender = Some(uart::Uart::default());
     }
+    /// Use an externally clocked physical transmitter instead of the fixture sender.
+    pub(crate) fn disconnect_sender(&mut self) {
+        self.cpu.io.state.get_mut().sender = None;
+    }
+    pub(crate) fn note_external_transmit(&mut self) {
+        self.cpu.io.state.get_mut().transmitted += 1;
+    }
     pub fn sender_control(&mut self, value: u8) {
         if self.fault().is_some() {
             return;
@@ -340,7 +356,7 @@ impl Board {
             .sender
             .as_mut()
             .map_or(Ok(()), |s| s.control(value));
-        self.cpu.io.latch(result);
+        self.cpu.io.latch(result.map_err(Error::from));
     }
     pub fn sender_write(&mut self, value: u8) {
         if self.fault().is_some() {
@@ -357,7 +373,7 @@ impl Board {
             Ok(())
         };
         log::trace!(target: "dsb", "68000 TX at DSB clock {}: {value:02x}", self.cpu.io.elapsed);
-        self.cpu.io.latch(result);
+        self.cpu.io.latch(result.map_err(Error::from));
     }
     pub fn sender_status(&self) -> u8 {
         self.cpu

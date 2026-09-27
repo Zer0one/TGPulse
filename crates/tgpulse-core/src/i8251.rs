@@ -1,10 +1,16 @@
-//! Bounded i8251 subset for DSB: async 8N1 x16, plus sync initialization bytes.
+//! Bounded i8251 subset: async 8N1 x16, plus sync initialization bytes.
 //! Register semantics reference MAME i8251 (BSD-3-Clause, smf).
-use super::Error;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Error {
+    UnsupportedUartMode(u8),
+    UnsupportedUartCommand(u8),
+    TransmitFull,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct Uart {
+pub(crate) struct Uart {
     pub mode: u8,
     pub command: u8,
     // 0 command, 1 mode, 2/3 remaining sync characters.

@@ -13,6 +13,12 @@ pub trait Bus {
         0
     }
 
+    /// An IN access could not complete. Consume the request and retry the
+    /// instruction later without writing its destination (MAME's stall_io).
+    fn take_io_stall(&mut self) -> bool {
+        false
+    }
+
     /// Live state of the maskable IRQ line straight from the interrupt
     /// controller. The CPU latches its line via `assert_irq`, but a handler
     /// that acknowledges the controller *mid-instruction* (Model 1's ISR writes
@@ -22,6 +28,12 @@ pub trait Bus {
     /// that model an interrupt controller return `Some(active)`; the default
     /// `None` keeps the latched behaviour for simple buses/tests.
     fn irq_active(&self) -> Option<bool> {
+        None
+    }
+
+    /// Vector supplied by the controller when the CPU actually accepts an IRQ.
+    /// None retains the vector passed to assert_irq for simple buses.
+    fn irq_acknowledge(&mut self) -> Option<u8> {
         None
     }
 

@@ -160,6 +160,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shared_z80_preserves_board_io_and_fractional_run_budget() {
+        // Execute real memory-mapped I/O: read IN0, store it in RAM, latch
+        // drive/lamp outputs, then loop. No external IRQ source on this board.
+        let program = [
+            0x3e, 0x02, 0x32, 0x08, 0x80, // port B input
+            0x3a, 0x01, 0x80, 0x32, 0x00, 0x40, // IN0 -> RAM
+            0x3e, 0x12, 0x32, 0x04, 0x80, // drive
+            0x3e, 0x34, 0x32, 0x05, 0x80, // lamps
+            0xc3, 0x05, 0x00, // repeat input/output loop
+        ];
+        let make = || {
+            let mut board = IoBoard::new(&program, Eeprom93c46::new());
+            board.set_inputs(Inputs {
+                in0: 0xa5,
+                ..Inputs::default()
+            });
+            board
+        };
+        let mut whole = make();
+        let mut sliced = make();
+        whole.run(100_003);
+        for _ in 0..100_003 {
+            sliced.run(1);
+        }
+        assert_eq!(whole.cpu.snapshot(), sliced.cpu.snapshot());
+        assert_eq!(whole.cycle_debt, sliced.cycle_debt);
+        assert_eq!(whole.cpu.io.ram, sliced.cpu.io.ram);
+        assert_eq!(whole.cpu.io.ram[0], 0xa5);
+        for board in [&whole, &sliced] {
+            assert_eq!(board.drive_cmd(), 0x12);
+            assert_eq!(board.cpu.io.outputs, 0x34);
+            assert!(board.cycle_debt <= 0);
+        }
+        // Constructing another board does not reset the running instance.
+        let before = whole.cpu.snapshot();
+        let fresh = make();
+        assert_eq!(fresh.cpu.pc, 0);
+        assert!(!fresh.cpu.halted);
+        assert!(!fresh.cpu.iff1);
+        assert_eq!(fresh.drive_cmd(), 0xff);
+        assert_eq!(whole.cpu.snapshot(), before);
+    }
+
+    #[test]
+    fn shared_z80_halt_consumes_budget_without_replaying_io() {
+        let mut board = IoBoard::new(&[0x3e, 0x56, 0x32, 0x04, 0x80, 0x76], Eeprom93c46::new());
+        board.run(100);
+        assert!(board.cpu.halted);
+        assert_eq!(board.drive_cmd(), 0x56);
+        let pc = board.cpu.pc;
+        board.cpu.io.drive_cmd = 0x78;
+        board.run(101);
+        assert_eq!(board.cpu.pc, pc);
+        assert_eq!(board.drive_cmd(), 0x78);
+        assert!(board.cycle_debt <= 0);
+    }
+
+    #[test]
     fn first_generation_memory_map_stays_separate_from_board2() {
         let mut board = IoBoard::new(&vec![0x5a; 0x8000], Eeprom93c46::new()).cpu.io;
         for address in [0, 0x3fff] {

@@ -16,6 +16,7 @@ use crate::sound::SoundSystem;
 pub enum Error {
     IoBoard(crate::model1io2::BusError),
     Dsb(crate::dsbz80::Error),
+    Serial(crate::sound::SerialError),
 }
 impl From<crate::model1io2::BusError> for Error {
     fn from(e: crate::model1io2::BusError) -> Self {
@@ -32,10 +33,14 @@ impl std::fmt::Display for Error {
         match self {
             Self::IoBoard(e) => e.fmt(f),
             Self::Dsb(e) => e.fmt(f),
+            Self::Serial(e) => write!(f, "Model 1 serial: {e:?}"),
         }
     }
 }
 impl std::error::Error for Error {}
+impl From<crate::sound::SerialError> for Error {
+    fn from(e: crate::sound::SerialError) -> Self { Self::Serial(e) }
+}
 
 pub const CPU_HZ: u32 = 16_000_000;
 pub const CYCLES_PER_FRAME: i32 = 656 * 424;
@@ -51,6 +56,9 @@ pub const COPRO_FIFO_DEPTH: usize = 16;
 pub struct Model1System {
     pub main_cpu: V60,
     pub tgp_cpu: Mb86233,
+    /// Fractional 40/16 MHz clock phase (numerator over 2), including HALT time.
+    /// Future machine snapshots must retain this alongside tgp_cpu.icount debt.
+    tgp_clock_remainder: u8,
 
     pub maincpu_rom: Vec<u8>,
     pub nvram: Vec<u8>,
@@ -68,6 +76,9 @@ pub struct Model1System {
     /// Transient CPU-bus context, never charged by debugger/renderer reads.
     v60_access_active: bool,
     v60_wait_cycles: u32,
+    /// Empty result FIFO stalls an IN instruction until the TGP supplies data.
+    v60_fifo_waiting: bool,
+    v60_io_stall: bool,
 
     pub sound: SoundSystem,
     pub inputs: Inputs,
@@ -185,6 +196,7 @@ impl Model1System {
             SoundSystem::new(roms.sndcpu.clone(), roms.mpcm1.clone(), roms.mpcm2.clone())
         };
         sound.set_mutes(config.audio_mutes);
+        sound.enable_model1_serial();
 
         // Battery-backed work RAM (RAMA). Use a shipped factory image when present
         // (NetMerc); otherwise retain our zero-filled boot state. Games initialise bytes
@@ -202,6 +214,7 @@ impl Model1System {
         Ok(Self {
             main_cpu: V60::new(),
             tgp_cpu: Mb86233::new(),
+            tgp_clock_remainder: 0,
 
             maincpu_rom: roms.maincpu.clone(),
             nvram,
@@ -217,6 +230,8 @@ impl Model1System {
                 .then(crate::model1comm::CommBoard::new),
             v60_access_active: false,
             v60_wait_cycles: 0,
+            v60_fifo_waiting: false,
+            v60_io_stall: false,
 
             sound,
             inputs: Inputs::default(),
@@ -271,6 +286,7 @@ impl Model1System {
         if let Some(error) = self.ioboard.fault() {
             return Err(error.into());
         }
+        if let Some(error) = self.sound.serial_fault() { return Err(error.into()); }
         if let Some(error) = self.sound.dsb_fault() {
             return Err(error.into());
         }
@@ -282,7 +298,10 @@ impl Model1System {
 
             // Pause the V60 while its outbound FIFO is full, so it cannot outrun
             // the TGP and the queue stays near the hardware's 16-word depth.
-            if self.copro_fifo_in.len() <= COPRO_FIFO_DEPTH {
+            if !self.copro_fifo_out.is_empty() {
+                self.v60_fifo_waiting = false;
+            }
+            if self.copro_fifo_in.len() <= COPRO_FIFO_DEPTH && !self.v60_fifo_waiting {
                 self.sync_irq();
                 let mut cpu = std::mem::replace(&mut self.main_cpu, V60::new());
                 self.v60_access_active = true;
@@ -300,12 +319,18 @@ impl Model1System {
 
             // Step the TGP in the same fine lockstep so the FIFO handshakes
             // resolve instead of deadlocking. The MB86233 runs at 40 MHz against
-            // the V60's 16 MHz, so it advances ~2.5x as far per slice; a FIFO
+            // the V60's 16 MHz, so it receives exactly 5/2 clocks per slice; a FIFO
             // read with no data rewinds and retries (take_stall), which is how
             // it waits for the V60 without an event scheduler. It halts itself
             // (halt_requested) once its own output FIFO backs up.
-            if self.copro_fifo_out.len() <= COPRO_FIFO_DEPTH {
-                let tgp_step = (step * 5) / 2;
+            let tgp_clocks = step * 5 + i32::from(self.tgp_clock_remainder);
+            self.tgp_clock_remainder = (tgp_clocks % 2) as u8;
+            // Like MAME's scheduler/local CPU time, retain instruction overshoot,
+            // not unused time from an empty FIFO or HALT. Clock phase and debt
+            // advance even while output overflow prevents CPU execution.
+            let tgp_step = tgp_clocks / 2 + self.tgp_cpu.icount.min(0);
+            self.tgp_cpu.icount = tgp_step.min(0);
+            if tgp_step > 0 && self.copro_fifo_out.len() <= COPRO_FIFO_DEPTH {
                 let mut tgp = std::mem::replace(&mut self.tgp_cpu, Mb86233::new());
                 tgp.execute(self, tgp_step);
                 self.tgp_cpu = tgp;
@@ -313,17 +338,14 @@ impl Model1System {
 
             self.advance_timers(step as u32);
             self.sound.run(step, CPU_HZ);
+            if let Some(error) = self.sound.serial_fault() { return Err(error.into()); }
             if let Some(error) = self.sound.dsb_fault() {
                 return Err(error.into());
             }
             // sound_ready_w: the M1 audio UART's ready lines
             // raise IRQ level 3 while unmasked -- vf's sound-queue pump lives
             // in that handler and the game hangs in its boot without it.
-            if (self.sound.board.uart_tx_ready() || self.sound.board.uart_rx_ready())
-                && self.irq_mask & (1 << 3) == 0
-            {
-                self.raise_irq(3);
-            }
+            self.sound_ready_irq();
 
             remaining -= step;
         }
@@ -346,12 +368,15 @@ impl Model1System {
         if self.listctl[0] & 4 == 0 {
             self.listctl[0] =
                 (self.listctl[0] & !0x40) | if self.listctl[0] & 8 != 0 { 0x40 } else { 0 };
-        } else if self.frame_num & 1 != 0 {
-            self.listctl[0] ^= 0x40;
         }
         // The reference scans renderer uploads on the rising vblank edge even when the
         // display list was not rasterized during that frame.
         crate::model1_video::scan_uploads(self);
+        // Consume the completed list before selecting the following frame's
+        // buffer. Switching first can upload data from an unfinished list.
+        if self.listctl[0] & 4 != 0 && self.frame_num & 1 != 0 {
+            self.listctl[0] ^= 0x40;
+        }
         self.frame_num = self.frame_num.wrapping_add(1);
         if let Some(comm) = &mut self.comm {
             comm.tick();
@@ -367,7 +392,6 @@ impl Model1System {
 
     fn sync_irq(&mut self) {
         if let Some(level) = (0..8).find(|level| self.irq_status & (1 << level) != 0) {
-            self.last_irq = level;
             self.main_cpu.assert_irq(level);
         } else {
             self.main_cpu.clear_irq();
@@ -379,6 +403,14 @@ impl Model1System {
             0x10 => self.irq_status = 0,
             0x20 => self.irq_status &= !(1 << self.last_irq),
             _ => {}
+        }
+    }
+
+    fn sound_ready_irq(&mut self) {
+        if (self.sound.board.uart_tx_ready() || self.sound.board.uart_rx_ready())
+            && self.irq_mask & (1 << 3) == 0
+        {
+            self.raise_irq(3);
         }
     }
 
@@ -409,15 +441,26 @@ impl Model1System {
             if self.irq_mask & 1 == 0 {
                 self.raise_irq(0);
             }
-            self.timer_remaining[index] = u32::from(self.timer_period[index]) * 0x800;
+            let period = u32::from(self.timer_period[index]) * 0x800;
+            // Reload at the expiry instant, not at the end of this slice.
+            // Repeated expiries coalesce into the same pending IRQ0 bit.
+            self.timer_remaining[index] = if period == 0 {
+                0
+            } else {
+                period - (cycles - remaining) % period
+            };
         }
     }
 
     fn timer_r(&mut self, index: usize) -> u16 {
-        if self.timer_period[index] != 0 {
-            self.timer_latched[index] = (self.timer_remaining[index] / 0x800) as u16;
+        if self.timer_period[index] == 0 {
+            return self.timer_latched[index];
         }
-        self.timer_latched[index]
+        let count = (self.timer_remaining[index] / 0x800) as u16;
+        if self.v60_access_active {
+            self.timer_latched[index] = count;
+        }
+        count
     }
 
     fn dpram_write(&mut self, index: usize, value: u8) {
@@ -463,37 +506,20 @@ impl Model1System {
         self.fifo_events.push_back((dir, value, depths.0, depths.1));
     }
 
-    /// The reference stalls a V60 read of an empty output FIFO until the TGP delivers
-    /// a word. Our
-    /// scheduler runs the V60 ahead of the TGP within a quantum, so the read
-    /// would otherwise consume a stale or bogus word. Pump the TGP until it
-    /// produces the result instead -- the same effect as the hardware stall.
-    fn copro_fifo_pump(&mut self) {
-        for _ in 0..2000 {
-            if !self.copro_fifo_out.is_empty() {
-                break;
-            }
-            let retries_before = self.tgp_cpu.cov.stall_retries;
-            let mut tgp = std::mem::replace(&mut self.tgp_cpu, Mb86233::new());
-            tgp.execute(self, 64);
-            self.tgp_cpu = tgp;
-            if self.copro_fifo_out.is_empty()
-                && self.copro_fifo_in.is_empty()
-                && self.tgp_cpu.cov.stall_retries != retries_before
-            {
-                // The TGP is waiting for host input; it cannot produce a word
-                // no matter how long we pump. Give up and return 0.
-                break;
-            }
-        }
-    }
-
     fn copro_fifo_read(&mut self, high: bool) -> u16 {
         if !high {
-            if self.copro_fifo_out.is_empty() {
-                self.copro_fifo_pump();
+            if !self.v60_access_active {
+                // Match side-effect-disabled inspection: no pop, no CPU clocks.
+                self.copro_fifo_read_latch = self.copro_fifo_out.front().copied().unwrap_or(0);
+                return self.copro_fifo_read_latch as u16;
             }
-            self.copro_fifo_read_latch = self.copro_fifo_out.pop_front().unwrap_or(0);
+            let Some(value) = self.copro_fifo_out.pop_front() else {
+                self.v60_fifo_waiting = true;
+                self.v60_io_stall = true;
+                return 0; // placeholder only; stalled IN must not commit it
+            };
+            self.v60_fifo_waiting = false;
+            self.copro_fifo_read_latch = value;
             self.fifo_note('R', self.copro_fifo_read_latch);
             log::trace!(target: "fifo",
                 "[fifo] V60 {:06X} pop  out={:08X} (out left {})",
@@ -724,26 +750,17 @@ impl Model1System {
             0xb01002 => self.comm.as_ref().map_or(0xff, |c| c.fg_read()),
             0xc00000..=0xc00fff if address & 1 == 0 => {
                 // MAME model1_state::dpram_r charges one V60 cycle per
-                // low-byte read. Without it Wing War times out just before
-                // the advanced board completes its initial EEPROM transfer.
-                // Keep board-1 timing unchanged until its separate audit.
-                if self.v60_access_active
-                    && matches!(self.ioboard.kind(), crate::model1board::Kind::WingWar | crate::model1board::Kind::WingWarR360)
-                {
+                // low-byte read on the shared map, independent of I/O-board
+                // revision. Debugger/renderer reads have no timing side effects.
+                if self.v60_access_active {
                     self.v60_wait_cycles += 1;
                 }
                 let idx = ((address - 0xc00000) >> 1) as usize & 0x7ff;
 
                 self.ioboard.dpram()[idx]
             }
-            0xc40000 => self.sound.board.tx.take().unwrap_or(0),
-            0xc40002 => {
-                let mut status = 0x05;
-                if self.sound.board.uart_rx_ready() {
-                    status |= 0x02;
-                }
-                status
-            }
+            0xc40000 => self.sound.board.main_uart_read(),
+            0xc40002 => self.sound.board.main_uart_status(),
             0xe00002 => self.irq_mask,
             0xe0000c..=0xe0000f => {
                 let index = ((address - 0xe0000c) >> 1) as usize;
@@ -792,7 +809,11 @@ impl Model1System {
             0xc40000 => self.sound.send(value),
             0xc40002 => self.sound.board.uart_control(value),
             0xe00000 => self.irq_control_w(value),
-            0xe00002 => self.irq_mask = value,
+            0xe00002 => {
+                self.irq_mask = value;
+                // MAME irq_mask_w re-evaluates an already asserted UART ready.
+                self.sound_ready_irq();
+            }
             0xe00004..=0xe00005 => {
                 let shift = (address & 1) * 8;
                 let mask = 0xffu16 << shift;
@@ -820,11 +841,22 @@ impl Bus for Model1System {
     fn take_wait_cycles(&mut self) -> u32 {
         std::mem::take(&mut self.v60_wait_cycles)
     }
+
+    fn take_io_stall(&mut self) -> bool {
+        std::mem::take(&mut self.v60_io_stall)
+    }
     /// Live GLUE interrupt line: asserted while any raised level is still
     /// pending. The ISR's `E00000` acknowledge clears `irq_status` mid-run, so
     /// the CPU consults this instead of re-taking its latched line after `reti`.
     fn irq_active(&self) -> Option<bool> {
         Some(self.irq_status != 0)
+    }
+
+    fn irq_acknowledge(&mut self) -> Option<u8> {
+        if let Some(level) = (0..8).find(|level| self.irq_status & (1 << level) != 0) {
+            self.last_irq = level;
+        }
+        Some(self.last_irq)
     }
 
     fn read_u8(&mut self, address: u32) -> u8 {
@@ -916,7 +948,7 @@ impl Bus for Model1System {
     fn halt_requested(&self) -> bool {
         // The full-post-sync callback
         // asserts INPUT_LINE_HALT on the V60 after accepting the overflow word.
-        self.copro_fifo_in.len() > COPRO_FIFO_DEPTH
+        self.copro_fifo_in.len() > COPRO_FIFO_DEPTH || self.v60_fifo_waiting
     }
 }
 
@@ -998,6 +1030,25 @@ mod persistence_tests {
     }
 
     #[test]
+    fn vblank_uploads_completed_list_before_automatic_buffer_switch() {
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
+        sys.listctl = [4, 0x1f];
+        sys.frame_num = 1;
+        for (index, value) in [0x1234u32, 0x5678].into_iter().enumerate() {
+            // Polygon upload, destination 0, length 1, then end-of-list.
+            for (word, data) in [5u32, 0x800000, 1, value, 0xf].into_iter().enumerate() {
+                sys.display_list[index][word * 4..word * 4 + 4].copy_from_slice(&data.to_le_bytes());
+            }
+        }
+        sys.trigger_vblank();
+        assert_eq!(sys.video.poly_ram[0], 0x1234);
+        assert_eq!(sys.listctl[0] & 0x40, 0x40);
+        sys.trigger_vblank();
+        assert_eq!(sys.video.poly_ram[0], 0x5678);
+        assert_eq!(sys.listctl[0] & 0x40, 0x40);
+    }
+
+    #[test]
     fn cabinet_selects_comm_presence_without_changing_model1_nvram() {
         for supported in [false, true] {
             for cabinet in [crate::config::Cabinet::Single, crate::config::Cabinet::Twin] {
@@ -1049,18 +1100,152 @@ mod persistence_tests {
             mpeg: vec![0; 0x400000],
         });
         let mut sys = Model1System::new(&roms).unwrap();
-        let d = sys.sound.board.dsb.as_mut().unwrap();
-        d.sender_write(1);
-        d.sender_write(2);
+        sys.sound.send(1);
+        sys.sound.send(2);
         assert_eq!(
             sys.run_slice(0),
-            Err(Error::Dsb(crate::dsbz80::Error::TransmitFull))
+            Err(Error::Serial(crate::sound::SerialError::TransmitFull))
         );
+    }
+
+    #[test]
+    fn timer_reload_preserves_phase_across_slices_and_multiple_expiries() {
+        for chunk in [1, 3, 63, 64, 127, 2049, 20000] {
+            let mut sys = Model1System::new(&empty_roms()).unwrap();
+            sys.irq_mask = 0xfe;
+            sys.set_timer_period(0, 1);
+            sys.set_timer_period(1, 3);
+            let total = 7 * 0x800 + 17;
+            let mut left = total;
+            while left > 0 {
+                let step = left.min(chunk);
+                sys.advance_timers(step);
+                left -= step;
+            }
+            assert_eq!(sys.timer_remaining, [0x800 - 17, 2 * 0x800 - 17], "{chunk}");
+            assert_eq!(sys.irq_status, 1); // repeated IRQ0s coalesce
+        }
+    }
+
+    #[test]
+    fn timer_masks_stop_restart_and_register_lanes_match_reference() {
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
+        sys.write_u8(0xe00008, 2);
+        sys.write_u8(0xe00009, 1);
+        assert_eq!(sys.timer_period[0], 0x102);
+        assert_eq!(sys.timer_remaining[0], 0x102 * 0x800);
+        sys.write_u16(0xe00008, 1);
+        sys.advance_timers(0x800 - 1);
+        assert_eq!(sys.timer_remaining[0], 1);
+        assert_eq!(sys.irq_status, 0);
+        sys.advance_timers(1); // masked expiry still reloads
+        assert_eq!(sys.timer_remaining[0], 0x800);
+        assert_eq!(sys.irq_status, 0);
+        sys.write_u8(0xe00002, 0xfe); // no retroactive timer IRQ
+        assert_eq!(sys.irq_status, 0);
+        sys.advance_timers(0x800);
+        assert_eq!(sys.irq_status, 1);
+        sys.write_u8(0xe00002, 0xff); // masking does not clear pending IRQ
+        assert_eq!(sys.irq_status, 1);
+        sys.write_u8(0xe00000, 0x10);
+        sys.write_u16(0xe00008, 0);
+        sys.advance_timers(10000);
+        assert_eq!((sys.timer_remaining[0], sys.irq_status), (0, 0));
+        sys.write_u16(0xe00008, 2);
+        sys.write_u16(0xe0000c, 0); // count writes ignored
+        sys.write_u16(0xe00006, 0xffff); // mode stored; no effect in MAME
+        assert_eq!((sys.timer_mode, sys.timer_remaining[0]), (0xffff, 0x1000));
+    }
+
+    #[test]
+    fn timer_debugger_read_does_not_change_stopped_latch() {
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
+        sys.set_timer_period(0, 10);
+        sys.v60_access_active = true;
+        sys.advance_timers(3 * 0x800);
+        assert_eq!(sys.read_u16(0xe0000c), 7);
+        sys.v60_access_active = false;
+        sys.advance_timers(2 * 0x800);
+        assert_eq!(sys.read_u16(0xe0000c), 5);
+        sys.set_timer_period(0, 0);
+        assert_eq!(sys.read_u16(0xe0000c), 7);
+    }
+
+    fn irq_test_machine(program: &[u8]) -> Model1System {
+        let mut roms = empty_roms();
+        roms.maincpu = program.to_vec();
+        let mut sys = Model1System::new(&roms).unwrap();
+        sys.main_cpu.reg[v60::cpu::PC] = 0;
+        sys.main_cpu.reg[v60::cpu::PSW] = 1 << 18;
+        sys.main_cpu.reg[v60::cpu::SP] = 0x53e000;
+        sys.main_cpu.reg[36] = 0x53f000; // ISP
+        sys.main_cpu.reg[v60::cpu::SBR] = 0x500000;
+        for level in 0..8 {
+            sys.write_u32(0x500000 + (0x40 + level) * 4, 0x501000 + level * 0x100);
+        }
+        sys
+    }
+
+    #[test]
+    fn irq_acknowledge_latches_only_the_level_accepted_by_the_cpu() {
+        let mut sys = irq_test_machine(&[0xcd; 32]);
+        sys.main_cpu.reg[v60::cpu::PSW] = 0; // IE disabled
+        sys.raise_irq(3);
+        sys.run_slice(8).unwrap();
+        assert_eq!((sys.last_irq, sys.main_cpu.irq_taken), (0, 0));
+        sys.main_cpu.reg[v60::cpu::PSW] = 1 << 18;
+        sys.run_slice(8).unwrap(); // handler HALT, IE cleared on entry
+        assert_eq!((sys.last_irq, sys.main_cpu.irq_taken), (3, 1));
+        sys.raise_irq(0); // higher-priority pending IRQ during handler
+        sys.run_slice(64).unwrap();
+        assert_eq!(sys.last_irq, 3);
+        sys.write_u8(0xe00000, 0x20); // clears the accepted IRQ3, not pending IRQ0
+        assert_eq!(sys.irq_status, 1);
+        sys.write_u8(0xe00000, 0x30); // unknown command ignored
+        assert_eq!(sys.irq_status, 1);
+        sys.write_u8(0xe00000, 0x10);
+        assert_eq!(sys.irq_status, 0);
+    }
+
+    #[test]
+    fn irq_reti_selects_next_pending_vector_in_same_slice() {
+        let mut sys = irq_test_machine(&[0xcd, 0]);
+        // OUT.B R0,absolute 0xe00000; RETIU #0.
+        let handler = [0x21, 0x00, 0xf3, 0, 0, 0xe0, 0, 0xea, 0xe0];
+        for level in [1, 3] {
+            for (index, byte) in handler.iter().enumerate() {
+                sys.write_u8(0x501000 + level * 0x100 + index as u32, *byte);
+            }
+        }
+        sys.main_cpu.reg[0] = 0x20;
+        sys.raise_irq(3);
+        sys.raise_irq(1);
+        sys.run_slice(64).unwrap();
+        assert_eq!(sys.main_cpu.irq_taken, 2);
+        assert_eq!((sys.last_irq, sys.main_cpu.irq_vector, sys.irq_status), (3, 3, 0));
+        assert!(sys.main_cpu.halted);
+        assert_eq!(sys.main_cpu.pc(), 2);
+    }
+
+    #[test]
+    fn irq_uart_unmask_asserts_and_vectors_within_current_cpu_slice() {
+        // OUT.B R0,absolute 0xe00002; HALT.
+        let mut sys = irq_test_machine(&[0x21, 0x00, 0xf3, 2, 0, 0xe0, 0, 0]);
+        sys.sound.board.uart_control(0x4e);
+        sys.sound.board.uart_control(0x37);
+        sys.main_cpu.reg[0] = 0xf7;
+        assert!(!sys.main_cpu.irq_line);
+        sys.run_slice(8).unwrap();
+        assert_eq!(sys.irq_status, 8);
+        assert_eq!((sys.last_irq, sys.main_cpu.irq_taken), (3, 1));
+        assert_eq!(sys.main_cpu.pc(), 0x501300); // before first handler instruction
+        assert_eq!(sys.read_u32(0x53eff8), 7); // interrupted immediately after OUT
     }
 
     #[test]
     fn timer_retains_last_read_count_when_stopped() {
         let mut sys = Model1System::new(&empty_roms()).unwrap();
+        sys.v60_access_active = true;
         for index in 0..2 {
             let period = 0xe00008 + index as u32 * 2;
             let count = 0xe0000c + index as u32 * 2;
@@ -1128,9 +1313,225 @@ mod persistence_tests {
     }
 
     #[test]
-    fn advanced_dpram_waits_only_charge_cpu_low_byte_reads() {
+    fn tgp_clock_ratio_is_independent_of_slice_partition() {
+        for chunk in [1, 2, 3, 7, 63, 64, 65, 127, 257] {
+            let mut sys = Model1System::new(&empty_roms()).unwrap();
+            sys.main_cpu.reg[v60::cpu::PC] = 0; // zero ROM: HALT
+            assert_eq!(sys.tgp_clock_remainder, 0);
+            let mut remaining = 257;
+            while remaining > 0 {
+                let step = chunk.min(remaining);
+                sys.run_slice(step).unwrap();
+                remaining -= step;
+            }
+            // Default LAB without ALU work costs one TGP cycle.
+            assert_eq!(sys.tgp_cpu.pc, 642, "chunk {chunk}");
+            assert_eq!(sys.tgp_clock_remainder, 1, "chunk {chunk}");
+            sys.run_slice(1).unwrap();
+            assert_eq!(sys.tgp_cpu.pc, 645);
+            assert_eq!(sys.tgp_clock_remainder, 0);
+        }
+    }
+
+    #[test]
+    fn tgp_two_cycle_alu_debt_survives_slice_boundaries() {
+        // All two-cycle ALU families from MAME mb86233::alu_post_2.
+        for alu in [5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 19, 20] {
+            let machine = || {
+                let mut sys = Model1System::new(&empty_roms()).unwrap();
+                sys.main_cpu.reg[v60::cpu::PC] = 0;
+                sys.tgp_program = vec![alu << 21; 1024];
+                sys
+            };
+            let mut whole = machine();
+            whole.run_slice(257).unwrap();
+            for chunk in [1, 3, 7, 63, 65, 127] {
+                let mut split = machine();
+                let mut remaining = 257;
+                while remaining > 0 {
+                    let step = chunk.min(remaining);
+                    split.run_slice(step).unwrap();
+                    remaining -= step;
+                }
+                assert_eq!(split.tgp_cpu.pc, 321, "ALU {alu}, chunk {chunk}");
+                assert_eq!(split.tgp_clock_remainder, whole.tgp_clock_remainder);
+                assert_eq!(bincode::serialize(&split.tgp_cpu).unwrap(),
+                    bincode::serialize(&whole.tgp_cpu).unwrap(), "ALU {alu}, chunk {chunk}");
+                // Three more TGP clocks execute two instructions, carrying -1.
+                split.run_slice(1).unwrap();
+                assert_eq!((split.tgp_cpu.pc, split.tgp_cpu.icount), (323, -1));
+                let state = bincode::serialize(&split.tgp_cpu).unwrap();
+                split.run_slice(0).unwrap();
+                split.run_slice(-1).unwrap();
+                assert_eq!(bincode::serialize(&split.tgp_cpu).unwrap(), state);
+                split.run_slice(1).unwrap();
+                assert_eq!((split.tgp_cpu.pc, split.tgp_cpu.icount), (324, -1));
+            }
+        }
+    }
+
+    #[test]
+    fn tgp_halt_advances_clock_phase_and_retires_debt_without_banking_time() {
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
+        sys.main_cpu.reg[v60::cpu::PC] = 0;
+        sys.tgp_program = vec![8 << 21; 1024]; // two-cycle FML
+        sys.tgp_program[0] = 0; // one-cycle LAB, so the first slice overshoots
+        sys.run_slice(1).unwrap();
+        assert_eq!((sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder), (2, -1, 1));
+        sys.copro_fifo_out.extend([0; 17]); // external HALT
+        sys.run_slice(1).unwrap();
+        assert_eq!((sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder), (2, 0, 0));
+        sys.run_slice(65).unwrap();
+        assert_eq!((sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder), (2, 0, 1));
+        sys.copro_fifo_out.clear();
+        sys.run_slice(1).unwrap(); // only the new three clocks, no HALT-time burst
+        assert_eq!((sys.tgp_cpu.pc, sys.tgp_cpu.icount, sys.tgp_clock_remainder), (4, -1, 0));
+    }
+
+    #[test]
+    fn tgp_empty_fifo_does_not_bank_unused_instruction_budget() {
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
+        sys.main_cpu.reg[v60::cpu::PC] = 0;
+        sys.tgp_program = vec![0x100; 1024]; // LAB from command FIFO
+        sys.tgp_cpu.b0 = 0x100;
+        sys.tgp_cpu.i0 = 0;
+        sys.run_slice(128).unwrap();
+        assert_eq!(sys.tgp_cpu.pc, 0);
+        assert!(sys.tgp_cpu.icount > 0); // abandoned idle budget, not CPU debt
+        sys.copro_fifo_in.extend(0..16);
+        sys.run_slice(1).unwrap();
+        assert_eq!(sys.tgp_cpu.pc, 2);
+        assert_eq!(sys.copro_fifo_in.len(), 14);
+        assert_eq!(sys.tgp_cpu.icount, 0);
+    }
+
+    #[test]
+    fn fifo_empty_in_retries_without_committing_zero_and_resumes_on_data() {
+        for (opcode, expected) in [(0x20, 0xaabb_cc78), (0x22, 0xaabb_5678), (0x24, 0x1234_5678)] {
+            let mut roms = empty_roms();
+            // IN.B/H/W absolute 0xd80000,R0, followed by HALT.
+            roms.maincpu = vec![opcode, 0x20, 0xf3, 0, 0, 0xd8, 0, 0];
+            let mut sys = Model1System::new(&roms).unwrap();
+            sys.main_cpu.reg[v60::cpu::PC] = 0;
+            sys.main_cpu.reg[0] = 0xaabb_ccdd;
+            sys.run_slice(64).unwrap();
+            assert!(sys.v60_fifo_waiting);
+            assert_eq!(sys.main_cpu.pc(), 0);
+            assert_eq!(sys.main_cpu.reg[0], 0xaabb_ccdd);
+            assert!(sys.fifo_events.is_empty()); // no fictitious transfer
+            let attempts = sys.main_cpu.op_count[opcode as usize];
+            sys.run_slice(256).unwrap();
+            assert_eq!(sys.main_cpu.op_count[opcode as usize], attempts);
+            Mb86233Bus::write_data(&mut sys, 0x400, 0x1234_5678);
+            sys.run_slice(8).unwrap();
+            assert!(!sys.v60_fifo_waiting);
+            assert_eq!(sys.main_cpu.pc(), 7);
+            assert_eq!(sys.main_cpu.reg[0], expected);
+            assert!(sys.copro_fifo_out.is_empty());
+            assert_eq!(sys.fifo_events.iter().filter(|e| e.0 == 'R').count(), 1);
+        }
+    }
+
+    #[test]
+    fn fifo_tgp_empty_read_retries_before_registers_or_address_increment() {
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
+        sys.tgp_program = vec![0x100]; // LAB [B0+X0++],io[0]
+        let mut tgp = Mb86233::new();
+        tgp.b0 = 0x100;
+        tgp.i0 = 1;
+        tgp.a = 0xfeed;
+        tgp.b = 0xbeef;
+        for _ in 0..3 {
+            tgp.execute(&mut sys, 64);
+            assert_eq!(tgp.pc, 0);
+            assert_eq!((tgp.a, tgp.b, tgp.x0), (0xfeed, 0xbeef, 0));
+        }
+        assert!(sys.fifo_events.is_empty());
+        sys.copro_fifo_in.push_back(0x1234_5678);
+        tgp.execute(&mut sys, 1);
+        assert_eq!(tgp.pc, 1);
+        assert_eq!((tgp.a, tgp.x0), (0x1234_5678, 1));
+        assert!(sys.copro_fifo_in.is_empty());
+    }
+
+    #[test]
+    fn fifo_producers_finish_overflow_instruction_then_stop_and_resume() {
         let mut roms = empty_roms();
-        for kind in [crate::model1board::Kind::WingWar, crate::model1board::Kind::WingWarR360] {
+        // Repeated OUT.W R0,absolute 0xd80000.
+        roms.maincpu = [0x25, 0x00, 0xf3, 0, 0, 0xd8, 0].repeat(20);
+        let mut sys = Model1System::new(&roms).unwrap();
+        let mut cpu = V60::new();
+        cpu.reg[v60::cpu::PC] = 0;
+        cpu.reg[0] = 0x1234_5678;
+        sys.v60_access_active = true;
+        cpu.run(&mut sys, 1000);
+        assert_eq!(cpu.pc(), 17 * 7);
+        assert_eq!(sys.copro_fifo_in.len(), 17);
+        assert_eq!(Mb86233Bus::read_data(&mut sys, 0x100), 0x1234_5678);
+        cpu.run(&mut sys, 8);
+        assert_eq!(cpu.pc(), 18 * 7);
+        assert_eq!(sys.copro_fifo_in.len(), 17);
+
+        // MOV A,[B1+X1], same overflow boundary for the opposite producer.
+        sys.tgp_program = vec![(7 << 26) | (7 << 18) | (0x10 << 9) | 0x180; 20];
+        let mut tgp = Mb86233::new();
+        tgp.b1 = 0x400;
+        tgp.i1 = 0;
+        tgp.a = 0xabcd_1234;
+        tgp.execute(&mut sys, 100);
+        assert_eq!(tgp.pc, 17);
+        assert_eq!(sys.copro_fifo_out.len(), 17);
+        assert_eq!(sys.read_u32(0xd80000), 0xabcd_1234);
+        tgp.execute(&mut sys, 1);
+        assert_eq!(tgp.pc, 18);
+        assert_eq!(sys.copro_fifo_out.len(), 17);
+    }
+
+    #[test]
+    fn fifo_overflow_preserves_order_and_unblocks_at_sixteen() {
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
+        for word in 0..17 {
+            sys.write_u32(0xd80000, 0x1234_0000 | word);
+            assert_eq!(Bus::halt_requested(&sys), word == 16);
+            Mb86233Bus::write_data(&mut sys, 0x400, 0xabcd_0000 | word);
+            assert_eq!(Mb86233Bus::halt_requested(&sys), word == 16);
+        }
+        sys.v60_access_active = true;
+        for word in 0..17 {
+            assert_eq!(Mb86233Bus::read_data(&mut sys, 0x100), 0x1234_0000 | word);
+            assert!(!Bus::halt_requested(&sys));
+            assert_eq!(sys.read_u32(0xd80000), 0xabcd_0000 | word);
+            assert!(!Mb86233Bus::halt_requested(&sys));
+        }
+        assert_eq!(Mb86233Bus::read_data(&mut sys, 0x100), 0);
+        assert!(Mb86233Bus::take_stall(&mut sys));
+        assert!(!Mb86233Bus::take_stall(&mut sys));
+    }
+
+    #[test]
+    fn fifo_halfword_latches_and_debugger_peek_do_not_advance_tgp() {
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
+        sys.write_u16(0xd80000, 0x5678);
+        assert!(sys.copro_fifo_in.is_empty());
+        sys.write_u16(0xd80002, 0x1234);
+        assert_eq!(sys.copro_fifo_in.pop_front(), Some(0x1234_5678));
+        assert_eq!(sys.read_u32(0xd80000), 0);
+        assert!(!sys.v60_fifo_waiting);
+        assert_eq!(sys.tgp_cpu.pc, 0);
+        sys.copro_fifo_out.push_back(0xdead_beef);
+        assert_eq!(sys.read_u32(0xd80000), 0xdead_beef);
+        assert_eq!(sys.copro_fifo_out.len(), 1);
+        sys.v60_access_active = true;
+        assert_eq!(sys.read_u16(0xd80000), 0xbeef);
+        assert_eq!(sys.read_u16(0xd80002), 0xdead);
+        assert_eq!(sys.read_u16(0xd80002), 0xdead);
+        assert!(sys.copro_fifo_out.is_empty());
+    }
+
+    #[test]
+    fn all_dpram_boards_charge_only_cpu_low_byte_reads() {
+        let mut roms = empty_roms();
+        for kind in [crate::model1board::Kind::Original, crate::model1board::Kind::WingWar, crate::model1board::Kind::WingWarR360] {
             roms.ioboard_kind = kind;
             roms.iocpu = vec![0; 0x10000];
             let mut sys = Model1System::new(&roms).unwrap();
@@ -1138,6 +1539,9 @@ mod persistence_tests {
             assert_eq!(sys.take_wait_cycles(), 0); // debugger/host inspection
             sys.v60_access_active = true;
             sys.write_u8(0xc00042, 0x5a);
+            sys.write_u16(0xc00044, 0xabcd);
+            sys.write_u32(0xc00046, 0x12345678);
+            assert_eq!(sys.take_wait_cycles(), 0); // writes have no extra wait
             assert_eq!(sys.read_u8(0xc00042), 0x5a);
             assert_eq!(sys.take_wait_cycles(), 1);
             assert_eq!(sys.read_u8(0xc00043), 0xff);
@@ -1146,11 +1550,34 @@ mod persistence_tests {
             assert_eq!(sys.take_wait_cycles(), 1);
             sys.read_u32(0xc00042);
             assert_eq!(sys.take_wait_cycles(), 2);
+            sys.read_u32(0xc00043); // unaligned: still two connected lanes
+            assert_eq!(sys.take_wait_cycles(), 2);
+            sys.read_u32(0xc00ffe); // only one connected lane before map end
+            assert_eq!(sys.take_wait_cycles(), 1);
+            sys.read_u8(0xc01000);
+            assert_eq!(sys.take_wait_cycles(), 0);
+            sys.v60_access_active = false;
+            sys.read_u32(0xc00042);
+            assert_eq!(sys.take_wait_cycles(), 0);
         }
-        let mut original = Model1System::new(&empty_roms()).unwrap();
-        original.v60_access_active = true;
-        original.read_u32(0xc00042);
-        assert_eq!(original.take_wait_cycles(), 0); // existing timing isolated
+    }
+
+    #[test]
+    fn original_dpram_wait_reaches_v60_budget_and_carries_instruction_debt() {
+        // Fetch a NOP from the low DPRAM lane: 8 base clocks + 1 bus wait.
+        // Running an 8-clock slice must not lose that final clock.
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
+        sys.write_u8(0xc00000, 0xcd);
+        let mut cpu = V60::new();
+        cpu.reg[v60::cpu::PC] = 0xc00000;
+        sys.v60_access_active = true;
+        cpu.run(&mut sys, 8);
+        assert_eq!(cpu.pc(), 0xc00001);
+        assert_eq!(cpu.icount, -1);
+        assert_eq!(sys.take_wait_cycles(), 0); // drained by CPU, not twice
+        cpu.run(&mut sys, 1);
+        assert_eq!(cpu.pc(), 0xc00001); // pays debt without another fetch
+        assert_eq!(cpu.icount, 0);
     }
 }
 

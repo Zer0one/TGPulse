@@ -193,9 +193,7 @@ impl V60 {
     pub fn run<B: Bus>(&mut self, bus: &mut B, cycles: i32) {
         self.icount += cycles;
 
-        if self.irq_line {
-            self.try_irq(bus);
-        }
+        self.try_irq(bus);
         if self.halted {
             self.icount = 0;
             return;
@@ -236,9 +234,7 @@ impl V60 {
                 return;
             }
 
-            if self.irq_line {
-                self.try_irq(bus);
-            }
+            self.try_irq(bus);
             if self.halted {
                 self.icount = 0;
                 return;

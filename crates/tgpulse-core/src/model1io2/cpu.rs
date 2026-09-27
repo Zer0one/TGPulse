@@ -2,7 +2,7 @@
 //! not serialized. Unsupported accesses latch a fault until reset or restore.
 use super::*;
 use std::cell::{Cell, Ref, RefCell};
-use tgpulse_z80::{CpuState, Z80_io, Z80};
+use z80::{CpuState, Z80_io, Z80};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SerialEvent {

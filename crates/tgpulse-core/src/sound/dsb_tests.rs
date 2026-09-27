@@ -1,10 +1,37 @@
 use super::*;
 
+#[test]
+fn timed_driver_pin_fans_out_to_main_and_dsb() {
+    for partition in [1, 3, 64, 20000] {
+        let mut linked = sound(true);
+        linked.enable_model1_serial();
+        linked.board.uart_control(0x4e);
+        linked.board.uart_control(0x37);
+        let mut remaining = 20000;
+        while remaining > 0 {
+            let n = remaining.min(partition);
+            linked.run(n, SND_CPU_HZ);
+            remaining -= n;
+        }
+        assert_eq!(linked.serial_fault(), None);
+        assert_eq!(linked.dsb_fault(), None);
+        assert!(linked.board.uart_rx_ready());
+        assert_eq!(linked.board.main_uart_read(), 0x25);
+        let dsb = linked.board.dsb.as_ref().unwrap();
+        assert_eq!(dsb.playback().volume, !0x25 & 127);
+        assert_eq!(dsb.diagnostics().0, 1);
+        assert_eq!(dsb.diagnostics().1, 1);
+    }
+}
+
 fn sound(linked: bool) -> SoundSystem {
     let mut rom = vec![0; 128];
     rom[..4].copy_from_slice(&0x00f0fff0u32.to_be_bytes());
     rom[4..8].copy_from_slice(&8u32.to_be_bytes());
-    let mut p = 8;
+    // from_board executes reset plus the first instruction. Leave that NOP
+    // independent of the serial path selected immediately after construction.
+    rom[8..10].copy_from_slice(&[0x4e, 0x71]);
+    let mut p = 10;
     for (address, value) in [
         (0x00c20003u32, 0x4eu16),
         (0x00c20003, 0x37),
@@ -65,6 +92,7 @@ fn incoming_main_commands_are_not_directly_mirrored_to_dsb() {
 #[test]
 fn source_data_status_does_not_claim_ready_with_full_holding_register() {
     let mut s = sound(true);
+    s.board.write8(0xc20003, 0x4e);
     s.board.write8(0xc20003, 0x37);
     s.board.write8(0xc20001, 1);
     assert_eq!(s.board.read8(0xc20003) & UART_TX_RDY, 0);
@@ -75,6 +103,7 @@ fn source_data_status_does_not_claim_ready_with_full_holding_register() {
 #[test]
 fn serial_fault_is_observable_and_stops_the_opt_in_pair() {
     let mut s = sound(true);
+    s.board.write8(0xc20003, 0x4e);
     s.board.write8(0xc20003, 0x37);
     s.board.write8(0xc20001, 1);
     s.board.write8(0xc20001, 2);

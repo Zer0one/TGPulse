@@ -205,15 +205,15 @@ impl V60 {
     /// Checks the IRQ line: if asserted and PSW.IE is set, acknowledge (the
     /// device returns the level) and take the interrupt at vector level+0x40.
     pub(crate) fn try_irq<B: Bus>(&mut self, bus: &mut B) -> bool {
-        // An in-ISR acknowledge clears the controller's status while our latched
-        // line is still asserted; reflect that immediately so we don't re-take
-        // the same level after `reti` (else the vblank ISR runs twice a frame).
-        if self.irq_line && bus.irq_active() == Some(false) {
-            self.irq_line = false;
+        // MMIO can assert or clear the controller mid-slice. Sample both edges,
+        // then ask for the current vector only when IE permits acceptance.
+        if let Some(active) = bus.irq_active() {
+            self.irq_line = active;
         }
         if !self.irq_line || self.reg[PSW] & (1 << 18) == 0 {
             return false;
         }
+        self.irq_vector = bus.irq_acknowledge().unwrap_or(self.irq_vector);
         let vector = self.irq_vector as u32 + 0x40;
         self.halted = false;
         self.do_irq(bus, vector);
@@ -1831,9 +1831,13 @@ impl V60 {
     }
 
     /// IN: op1 is an I/O address, its contents (of `dim`) are written to op2.
-    /// The hardware I/O-stall path is not modelled; a real stall never happens
-    /// with a memory-backed bus.
+    /// An empty FIFO can request a retry before the destination is decoded or
+    /// written, matching MAME opINB/opINH/opINW. Ordinary buses never stall.
     fn op_in<B: Bus>(&mut self, bus: &mut B, dim: u8) -> u32 {
+        // Address decoding can change a source register (auto +/-). A stalled
+        // transfer must retry the same address, not commit that update twice.
+        // Keep architectural registers only; decoder scratch is rebuilt on retry.
+        let registers_before = self.reg;
         self.f12_first(bus, false, dim);
         let addr = self.op1;
         let v = match dim {
@@ -1841,6 +1845,11 @@ impl V60 {
             1 => bus.read_io16(addr) as u32,
             _ => bus.read_io32(addr),
         };
+        if bus.take_io_stall() {
+            self.reg = registers_before;
+            self.icount = 0;
+            return 0; // keep PC on IN and yield to the producer
+        }
         self.f12_write_second(bus, dim, v);
         self.f12_len()
     }

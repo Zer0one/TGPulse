@@ -1,6 +1,6 @@
 //! Synthetic programs only: exercise the production library (not its upstream
 //! cfg(test) CP/M console shims). No ROM, filesystem, GUI or wall-clock access.
-use tgpulse_z80::{CpuState, Z80_io, Z80};
+use z80::{CpuState, Z80_io, Z80};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Event {

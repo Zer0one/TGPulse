@@ -78,6 +78,25 @@ fn playback_partial_writes_loop_latches_and_bit_position() {
 }
 
 #[test]
+fn uart_8n1_transmission_occupies_ten_bits_of_sixteen_wire_ticks() {
+    let mut u = uart();
+    u.write(0xa5).unwrap();
+    // Independent framing oracle: start, eight LSB-first data bits, stop.
+    // 160 ticks at the configured 500 kHz wire clock = 320 microseconds.
+    let bits = [false, true, false, true, false, false, true, false, true, true];
+    for expected in bits {
+        for _ in 0..16 {
+            u.tick();
+            assert_eq!(u.tx, expected);
+            assert_eq!(u.status() & 4, 0); // TXEMPTY waits for the stop bit to end
+        }
+    }
+    u.tick();
+    assert_eq!(u.status() & 5, 5);
+    assert!(u.tx);
+}
+
+#[test]
 fn uart_firmware_preamble_rx_ready_and_read_clear() {
     let mut u = uart();
     assert_eq!(u.mode, 0x4e);
@@ -139,11 +158,11 @@ fn uart_internal_reset_is_not_hardware_reset_and_modes_fail_explicitly() {
     frame(&mut u, 7, true);
     u.control(0x40).unwrap();
     assert_eq!(u.status() & 2, 2);
-    assert_eq!(u.control(0x5e), Err(Error::UnsupportedUartMode(0x5e)));
+    assert_eq!(u.control(0x5e), Err(uart::Error::UnsupportedUartMode(0x5e)));
     u.control(0x4e).unwrap();
     u.control(0x37).unwrap();
     assert_eq!(u.read(), 7);
-    assert_eq!(u.control(0x3f), Err(Error::UnsupportedUartCommand(0x3f)));
+    assert_eq!(u.control(0x3f), Err(uart::Error::UnsupportedUartCommand(0x3f)));
 }
 
 #[test]
@@ -155,7 +174,7 @@ fn transmit_has_holding_register_timed_bits_and_roundtrip() {
     assert!(!u.tx);
     assert_eq!(u.status() & 5, 1);
     u.write(0x55).unwrap();
-    assert_eq!(u.write(0x33), Err(Error::TransmitFull));
+    assert_eq!(u.write(0x33), Err(uart::Error::TransmitFull));
     let mut restored: uart::Uart = bincode::deserialize(&bincode::serialize(&u).unwrap()).unwrap();
     for i in 1..=320 {
         u.tick();
