@@ -1,5 +1,9 @@
 # <img src="assets/logo.png" alt="TGPulse Emulator" width="420">
 
+This fork is maintained as [TGPulse-Next](https://github.com/Zer0one/TGPulse-Next),
+based on [deepblueworks/TGPulse](https://github.com/deepblueworks/TGPulse).
+The executable name remains `tgpulse`; the local development launcher remains `tgpulse.dev`.
+
 Emulator for Sega's Model 1 and Model 2 arcade boards, written in Rust.
 Currently with Linux, Windows and Android builds (Android branch).
 
@@ -85,6 +89,14 @@ Mute keeps the selected gain; chip/CPU/timer emulation continues even at zero.
 YM3438 synthesis always runs: FM sounds in Virtua Racing have also been
 confirmed in-game by the user. Muting FM silences only its output.
 See [audio integration and limits](docs/MODEL1_AUDIO.md).
+
+**Player 2 (Model 1 and Model 2).** Settings → Input has Cabinet P1/P2 tabs with
+independent bindings and controller selection. P2 supports local two-player
+joystick games, Model 2 guns, Dynamite Baseball's bat, Power Sled's second seat
+and SWA/SWAJ's Gunner (stick and two fire buttons, no Start/view/throttle).
+Signals without a P2 counterpart remain grey. P2 uses P1 gamepad conventions, with no default gameplay keys;
+Coin/Start and shared Test/Service retain keyboard defaults. See
+[player assignment and migration](docs/INPUTS.md#player-2--model-1-and-model-2).
 
 | Key | |
 | --- | --- |

@@ -1,11 +1,14 @@
 # Input translation layer
 
 The frontend has one public signal catalogue, one binding file
-(`config/input.conf`), and one unfiltered Cabinet list in Settings → Input.
+(`config/input.conf`), and two unfiltered tabs in Settings → Input:
+**Cabinet P1** and **Cabinet P2**, both showing the same catalogue.
 Bindings produce logical signal values; the input translator routes them to
 the existing cabinet controls and I/O ports according to the ROM set and its
-`Scheme` / `AnalogRole` metadata. The only core input exception is Air Walkers'
-port-F player-pair mux; the public catalogue and bindings remain frontend-only.
+`Scheme` / `AnalogRole` metadata. The core carries native digital/ADC values,
+including independent P2 lightgun coordinates through the DPRAM and serial
+mux. Air Walkers also has a port-F player-pair mux; the public catalogue and
+bindings remain frontend-only.
 
 Desktop pad buttons are tracked per device from gilrs' logical press/release
 events. Native-code fallback polling is deliberately avoided: on macOS an
@@ -23,6 +26,80 @@ deadzone and calibration apply equally to both representations.
 Click a Cabinet binding, edit its expression, then Apply. Cancel discards the
 editor contents. An invalid expression is reported without replacing the
 working binding. Emulator hotkeys retain keyboard capture.
+
+### Player 2 — Model 1 and Model 2
+
+Each player has independent bindings and a Controller selector. Unsupported
+P2 signals remain visible, grey and non-editable; the list is not filtered by
+the current game. A row is enabled when at least one supported cabinet has
+that P2 counterpart. The scope includes both Model 1 and Model 2, following
+the tested SM2 Libretro workbook/implementation for Model 2.
+
+- **Virtua Fighter:** directions and Action 1/2/3 use IN.2, independently of
+  P1's IN.1. Action 1 = Punch, Action 2 = Kick, Action 3 = Guard, as for P1.
+- **Star Wars Arcade:** the Gunner is a subset of the Pilot: Analog Joystick
+  X/Y and Action 1/2 only, no Start, VR/view or throttle. Fire bits are IN.1
+  `04/08`, stick channels ADC 4/5, centre 127 and range 27..227. Stick polarity
+  matches P1. MAME declares IN.0 `20` as Start2; intentionally left inactive
+  in SWA/SWAJ. The user's INPUT TEST 1/2 screenshot (2026-09-27) confirms
+  Laser/Torpedo for both seats and `--` for Gunner VR Button/Start. This is
+  in-game layout evidence, not proof that two controllers were exercised.
+- **Model 2 joystick games:** the second joystick/actions use IN.2 with the
+  same per-game logical translation as P1. This includes VF2, Fighting Vipers,
+  Last Bronx, DOA, Sonic Championship, Dynamite Cop, Virtua Striker, Dynamite
+  Baseball/97, Fighting Baseball, Air Walkers, Pilot Kids and Zero Gunner,
+  including their catalogued revisions. Two-button cabinets leave button 3
+  released. Virtual On's second stick belongs to P1; Royal Ascot II has no
+  second gameplay panel or Start2. Neither is repurposed as P2.
+- **Dynamite Baseball/97:** independent P2 Bat Swing drives `bat2`, 0..255;
+  default Right Stick down, as for P1.
+- **Model 2 guns:** independent cursor, calibrated ADC/serial coordinates and
+  trigger for P2. Gun Yaw/Pitch default to Left Stick X/Y; Action 1 shoots,
+  Action 2 reloads only in serial gun cabinets (Virtua Cop/2, HOTD).
+  Behind Enemy Lines instead uses Action 2 for its missile. Mounted guns
+  Gunblade NY and Rail Chase 2 have no off-screen reload. The mouse remains
+  P1-only. Red/blue reticles distinguish P1/P2; P2 appears when its controller
+  is connected or its gun controls have been used.
+- **Power Sled:** independent P2 Entry/Call on Action 1/2, right/left pedals
+  on Accelerator/Brake (R2/L2), ADC channels 5/7 with 0..255 travel.
+  This game is absent from the SM2 workbook; its wiring follows MAME.
+- Coin 2 / Start 2 move out of P1 to P2 Coin / Start. Default keys are 6 / 2,
+  with Select / Start on the P2 controller. Start remains available for VF and
+  existing applicable cabinets, not SWA's Gunner.
+- P2 Test and Service are deliberately independent binding aliases for the
+  shared machine lines: OR with P1, never toggle twice or invent a second
+  hardware line. Defaults: F2 / L3 and F8 / R3, as for P1.
+- Other enabled P2 signals inherit P1's **default gamepad** conventions only;
+  no default gameplay keyboard bindings. Custom keyboard bindings remain allowed.
+  Changing P1's bindings does not change P2's. Unsupported signals start unbound.
+
+Wiring reference: local MAME `src/mame/sega/model1.cpp`, revision
+`bd7e0b815842ec461e8ad2538d127f3332f5c96c`, `vf` / `swa` input definitions.
+The native `Inputs` byte/ADC interface remains frontend-independent; no GUI or
+host gamepad objects enter the core. These are local seats, not cabinet linking.
+Air Walkers P3/P4 and Power Sled's extra network-check input remain outside this
+P2 implementation. See [source audit](INPUT_AUDIT.md#model-2-p2-follow-up--2026-09-27).
+
+Model 2 snapshots now include both guns' coordinates/off-screen flags. The
+binary snapshot format is **2**: older format-1 machine states are rejected
+with an explicit version error, not silently misread. NVRAM is unchanged.
+This does not add complete Model 1 machine snapshots or claim the existing
+Model 2 snapshots cover previously omitted devices.
+
+Controller selection is saved as `controller_p1` / `controller_p2`:
+`auto`, `none`, or device UUID plus ordinal. Auto assigns distinct devices;
+disconnecting one leaves its seat empty rather than promoting the other pad.
+Explicitly choosing a device already assigned to the other player removes it
+from that player; a hand-edited duplicate cannot drive both seats. P1 alone
+owns driving rumble and the gamepad emulator exit chord. Disconnect clears
+cached buttons; returning to the library/opening another game retains device
+assignments without carrying over the old cabinet's gear/analog ramps.
+
+UUID identifies the controller model, not necessarily an individual serial
+number. Identical controllers use enumeration ordinals; verify/reselect them
+if their connection order changes across application restarts. The Android
+single-pad/touch adapter remains P1-only; this implementation targets desktop
+gilrs devices. Two-physical-gamepad gameplay/reconnect acceptance is still pending.
 
 ### Return to game menu / quit
 
@@ -114,7 +191,13 @@ flight games, so they are no longer prefixed with one game's name.
 Examples:
 
 ```ini
-format = signals-v1
+format = signals-v3
+controller_p1 = auto
+controller_p2 = auto
+p2.coin = Digit6, pad:Select
+p2.start = Digit2, pad:Start
+p2.action1 = pad:South, pad:LeftTrigger
+p2.analog_x = pad:LeftStickX
 steering = keys:ArrowLeft/ArrowRight, pad:LeftStickX
 gear1 = Digit1, pad:RightStickX- & pad:RightStickY+
 gear2 = Digit2, pad:RightStickX- & pad:RightStickY-
@@ -145,6 +228,16 @@ Old-format files are migrated at startup after a backup is written to
 `input.conf.pre-signals`. Existing keyboard directions, common actions and
 hotkeys are adapted; controller assignments use the new defaults. The backup
 is never overwritten. It is not a second active binding file.
+`signals-v1` files are backed up separately as `input.conf.pre-players` before
+conversion to `signals-v3`. P1 entries keep their names and values; `coin2` and
+`start2` become `p2.coin` and `p2.start`. Old shipped 6/2 defaults gain the P2
+Select/Start aliases; customized or explicitly empty bindings are preserved.
+The migration is idempotent and does not overwrite an existing backup.
+The short-lived Model 1-only `signals-v2` is backed up as
+`input.conf.pre-model2-players`: its previously disabled, empty P2 Gun Yaw/Pitch,
+Bat Swing and Accelerator/Brake entries acquire their gamepad defaults.
+Nonempty custom values and all previously enabled P2 entries remain unchanged.
+In v3, explicitly empty bindings stay empty on subsequent launches.
 Merged actions retain the union of their old keyboard keys. The old
 Space-for-view-change alias is intentionally not imported: Space now belongs
 to Action 1, so importing it would also fire in Sky Target. Use V for View 4.
@@ -159,8 +252,11 @@ above to avoid co-activating pedals or actions.
   digital exceptions and direct gear selection.
 - `bindings.rs`: persistence, migration and hotkeys.
 - `input.rs`: existing polling/calibration, with narrow calls to the translator.
+- `input/players.rs`: frontend-only device identity and independent seat assignment.
 - `app.rs`: passes the identified ROM set to input.
 - `gui/mod.rs`: displays the full catalogue and edits its bindings.
+- Core `config.rs` / `memory.rs` / `system.rs`: native P2 lightgun values and
+  publication; `savestate.rs` versions the resulting snapshot layout.
 
 The retained `Control` enum identifies internal cabinet requests and touch
 overlay inputs. It has no separate user-facing catalogue or configuration.

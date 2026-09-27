@@ -39,7 +39,7 @@ multiplayer implementation.
 | Behind Enemy Lines | Service IN0:04, Test IN0:08, without swapping the user's physical bindings; Missile is not off-screen reload |
 | Wing War | Machine Gun / Missile / Smoke at IN1:10/20/40; all four views restored; 360 variant has no view switches and has different stick polarity |
 | NetMerc | MVD Holder at IN1:04, no invented Start switch; Y reaches channel 2, not the throttle mirror |
-| Star Wars Arcade | Start 2 restored; Y direction, throttle centre/range and independent idle gunner axes |
+| Star Wars Arcade | At this audit: Start 2 restored; Y direction, throttle centre/range and independent idle gunner axes. Superseded by the P2 follow-up below. |
 | Two-button joystick cabinets | Third/unused action line stays released; Dynamite Baseball retains its own Button 1/2 order and Bat Swing |
 | Hanguk Pro Yagu / Royal Ascot / Air Walkers | Anonymous Button 1/2 follow SM2's South/East ordering rather than the fighting template |
 | All Model 2 cars / bikes | Full 00..ff ADC travel, including Daytona; reversed Bank; reversed Over Rev / Super GT pedals |
@@ -123,10 +123,68 @@ with Indy 500's input test and gameplay, then revised analog cabinets.
 Existing NVRAM calibrated against the former ADC range may need the game's
 normal input-calibration procedure; never erase it automatically.
 
-Existing capability limits remain explicit: TGPulse exposes one gameplay
-controller, not SM2's full P1–P4 device configuration. Start 2 alone does not
-provide P2 gameplay controls. Air Walkers P3/P4 and Power Sled's second seat
-are not implemented. Power Sled's extra IN3 network-check switch has no
+At the time of this audit TGPulse exposed one gameplay controller; this is
+superseded for Model 1 and Model 2 by the 2026-09-27 P2 follow-ups below, not by
+a full SM2 P1–P4 implementation. Air Walkers P3/P4 remain unimplemented;
+Power Sled's second seat is now routed. Its extra IN3 network-check switch has no
 frontend/core input lane and was not invented as another action or public
 configuration list. No full multiplayer or device-emulation expansion is
 claimed by this mapping audit.
+
+### Model 1 P2 follow-up — 2026-09-27
+
+Cabinet P1/P2 now share the catalogue with independent device/binding selection.
+VF routes P2 directions/actions to IN.2; SWA/SWAJ routes the Gunner's two fire
+buttons and stick to IN.1 bits 04/08 and ADC 4/5. Per user clarification the
+Gunner has **no Start, view or throttle**: the previously routed Start2 bit
+is intentionally left inactive in these two games despite its MAME port label.
+The supplied in-game INPUT TEST 1/2 screenshot confirms Gunner Laser/Torpedo
+and no Gunner VR Button/Start; all switches were OFF, so this verifies the
+layout, not actual device routing or the analog page.
+Test/Service are independently bindable aliases for the same hardware switches.
+Coin2 and other games' existing Start2 routes remain, now owned by P2 bindings.
+See [P2 contract and verification limits](INPUTS.md#player-2--model-1-and-model-2).
+
+### Model 2 P2 follow-up — 2026-09-27
+
+P2 was requested for the emulator, not restricted to Model 1. Source baseline:
+
+- SM2 Libretro commit `75ced234792520c325aa63aa7be3dfaf87b07d46`:
+  `Docs/revisione_profili_model2.xlsx`, sheet `Profili`, rows 12–17 and 20–34;
+  `src/libretro/input.cpp` (player counts, per-player sampling and port routing),
+  `data/games.xml` and `src/rom/game_db.cpp` (ADC/lightgun metadata and inheritance).
+  Workbook SHA256: `c8c83e39b9257dd211d0527f8ea35526f9111f1ff1bbc610cc33dbf32622f2c2`.
+- Power Sled is not in that workbook: MAME `model2.cpp`, `powsled` ports,
+  revision `bd7e0b815842ec461e8ad2538d127f3332f5c96c`, is the supplementary source.
+
+Joystick P2 reuses the existing P1 semantic translation, with an independent
+binding/controller and IN.2. Physical default conventions remain those agreed
+for TGPulse (Action 1 South/L1, Action 2 East/R1), not a replacement of the P1
+layout by SM2's physical buttons. Virtual On and Royal Ascot II remain single
+local gameplay panels; the latter no longer exposes a spurious Start2 route.
+Air Walkers' second player uses its first pair; P3/P4 stay released.
+
+Bat Swing drives the second Baseball ADC. Power Sled's Entry/Call use IN.1
+04/08; right/left pedals use ADC 5/7. Gunblade/BEL and Rail Chase 2 use
+independent calibrated positional axes; VC/VC2/HOTD use independent serial
+coordinates and off-screen flags. Initial positional P2 aim retains the old
+calibrated rest value; subsequent movement scales its own cursor through the
+actual min/max range. BEL's secondary button drives P2 missile IN.1:20.
+
+**Reference nuance:** `hotd` explicitly sets `p2_trigger="in2"`; `hotdo` and
+`hotdp` declare their own lightgun axes without that flag. In the inspected
+SM2 loader, a present child lightgun spec does not inherit the parent's spec,
+so those two revisions resolve to IN.1:02. TGPulse follows that effective
+reference, while `hotd` uses IN.2:01. This distinction is source-backed and
+still needs real input-test confirmation for the clones.
+
+The old core supplied constants for the second gun. Both DPRAM publication
+and the 315-5649 serial mux now forward P2, including independent off-screen
+flags. Snapshot format 2 retains those new values and the pending mux index;
+old format-1 machine states are rejected explicitly. NVRAM is unaffected.
+
+Automated checks cover every signal across all 100 sets for both players,
+P1 isolation, action release, two-button masks, analog endpoints/polarity,
+independent gun cursor hold/reload, migration and both native gun transports
+with mid-mux snapshot/restore. These are not two-controller gameplay proof;
+real device/input-test validation remains pending.

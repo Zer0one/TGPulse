@@ -9,7 +9,7 @@ macos-emulation-toolkit and MAME projects.
 ### Consolidated verification — 2026-09-27
 
 - The complete pending integration passes `cargo test --offline --workspace`:
-  276 passed. The offline development
+  293 passed. The offline development
   release build also passes; the existing `block` future-compatibility warning
   remains. These checks are not a fresh manual gameplay validation.
 - Wing War gameplay and throttle direction were confirmed by the user;
@@ -24,10 +24,12 @@ macos-emulation-toolkit and MAME projects.
   working. Shared flight throttle, SWA view routing, optional sRGB correction,
   Model 1 2D palette intensity and persistent source gains are implemented.
   Master volume now also has a 100% reference and double-click reset.
-- Next bounded fidelity checkpoint: investigate the reported MultiPCM1
-  distortion in SWA. Equivalent-frame colour comparison, extended audio/input
-  acceptance and Player 2 remain open; Z80 unification and the timing audit
-  remain final post-implementation work.
+- User confirms the washed-out colour issue resolved with sRGB correction.
+  Player 2 is implemented for applicable Model 1 and Model 2 local seats
+  (details below); physical two-gamepad acceptance and extended audio/input
+  testing remain open.
+  MultiPCM1 distortion remains to investigate; Z80 unification and the timing
+  audit remain final post-implementation work.
 
 Apply the preflight/checkpoint/recap agreement in [AGENTS.md](../AGENTS.md).
 The table is an initial engineering estimate, not a measured cost or completion
@@ -231,7 +233,9 @@ to the shared I/O board and cannot be treated as a proven complete reference.
   source distortion from final mixer saturation. Existing nominal board gains
   match MAME; do not lower them speculatively. Basic SWA playback is now
   user-confirmed, not a certification of audio fidelity or all sequences.
-- [ ] **Model 1 colour fidelity versus MAME: gameplay comparison pending.**
+- [x] **Model 1 washed-out colours: resolved with sRGB correction.**
+  User confirmation on 2026-09-27 closes this reported defect, not every possible
+  per-title rendering discrepancy.
   Two bounded corrections are implemented (2026-09-27):
   - Optional **sRGB correction**, persisted as `srgb = on/off` (default off),
     updates immediately. The frontend samples display RGB through an sRGB
@@ -247,12 +251,12 @@ to the shared I/O board and cannot be treated as a proven complete reference.
     clear, matching `model1_paletteram_w`. A board-specific trait hook keeps
     Model 2 unchanged; this affects selected 2D pens, not every polygon.
     Reference: [MAME Model 1 video source](https://github.com/mamedev/mame/blob/master/src/mame/sega/model1_v.cpp).
-  Compare equivalent game frames (including SWA's dim grey backdrop) next;
-  synthetic colour checks do not certify complete in-game visual fidelity.
+  The user confirmed the sRGB correction resolves the reported appearance;
+  synthetic colour checks alone do not certify every title's rendering fidelity.
   Verification: 267 workspace tests passed; the GPU case was also explicitly
   exercised on Metal. Exhaustive RGB555/intensity tests cover Model 1 and
   unchanged Model 2 palette expansion; settings round-trips include sRGB.
-  Offline release build passed. No game screenshots or manual GUI test yet.
+  Offline release build passed; reported in-game colour defect is user-accepted.
 
 SWA input follow-up (2026-09-27): `swa`/`swaj` hardware button 3 now routes to
 `View / Select 1` (default D-pad Down / Z), matching Sega Rally's view binding,
@@ -265,7 +269,7 @@ Verification: 263 workspace tests passed, including SWA/SWAJ default-view,
 shared throttle polarity/partial-travel/pedal-isolation and binding migration
 tests plus the all-set digital crosstalk audit.
 Offline development release build passed. The new view binding still needs
-manual gameplay confirmation; colour and clipping checks above remain open.
+manual gameplay confirmation; the clipping check above remains open.
 
 - Compare rendering and timing per title: clipping, moire, palette translation,
   HUD ordering, gamma and monitor modes. In particular, the Model 1 tile source
@@ -273,21 +277,36 @@ manual gameplay confirmation; colour and clipping checks above remain open.
   do not change this merely by analogy without tracing actual game writes.
 - Validate VR/Virtua Formula, VF, SWA and the Wing War variants in-game; the
   README's tested-title list is not a complete compatibility matrix.
-- [ ] **Player 2 controls — Model 1 first, SWA as initial checkpoint.**
-  Coin 2 / Start 2 alone do not establish two-player support: the frontend
-  currently selects one gamepad and SWA's second stick stays centred.
-  Reuse the shared signal catalogue with independent per-player bindings
-  exposed in the GUI and persisted in configuration; avoid a divergent P2
-  catalogue. Assign controllers explicitly to players, including disconnect /
-  reconnect handling, without changing existing P1 assignments.
-  Route each player's digital and analog signals to the actual per-game I/O,
-  validating SWA/SWAJ's second stick, buttons and start/coin wiring against
-  the reference. Keep frontend-owned player input independent of host device
-  APIs for a future Libretro port. Test simultaneous inputs, no P1/P2
-  crosstalk, persistence and controller reconnection, then confirm real
-  two-player gameplay. Inventory other applicable games separately; Model 2
-  follow-up must use the tested SM2 Libretro reference. This is local
-  same-cabinet multiplayer, not cabinet-link emulation. Not implemented yet.
+- [ ] **Player 2 controls — implemented for Model 1 and Model 2; physical acceptance pending.**
+  Cabinet P1/P2 share one unfiltered signal catalogue with independent bindings;
+  unsupported P2 rows are grey/non-editable. Coin 2 / Start 2 move to P2;
+  deliberately duplicated Test/Service bindings OR into shared machine lines.
+  Default P2 gameplay bindings are gamepad-only, following P1 conventions;
+  Coin/Start/Test/Service also retain keyboard defaults. Controller selection
+  persists; disconnect never promotes the other player's assigned pad.
+  SWA/SWAJ Gunner uses ADC 4/5 and IN.1 bits 04/08, with no Start/view/throttle
+  per user convention; MAME's declared Start2 line is intentionally not routed.
+  The user's INPUT TEST 1/2 screenshot confirms the Gunner/Pilot digital
+  control distinction (all switches OFF, not a two-device input test).
+  VF's second joystick/actions use IN.2. Model 2 follows the authoritative
+  SM2 Libretro workbook and current source: local joystick/actions, Baseball
+  Bat Swing and independent positional/serial guns; Power Sled's second seat
+  uses supplementary MAME wiring because it is absent from the workbook.
+  No P2 gameplay is invented for linked single-seat cabinets or Royal Ascot II.
+  Air Walkers P3/P4 remain outside scope. Native P2 gun fields are serializable;
+  Model 2 snapshot format 2 rejects old format-1 saves; NVRAM is unchanged.
+  [Contract, device identity limits and migration](INPUTS.md#player-2--model-1-and-model-2).
+  Headless tests cover P1/P2 isolation, polarity/ranges, default keys, migration,
+  shared Test/Service, GUI disabled rows and device assignment/reconnection.
+  Verification: 293 workspace tests pass (89 frontend), including all 100 sets,
+  independent gun transports and mid-mux save/restore; offline release build
+  and `tgpulse.dev --list` pass (100 sets). No new physical-controller or
+  gameplay validation is claimed.
+  Next: real two-controller SWA/VF and Model 2 input tests/gameplay (including
+  HOTD revisions' differing reference trigger ports), disconnect/reconnect and restart
+  confirmation. Identical controllers may need re-selection after a restart
+  if the OS changes their enumeration order. This is local same-cabinet play,
+  not cabinet-link emulation; no host dependencies are added to the core.
 - Add Model 1 machine save states (separate from persistent NVRAM), preserving
   an in-memory API suitable for a future Model 1-only Libretro frontend.
   New integrations should inventory state and add serialization/continuation
