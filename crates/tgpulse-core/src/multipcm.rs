@@ -44,7 +44,7 @@ fn value_to_fixed(bits: u32, value: f32) -> u32 {
     ((1u64 << bits) as f32 * value) as u32
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Sample {
     start: u32,
     loop_pt: u32,
@@ -60,7 +60,7 @@ struct Sample {
     format: u8,
 }
 
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 enum EgState {
     #[default]
     Attack,
@@ -69,7 +69,7 @@ enum EgState {
     Release,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct Envelope {
     volume: i32,
     state: EgState,
@@ -94,7 +94,7 @@ impl Default for Envelope {
     }
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Lfo {
     phase: u16,
     phase_step: u32,
@@ -103,7 +103,7 @@ struct Lfo {
     scale_sel: usize,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Slot {
     regs: [u8; 8],
     playing: bool,
@@ -124,6 +124,19 @@ struct Slot {
     vibrato: u8,
     amplitude_lfo: Lfo,
     tremolo: u8,
+}
+
+/// Mutable chip state only. ROM identity belongs to the enclosing machine
+/// snapshot; the caller must restore against the same ROM resources.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct State {
+    bank: usize,
+    slots: [Slot; VOICES],
+    cur_slot: usize,
+    address: usize,
+    rate: f32,
+    writes: u64,
+    key_ons: u64,
 }
 
 pub struct MultiPcm {
@@ -151,6 +164,38 @@ pub struct MultiPcm {
 }
 
 impl MultiPcm {
+    pub fn snapshot(&self) -> State {
+        State {
+            bank: self.bank,
+            slots: self.slots,
+            cur_slot: self.cur_slot,
+            address: self.address,
+            rate: self.rate,
+            writes: self.writes,
+            key_ons: self.key_ons,
+        }
+    }
+
+    /// Restore without replaying register writes, retriggering voices or
+    /// replacing immutable ROM/rate-derived lookup tables.
+    pub fn restore(&mut self, state: &State) -> Result<(), &'static str> {
+        if state.rate.to_bits() != self.rate.to_bits() {
+            return Err("MultiPCM snapshot clock mismatch");
+        }
+        if state.bank > 3 || state.cur_slot >= VOICES || state.address > 7
+            || state.slots.iter().any(|s| s.pitch_lfo.scale_sel >= 8 || s.amplitude_lfo.scale_sel >= 8)
+        {
+            return Err("invalid MultiPCM snapshot selectors");
+        }
+        self.bank = state.bank;
+        self.slots = state.slots;
+        self.cur_slot = state.cur_slot;
+        self.address = state.address;
+        self.writes = state.writes;
+        self.key_ons = state.key_ons;
+        Ok(())
+    }
+
     /// Lightweight diagnostics used by the sound-board probes.
     pub fn active_voices(&self) -> usize {
         self.slots.iter().filter(|slot| slot.playing).count()
