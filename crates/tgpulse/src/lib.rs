@@ -18,6 +18,8 @@ mod gui;
 #[cfg(target_os = "android")]
 mod input;
 #[cfg(target_os = "android")]
+mod network;
+#[cfg(target_os = "android")]
 mod platform;
 #[cfg(target_os = "android")]
 mod settings;
@@ -72,10 +74,15 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     // The desktop reads the saved adjustments in the command-line parser,
     // which this entry point never goes through; without this the touch
     // settings screen would write settings.conf and nothing would read it.
-    crate::settings::Settings::load_or_create(&crate::settings::Settings::path())
-        .apply_to(&mut config);
+    let settings = crate::settings::Settings::load_or_create(&crate::settings::Settings::path());
+    settings.apply_to(&mut config);
+    let profile = crate::settings::Profile {
+        settings,
+        launch_dir: std::env::current_dir().expect("runtime directory"),
+        ..Default::default()
+    };
     storage::set_reverse_landscape(config.reverse_landscape);
-    if let Err(e) = app::run_with(event_loop, config, None, gui::StartupPanels::default()) {
+    if let Err(e) = app::run_with(event_loop, config, None, gui::StartupPanels::default(), profile) {
         log::error!(target: "app", "{e}");
     }
 }

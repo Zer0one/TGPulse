@@ -9,6 +9,7 @@ mod bindings;
 mod cli;
 mod gui;
 mod input;
+mod network;
 mod platform;
 mod settings;
 #[cfg(target_os = "android")]
@@ -44,7 +45,7 @@ fn main() {
             Ok(())
         }
         cli::Command::Debug { rom, script } => run_debugger(&rom, script),
-        cli::Command::Run { rom, panels } => app::run(args.config, rom, panels),
+        cli::Command::Run { rom, panels } => app::run(args.config, rom, panels, args.profile),
     };
 
     if let Err(message) = result {

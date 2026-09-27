@@ -20,6 +20,8 @@ use tgpulse_core::config::{AudioGains, AudioMutes, Cabinet, Config, Widescreen};
 /// Fullscreen is persisted along with the other user preferences.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
+    pub nvram: Option<PathBuf>,
+    pub network: crate::network::Config,
     pub ssaa: u32,
     pub fullscreen: bool,
     pub srgb: bool,
@@ -43,6 +45,8 @@ impl Default for Settings {
 impl Settings {
     pub fn from_config(config: &Config) -> Self {
         Self {
+            nvram: None,
+            network: crate::network::Config::default(),
             ssaa: config.ssaa,
             fullscreen: config.fullscreen,
             srgb: config.srgb,
@@ -112,6 +116,16 @@ impl Settings {
                 _ => None,
             };
             match name {
+                "nvram" => settings.nvram = (!value.is_empty()).then(|| PathBuf::from(value)),
+                "model1_address_in" => settings.network.address_in = value.into(),
+                "model1_address_out" => settings.network.address_out = value.into(),
+                "model1_port_in" | "model1_port_out" => match value.parse::<u16>() {
+                    Ok(port) if port != 0 => {
+                        if name == "model1_port_in" { settings.network.port_in = port; }
+                        else { settings.network.port_out = port; }
+                    }
+                    _ => log::warn!(target: "settings", "bad {name} '{value}' (want 1..65535)"),
+                },
                 "ssaa" => match value.parse::<u32>().ok().filter(|n| (1..=4).contains(n)) {
                     Some(n) => settings.ssaa = n,
                     None => {
@@ -203,6 +217,8 @@ impl Settings {
              # overrides any of these for one run without rewriting the file.\n\
              # Delete a line to go back to the shipped value.\n\
              \n\
+             # Optional explicit NVRAM file, read and written; relative to launch cwd.\n\
+             nvram = {}\n\
              ssaa = {}\n\
              fullscreen = {}\n\
              # Correct framebuffer sRGB presentation; off preserves the legacy look.\n\
@@ -224,8 +240,17 @@ impl Settings {
              mute_dsb = {}\n\
              mute_scsp = {}\n\
              rumble = {}\n\
+             # Model 1/2 COMM presence: single=absent, twin=fitted where supported.\n\
+             # Model 1 twin also enables TCP; roles remain in NVRAM.\n\
              cabinet = {}\n\
-             reverse_landscape = {}\n",
+             reverse_landscape = {}\n\
+             # Model 1 TCP ring; applies on game load/reset. Numeric IP addresses.\n\
+             # Configure cabinet roles in the game's own test menu.\n\
+             model1_address_in = {}\n\
+             model1_port_in = {}\n\
+             model1_address_out = {}\n\
+             model1_port_out = {}\n",
+            self.nvram.as_ref().map_or_else(String::new, |p| p.to_string_lossy().into_owned()),
             self.ssaa,
             on_off(self.fullscreen),
             on_off(self.srgb),
@@ -246,8 +271,47 @@ impl Settings {
             on_off(self.rumble),
             cabinet,
             on_off(self.reverse_landscape),
+            self.network.address_in,
+            self.network.port_in,
+            self.network.address_out,
+            self.network.port_out,
         );
         std::fs::write(path, out).map_err(|e| e.to_string())
+    }
+}
+
+/// Desktop profile provenance. Explicit paths are relative to the invocation
+/// directory, while default paths stay relative to the existing runtime cwd.
+pub struct Profile {
+    pub path: PathBuf,
+    pub settings: Settings,
+    pub launch_dir: PathBuf,
+}
+impl Default for Profile {
+    fn default() -> Self {
+        Self { path: Settings::path(), settings: Settings::default(), launch_dir: PathBuf::from(".") }
+    }
+}
+impl Profile {
+    pub fn resolve(&self, path: &Path) -> PathBuf {
+        if path.is_absolute() { path.to_owned() } else { self.launch_dir.join(path) }
+    }
+    pub fn nvram_file(&self) -> Option<NvramFile> {
+        self.settings.nvram.as_ref().map(|p| NvramFile(self.resolve(p)))
+    }
+}
+
+#[derive(Clone)]
+pub struct NvramFile(pub PathBuf);
+impl NvramFile {
+    pub fn load(&self, backup_len: usize, eeprom_len: usize) -> Result<(Vec<u8>, Vec<u8>), String> {
+        let blob = std::fs::read(&self.0).map_err(|e| format!("cannot read NVRAM {}: {e}", self.0.display()))?;
+        tgpulse_core::nvram::decode(&blob, backup_len, eeprom_len)
+            .ok_or_else(|| format!("invalid/incompatible NVRAM: {}", self.0.display()))
+    }
+    pub fn save(&self, backup: &[u8], eeprom: &[u8]) -> Result<(), String> {
+        std::fs::write(&self.0, tgpulse_core::nvram::encode(backup, eeprom))
+            .map_err(|e| format!("cannot write NVRAM {}: {e}", self.0.display()))
     }
 }
 
@@ -256,10 +320,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_nvram_reads_and_writes_only_its_selected_file() {
+        let dir = std::env::temp_dir().join(format!("tgpulse-nvram-profile-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let master = NvramFile(dir.join("master.nv"));
+        let slave = NvramFile(dir.join("slave.nv"));
+        assert!(master.load(4, 2).is_err());
+        master.save(&[1; 4], &[2; 2]).unwrap();
+        slave.save(&[3; 4], &[4; 2]).unwrap();
+        assert_eq!(master.load(4, 2).unwrap(), (vec![1; 4], vec![2; 2]));
+        master.save(&[5; 4], &[6; 2]).unwrap();
+        assert_eq!(master.load(4, 2).unwrap(), (vec![5; 4], vec![6; 2]));
+        assert_eq!(slave.load(4, 2).unwrap(), (vec![3; 4], vec![4; 2]));
+        assert!(master.load(8, 2).is_err());
+        std::fs::write(&master.0, b"invalid").unwrap();
+        assert!(master.load(4, 2).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn saved_file_loads_back_identically() {
         let dir = std::env::temp_dir().join(format!("tgpulse-settings-{}", std::process::id()));
         let path = dir.join("settings.conf");
         let settings = Settings {
+            nvram: Some(PathBuf::from("nvram/master.nv")),
+            network: crate::network::Config {
+                address_in: "0.0.0.0".into(),
+                address_out: "192.0.2.1".into(),
+                port_in: 25000,
+                port_out: 25001,
+            },
             ssaa: 4,
             fullscreen: true,
             srgb: true,
@@ -284,6 +374,7 @@ mod tests {
             ..Settings::default()
         };
         settings.save(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("model1_network"));
         assert_eq!(Settings::load(&path), settings);
         for mode in [Widescreen::Off, Widescreen::On, Widescreen::Auto] {
             let mut settings = settings.clone();

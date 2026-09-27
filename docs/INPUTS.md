@@ -34,6 +34,8 @@ P2 signals remain visible, grey and non-editable; the list is not filtered by
 the current game. A row is enabled when at least one supported cabinet has
 that P2 counterpart. The scope includes both Model 1 and Model 2, following
 the tested SM2 Libretro workbook/implementation for Model 2.
+P2 only shows a parenthesized game list when the corresponding P1 signal has
+one, adapting the list to P2 where applicable (Analog Joystick: SWA Gunner).
 
 - **Virtua Fighter:** directions and Action 1/2/3 use IN.2, independently of
   P1's IN.1. Action 1 = Punch, Action 2 = Kick, Action 3 = Guard, as for P1.

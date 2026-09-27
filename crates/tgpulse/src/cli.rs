@@ -39,6 +39,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn profiles_resolve_explicit_paths_from_invocation_and_cli_wins() {
+        let dir = std::env::temp_dir().join(format!("tgpulse-cli-profile-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("profiles")).unwrap();
+        std::fs::create_dir_all(dir.join("sets")).unwrap();
+        std::fs::write(dir.join("sets/vr.zip"), []).unwrap();
+        std::fs::write(dir.join("profiles/master.conf"), "volume = 20\nnvram = saves/master.nv\nmodel1_port_in = 25001\n").unwrap();
+        let args = ["--volume", "75", "--config", "profiles/master.conf", "--roms", "sets", "vr"];
+        let parsed = parse_profile(args.map(String::from).to_vec(), dir.clone(), dir.join("unused.conf")).unwrap();
+        assert_eq!(parsed.config.volume, 75);
+        assert_eq!(parsed.config.rom_dir, dir.join("sets"));
+        assert_eq!(parsed.profile.path, dir.join("profiles/master.conf"));
+        assert_eq!(parsed.profile.settings.network.port_in, 25001);
+        assert_eq!(parsed.profile.nvram_file().unwrap().0, dir.join("saves/master.nv"));
+        assert!(matches!(parsed.command, Command::Run { rom: Some(p), .. } if p == dir.join("sets/vr.zip")));
+        let direct = parse_from_at(vec!["sets/vr.zip".into()], Config::default(), &dir).unwrap();
+        assert!(matches!(direct.command, Command::Run { rom: Some(p), .. } if p == dir.join("sets/vr.zip")));
+        let debug = parse_from_at(["--debug", "sets/vr.zip", "-f", "script.txt"].map(String::from).to_vec(), Config::default(), &dir).unwrap();
+        assert!(matches!(debug.command, Command::Debug { script: Script::File(p), .. } if p == dir.join("script.txt")));
+        for args in [vec!["--config", "missing.conf"], vec!["--config", "profiles/master.conf"], vec!["--config", "profiles/master.conf", "--config", "profiles/master.conf"]] {
+            assert!(parse_profile(args.into_iter().map(String::from).collect(), dir.clone(), dir.join("unused.conf")).is_err());
+        }
+        assert!(!dir.join("unused.conf").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn gui_panel_flags_are_independent_and_accept_a_rom() {
         // Resolution only requires an existing file; no ROM is loaded here.
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
@@ -150,11 +176,40 @@ mod tests {
 pub struct Args {
     pub command: Command,
     pub config: Config,
+    pub profile: crate::settings::Profile,
 }
 
 /// Parses `std::env::args`. The error is a message ready to print.
 pub fn parse() -> Result<Args, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let launch_dir = std::env::var_os("TGPULSE_LAUNCH_DIR").map(PathBuf::from)
+        .unwrap_or(std::env::current_dir().map_err(|e| e.to_string())?);
+    if !launch_dir.is_absolute() || !launch_dir.is_dir() {
+        return Err("TGPULSE_LAUNCH_DIR must name an existing absolute directory".into());
+    }
+    parse_profile(args, launch_dir, crate::settings::Settings::path())
+}
+
+fn parse_profile(args: Vec<String>, launch_dir: PathBuf, default_path: PathBuf) -> Result<Args, String> {
+    use crate::settings::{Profile, Settings};
+    // Skip values of other options: an inline debugger command named --config
+    // must not be mistaken for a profile selector.
+    let mut selected = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--config" => {
+                i += 1;
+                let value = args.get(i).ok_or("--config needs a value")?;
+                if selected.is_some() { return Err("--config may be specified only once".into()); }
+                selected = Some(launch_dir.join(value));
+            }
+            "--roms" | "--rom" | "-c" | "-f" | "--cabinet" | "--ssaa" | "--volume" |
+            "--rumble" | "--smooth-shadows" | "--widescreen" | "--widescreen-stretch-2d" | "--fullscreen" => i += 1,
+            _ => {},
+        }
+        i += 1;
+    }
     // The saved adjustments are for the interactive application; the debugger
     // and the listings stay on the shipped defaults so scripts and captures
     // are reproducible no matter what the settings window last did.
@@ -165,14 +220,30 @@ pub fn parse() -> Result<Args, String> {
         )
     });
     let mut base = Config::default();
-    if !headless {
-        crate::settings::Settings::load_or_create(&crate::settings::Settings::path())
-            .apply_to(&mut base);
+    if selected.is_some() && args.iter().any(|a| a == "--debug") {
+        return Err("--config is not supported by the standalone debugger".into());
     }
-    parse_from(args, base)
+    let explicit = selected.is_some();
+    let path = selected.unwrap_or(default_path);
+    let settings = if explicit {
+        std::fs::read_to_string(&path).map_err(|e| format!("cannot read config {}: {e}", path.display()))?;
+        Settings::load(&path)
+    } else if !headless { Settings::load_or_create(&path) } else { Settings::default() };
+    if !headless || explicit { settings.apply_to(&mut base); }
+    let mut parsed = parse_from_at(args, base, &launch_dir)?;
+    if settings.nvram.is_some() && matches!(parsed.command, Command::Run { rom: None, .. }) {
+        return Err("a profile with nvram requires a romset on the command line".into());
+    }
+    parsed.profile = Profile { path, settings, launch_dir };
+    Ok(parsed)
 }
 
-fn parse_from(args: Vec<String>, mut config: Config) -> Result<Args, String> {
+#[cfg(test)]
+fn parse_from(args: Vec<String>, config: Config) -> Result<Args, String> {
+    parse_from_at(args, config, &std::env::current_dir().unwrap())
+}
+
+fn parse_from_at(args: Vec<String>, mut config: Config, launch_dir: &std::path::Path) -> Result<Args, String> {
     let mut rom: Option<String> = None;
     let mut list = false;
     let mut debug = false;
@@ -191,14 +262,15 @@ fn parse_from(args: Vec<String>, mut config: Config) -> Result<Args, String> {
                 .ok_or_else(|| format!("{arg} needs a value"))
         };
         match arg {
-            "--roms" => config.rom_dir = PathBuf::from(next(&mut i)?),
+            "--config" => { next(&mut i)?; }
+            "--roms" => config.rom_dir = launch_dir.join(next(&mut i)?),
             "--rom" => rom = Some(next(&mut i)?),
             "--list" => list = true,
             "--debug" => debug = true,
             "--show-stats" => panels.show_stats = true,
             "--show-debugger" => panels.show_debugger = true,
             "-c" => script = Some(Script::Inline(split_commands(&next(&mut i)?))),
-            "-f" => script = Some(Script::File(PathBuf::from(next(&mut i)?))),
+            "-f" => script = Some(Script::File(launch_dir.join(next(&mut i)?))),
             "--cabinet" => config.cabinet = next(&mut i)?.parse()?,
             "--ssaa" => {
                 let v = next(&mut i)?;
@@ -224,12 +296,14 @@ fn parse_from(args: Vec<String>, mut config: Config) -> Result<Args, String> {
             "--version" | "-V" => {
                 return Ok(Args {
                     command: Command::Message(format!("tgpulse {}", env!("CARGO_PKG_VERSION"))),
+                    profile: Default::default(),
                     config,
                 })
             }
             "--help" | "-h" => {
                 return Ok(Args {
                     command: Command::Message(HELP.to_string()),
+                    profile: Default::default(),
                     config,
                 })
             }
@@ -248,12 +322,13 @@ fn parse_from(args: Vec<String>, mut config: Config) -> Result<Args, String> {
     if list {
         return Ok(Args {
             command: Command::ListRoms,
+            profile: Default::default(),
             config,
         });
     }
 
     let rom = match rom {
-        Some(r) => Some(resolve(&config, &r)?),
+        Some(r) => Some(resolve(&config, &r, launch_dir)?),
         None => None,
     };
 
@@ -267,15 +342,18 @@ fn parse_from(args: Vec<String>, mut config: Config) -> Result<Args, String> {
         Command::Run { rom, panels }
     };
 
-    Ok(Args { command, config })
+    Ok(Args { command, config, profile: Default::default() })
 }
 
 /// Accepts either a path to an archive or a short set name to look up in the
 /// ROM directory, so `tgpulse vf2` works as well as `tgpulse roms/vf2.zip`.
-fn resolve(config: &Config, arg: &str) -> Result<PathBuf, String> {
-    let direct = PathBuf::from(arg);
+fn resolve(config: &Config, arg: &str, launch_dir: &std::path::Path) -> Result<PathBuf, String> {
+    let direct = launch_dir.join(arg);
     if direct.is_file() {
         return Ok(direct);
+    }
+    if arg.ends_with(".zip") || std::path::Path::new(arg).components().count() > 1 {
+        return Err(format!("ROM file not found: {}", direct.display()));
     }
     let in_dir = config.rom_dir.join(format!("{arg}.zip"));
     if in_dir.is_file() {
@@ -343,6 +421,7 @@ Usage:
 
 ROMs:
   --roms <dir>          Where romsets live (default: roms)
+  --config <file>       Settings profile (relative to launch directory)
 
 Video:
   --ssaa 1..4           Supersamples per output pixel on the 3D layer
@@ -364,8 +443,8 @@ Audio:
                         level (default 100). SCSP titles mix quiet.
 
 Machine:
-  --cabinet twin|single Whether the network board is fitted (default
-                        single, which skips the game's link check).
+  --cabinet twin|single Model 1/2 network board fitted/absent (default single).
+                        Model 1 twin enables TCP; roles remain in NVRAM.
 
 GUI panels (this launch only):
   --show-stats          Open View > Statistics at startup

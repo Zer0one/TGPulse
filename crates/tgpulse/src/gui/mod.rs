@@ -45,6 +45,7 @@ pub enum Action {
     Debug(String),
     /// Settings were edited; the application re-reads them.
     SettingsChanged,
+    NetworkSettingsChanged(crate::network::Config),
     /// Bindings were edited; the application re-reads and saves them.
     BindingsChanged,
     /// The ROM directory should be scanned again.
@@ -120,6 +121,26 @@ mod tests {
 #[cfg(test)]
 mod gain_interaction_tests {
     use super::*;
+    #[test]
+    fn settings_network_draft_does_not_apply_itself_on_draw() {
+        let _lock = tests::IMGUI_TEST_LOCK.lock().unwrap();
+        let mut context = imgui::Context::create();
+        context.set_ini_filename(None);
+        context.io_mut().display_size = [1024.0, 1200.0];
+        context.fonts().build_rgba32_texture();
+        let mut config = Config::default();
+        let mut network = crate::network::Config { port_in: 18000, ..Default::default() };
+        let expected = network.clone();
+        for _ in 0..2 {
+            let mut actions = Vec::new();
+            settings_window(context.frame(), &mut config, &[], &mut network,
+                "TCP: waiting", &mut false, &mut true, &mut actions);
+            assert!(context.render().total_vtx_count > 0);
+            assert!(actions.is_empty(), "network changes require Apply");
+            assert_eq!(network, expected);
+        }
+    }
+
     #[test]
     fn reference_is_below_translucent_grab_and_native_style_is_unchanged() {
         let _lock = tests::IMGUI_TEST_LOCK.lock().unwrap();
@@ -227,6 +248,8 @@ mod gain_interaction_tests {
 }
 
 pub struct Gui {
+    pub network_draft: crate::network::Config,
+    pub network_status: String,
     context: imgui::Context,
     pub controller_devices: Vec<PadDevice>,
     pub controller_labels: [String; 2],
@@ -308,6 +331,8 @@ impl Gui {
 
         Self {
             context,
+            network_draft: crate::network::Config::default(),
+            network_status: String::new(),
             audio_sources: &[],
             visible: true,
             suppressed: false,
@@ -526,6 +551,8 @@ impl Gui {
                 ui,
                 config,
                 self.audio_sources,
+                &mut self.network_draft,
+                &self.network_status,
                 &mut self.audio_gain_reset_held,
                 &mut show_settings,
                 &mut actions,
@@ -827,6 +854,8 @@ fn settings_window(
     ui: &imgui::Ui,
     config: &mut Config,
     audio_sources: &[AudioSource],
+    network: &mut crate::network::Config,
+    network_status: &str,
     audio_gain_reset_held: &mut bool,
     open: &mut bool,
     actions: &mut Vec<Action>,
@@ -930,6 +959,26 @@ fn settings_window(
             ui.text_disabled("Takes effect the next time a game is loaded.");
 
             ui.separator();
+            ui.text_disabled("Model 1 networking (TCP ring)");
+            ui.input_text("AddressIn", &mut network.address_in).build();
+            let mut port_in = i32::from(network.port_in);
+            if ui.input_int("PortIn", &mut port_in).build() { network.port_in = port_in.clamp(0, 65535) as u16; }
+            ui.input_text("AddressOut", &mut network.address_out).build();
+            let mut port_out = i32::from(network.port_out);
+            if ui.input_int("PortOut", &mut port_out).build() { network.port_out = port_out.clamp(0, 65535) as u16; }
+            ui.text_wrapped("Outgoing connects to the next cabinet's incoming endpoint. Configure roles in the game's test menu.");
+            let validation = network.endpoints();
+            if let Err(error) = &validation { ui.text_wrapped(error); }
+            {
+                let _disabled = ui.begin_disabled(validation.is_err());
+                if ui.button("Apply network settings") {
+                    actions.push(Action::NetworkSettingsChanged(network.clone()));
+                }
+            }
+            ui.text_disabled("Apply saves settings; reload/reset the game to connect.");
+            ui.text_wrapped(network_status);
+
+            ui.separator();
             if ui.button("Revert to defaults") {
                 let shipped = Config::default();
                 config.ssaa = shipped.ssaa;
@@ -943,6 +992,8 @@ fn settings_window(
                 config.audio_gains = shipped.audio_gains;
                 config.rumble = shipped.rumble;
                 config.cabinet = shipped.cabinet;
+                *network = crate::network::Config::default();
+                actions.push(Action::NetworkSettingsChanged(network.clone()));
                 changed = true;
             }
 
@@ -1100,17 +1151,10 @@ fn cabinet_signal_row(
             editor.error = None;
         },
     );
-    let usage = if player == Player::Two {
-        match signal {
-            Signal::SkyX | Signal::SkyY => Some("(Star Wars Arcade: Gunner)"),
-            Signal::Up | Signal::Down | Signal::Left | Signal::Right => Some("(Virtua Fighter; Model 2 local joystick games)"),
-            Signal::Accelerator | Signal::Brake => Some("(Power Sled: second seat pedals)"),
-            Signal::GunYaw | Signal::GunPitch => Some("(Virtua Cop 1/2, The House of the Dead, Gunblade NY, Rail Chase 2, Behind Enemy Lines)"),
-            Signal::BatSwing => Some("(Dynamite Baseball, Dynamite Baseball 97)"),
-            _ => None,
-        }
-    } else {
-        signal.usage()
+    let usage = match (player, signal, signal.usage()) {
+        (Player::One, _, usage) => usage,
+        (Player::Two, Signal::SkyX | Signal::SkyY, Some(_)) => Some("(Star Wars Arcade: Gunner)"),
+        _ => None,
     };
     if let Some(usage) = usage {
         ui.text_disabled(usage);
