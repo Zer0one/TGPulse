@@ -74,6 +74,28 @@ mod tests {
     pub(super) static IMGUI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
+    fn state_feedback_draws_without_the_menu_or_input_capture() {
+        let _lock = IMGUI_TEST_LOCK.lock().unwrap();
+        let mut gui = Gui::new(&Config::default(), StartupPanels::default());
+        gui.visible = false;
+        gui.set_suppressed(true);
+        gui.context.io_mut().display_size = [800.0, 600.0];
+        gui.context.fonts().build_rgba32_texture();
+        for error in [false, true] {
+            gui.report_state("Slot 0 test feedback".into(), error);
+            assert!(!gui.showing());
+            for frame in 0..2 {
+                let ui = gui.context.frame();
+                state_notice(ui, gui.state_message.as_ref());
+                assert!(!ui.is_any_item_active());
+                let draw = gui.context.render();
+                // ImGui measures a newly auto-sized window on its first frame.
+                if frame > 0 { assert!(draw.total_vtx_count > 0); }
+            }
+        }
+    }
+
+    #[test]
     fn startup_panels_initialize_existing_windows() {
         let _lock = IMGUI_TEST_LOCK.lock().unwrap();
         // Keep ImGui contexts sequential: only one can be active at a time.
@@ -274,6 +296,7 @@ pub struct Gui {
     entries: Vec<Entry>,
     selected: Option<usize>,
     library_error: Option<String>,
+    state_message: Option<(String, bool, std::time::Instant)>,
 
     debug_input: String,
     debug_log: Vec<String>,
@@ -348,6 +371,7 @@ impl Gui {
             entries: library::scan(&config.rom_dir),
             selected: None,
             library_error: None,
+            state_message: None,
             debug_input: String::new(),
             debug_log: Vec::new(),
             debug_follow: true,
@@ -388,6 +412,11 @@ impl Gui {
         self.library_error = Some(message.into());
     }
 
+    pub fn report_state(&mut self, message: String, error: bool) {
+        let duration = Duration::from_secs(if error { 10 } else { 3 });
+        self.state_message = Some((message, error, std::time::Instant::now() + duration));
+    }
+
     /// Appends debugger output.
     pub fn push_debug_output(&mut self, lines: impl IntoIterator<Item = String>) {
         self.debug_log.extend(lines);
@@ -426,6 +455,9 @@ impl Gui {
         touch: Option<&mut crate::touch::TouchUi>,
     ) -> Vec<Action> {
         self.context.io_mut().delta_time = dt.as_secs_f32().max(1.0 / 1000.0);
+        if self.state_message.as_ref().is_some_and(|(_, _, until)| std::time::Instant::now() >= *until) {
+            self.state_message = None;
+        }
 
         // A handset drives the touch interface instead of these windows: they
         // are built for a pointer that can hover and a keyboard that can type,
@@ -433,6 +465,7 @@ impl Gui {
         if let Some(touch) = touch.filter(|t| t.enabled()) {
             let ui = self.context.frame();
             let actions = touch.render(ui, &self.entries, running, config, &mut self.state_slot);
+            state_notice(ui, self.state_message.as_ref());
             renderer.capture(self.context.render());
             return actions;
         }
@@ -440,9 +473,14 @@ impl Gui {
         let mut actions = Vec::new();
         if !self.showing() {
             // Still render, so the stats window can stay up during play.
-            if self.show_stats {
+            if self.show_stats || self.state_message.is_some() {
                 let ui = self.context.frame();
-                stats_window(ui, stats);
+                if self.show_stats { stats_window(ui, stats); }
+                state_notice(ui, self.state_message.as_ref());
+                renderer.capture(self.context.render());
+            } else {
+                // Clear the renderer's old notice after it expires.
+                let _ = self.context.frame();
                 renderer.capture(self.context.render());
             }
             return actions;
@@ -585,6 +623,7 @@ impl Gui {
         }
 
         let _ = &mut state_slot;
+        state_notice(ui, self.state_message.as_ref());
         renderer.capture(self.context.render());
 
         self.show_settings = show_settings;
@@ -1308,6 +1347,26 @@ fn stats_window(ui: &imgui::Ui, stats: Stats) {
             ui.text(format!("Display   {:6.1} fps", stats.video_fps));
             ui.text(format!("Emulated  {:6.1} fps", stats.emulated_fps));
             ui.text(format!("Layers    {:6.2} ms", stats.render_ms));
+        });
+}
+
+/// Non-interactive feedback also visible with the menu hidden/fullscreen.
+fn state_notice(ui: &imgui::Ui, message: Option<&(String, bool, std::time::Instant)>) {
+    let Some((text, error, _)) = message else { return; };
+    ui.window("Save state status")
+        .position([12.0, 42.0], imgui::Condition::Always)
+        .size([ui.io().display_size[0].min(660.0) - 24.0, 0.0], imgui::Condition::Always)
+        .title_bar(false)
+        .resizable(false)
+        .movable(false)
+        .always_auto_resize(true)
+        .draw_background(true)
+        .focus_on_appearing(false)
+        .no_inputs()
+        .build(|| {
+            let colour = if *error { [1.0, 0.45, 0.4, 1.0] } else { [0.65, 1.0, 0.65, 1.0] };
+            let _colour = ui.push_style_color(imgui::StyleColor::Text, colour);
+            ui.text_wrapped(text);
         });
 }
 

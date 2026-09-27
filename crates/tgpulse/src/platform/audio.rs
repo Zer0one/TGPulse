@@ -7,6 +7,7 @@
 //! samples carry real DC offsets that a speaker would never see.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -22,6 +23,7 @@ const GAIN_SCALE: f32 = 10_000.0;
 pub struct Audio {
     ring: Arc<Mutex<VecDeque<(i16, i16)>>>,
     gain: Arc<std::sync::atomic::AtomicU32>,
+    reset_generation: Arc<AtomicU64>,
     _stream: Option<cpal::Stream>,
 }
 
@@ -37,6 +39,8 @@ struct Resampler {
     // User volume, a plain digital gain on the mixed output. Shared with the
     // owning `Audio` so the settings panel can change it while the stream runs.
     gain: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    reset_generation: Arc<AtomicU64>,
+    generation: u64,
 }
 
 impl Resampler {
@@ -49,6 +53,15 @@ impl Resampler {
     }
 
     fn render(&mut self, out: &mut [f32], channels: usize) {
+        let generation = self.reset_generation.load(Ordering::Acquire);
+        if self.generation != generation {
+            self.generation = generation;
+            self.frac = 0.0;
+            self.cur = (0.0, 0.0);
+            self.next = (0.0, 0.0);
+            self.dc_x = (0.0, 0.0);
+            self.dc_y = (0.0, 0.0);
+        }
         let g = self.gain.load(std::sync::atomic::Ordering::Relaxed) as f32 / GAIN_SCALE;
         for frame in out.chunks_mut(channels) {
             self.frac += self.step;
@@ -80,8 +93,24 @@ impl Resampler {
 }
 
 impl Audio {
+    #[cfg(test)]
+    pub(crate) fn silent() -> Self {
+        Self {
+            ring: Arc::default(),
+            gain: Arc::new(std::sync::atomic::AtomicU32::new(GAIN_SCALE as u32)),
+            reset_generation: Arc::new(AtomicU64::new(0)),
+            _stream: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn queued_samples(&self) -> usize {
+        self.ring.lock().unwrap().len()
+    }
+
     pub fn new(board_rate: f32, volume_pct: u32) -> Self {
         let ring: Arc<Mutex<VecDeque<(i16, i16)>>> = Arc::default();
+        let reset_generation = Arc::new(AtomicU64::new(0));
         let gain = Arc::new(std::sync::atomic::AtomicU32::new(
             (volume_pct as f32 / 100.0 * GAIN_SCALE) as u32,
         ));
@@ -109,6 +138,8 @@ impl Audio {
                 dc_x: (0.0, 0.0),
                 dc_y: (0.0, 0.0),
                 gain: gain.clone(),
+                reset_generation: reset_generation.clone(),
+                generation: 0,
             };
             let stream = device
                 .build_output_stream(
@@ -128,6 +159,7 @@ impl Audio {
         Self {
             ring,
             gain,
+            reset_generation,
             _stream: stream,
         }
     }
@@ -140,6 +172,14 @@ impl Audio {
         );
     }
 
+    /// Discard the old timeline, including interpolation/DC history at the
+    /// next callback. A buffer already submitted to the OS cannot be recalled.
+    pub fn clear(&self) {
+        let mut ring = self.ring.lock().unwrap();
+        ring.clear();
+        self.reset_generation.fetch_add(1, Ordering::Release);
+    }
+
     /// Queues a batch of board samples, shedding the oldest if the queue has
     /// grown past the target (e.g. after a window drag paused presentation).
     pub fn push(&self, samples: impl Iterator<Item = (i16, i16)>) {
@@ -149,5 +189,42 @@ impl Audio {
         if excess > 0 {
             ring.drain(..excess);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clear_discards_ring_interpolation_and_dc_history_without_changing_gain() {
+        let audio = Audio::silent();
+        audio.set_volume(37);
+        let mut rs = Resampler {
+            ring: audio.ring.clone(),
+            gain: audio.gain.clone(),
+            reset_generation: audio.reset_generation.clone(),
+            generation: 0,
+            step: 0.75,
+            frac: 0.0,
+            cur: (0.0, 0.0),
+            next: (0.0, 0.0),
+            dc_x: (0.0, 0.0),
+            dc_y: (0.0, 0.0),
+        };
+        audio.push(std::iter::repeat((12000, -6000)).take(100));
+        let mut old = [0.0; 10];
+        rs.render(&mut old, 2);
+        assert!(old.iter().any(|&x| x != 0.0));
+        audio.clear();
+        audio.clear();
+        assert_eq!(audio.queued_samples(), 0);
+        let mut silence = [1.0; 64];
+        rs.render(&mut silence, 2);
+        assert!(silence.iter().all(|&x| x == 0.0));
+        assert_eq!(audio.gain.load(Ordering::Relaxed), 3700);
+        audio.push(std::iter::repeat((6000, 6000)).take(100));
+        rs.render(&mut silence, 2);
+        assert!(silence.iter().any(|&x| x > 0.0));
     }
 }

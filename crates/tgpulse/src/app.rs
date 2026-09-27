@@ -30,6 +30,8 @@ use crate::platform::audio::Audio;
 use crate::platform::video::Model2Video;
 use crate::touch::TouchUi;
 
+mod state;
+
 /// 25 MHz i960 over the exact Model 2 raster period: a 16 MHz pixel clock over
 /// 656x424 total pixels gives 57.524 Hz.
 const CYCLES_PER_FRAME: i32 = 434_600;
@@ -746,10 +748,12 @@ impl App {
             Hotkey::NextSlot => {
                 self.gui.state_slot = (self.gui.state_slot + 1) % 10;
                 log::info!(target: "state", "slot {}", self.gui.state_slot);
+                self.gui.report_state(format!("State slot {}", self.gui.state_slot), false);
             }
             Hotkey::PreviousSlot => {
                 self.gui.state_slot = (self.gui.state_slot + 9) % 10;
                 log::info!(target: "state", "slot {}", self.gui.state_slot);
+                self.gui.report_state(format!("State slot {}", self.gui.state_slot), false);
             }
             Hotkey::Reset => {
                 let config = self.config.clone();
@@ -767,32 +771,35 @@ impl App {
     }
 
     fn save_state(&mut self, slot: u32) {
-        let Some(Session {
-            machine: Machine::Model2(sys),
-            set,
-            ..
-        }) = self.session.as_ref()
-        else {
-            return;
-        };
-        match savestate::save_to_file(sys, set, slot) {
-            Ok(p) => log::info!(target: "state", "saved slot {slot} -> {}", p.display()),
-            Err(e) => log::error!(target: "state", "save failed: {e}"),
+        let Some(session) = self.session.as_ref() else { return; };
+        match session.machine.save_slot(&session.set, slot) {
+            Ok(p) => {
+                log::info!(target: "state", "saved slot {slot} -> {}", p.display());
+                self.gui.report_state(format!("Saved slot {slot}"), false);
+            }
+            Err(e) => {
+                log::error!(target: "state", "save failed: {e}");
+                self.gui.report_state(format!("Save failed: {e}"), true);
+            }
         }
     }
 
     fn load_state(&mut self, slot: u32) {
-        let Some(Session {
-            machine: Machine::Model2(sys),
-            set,
-            ..
-        }) = self.session.as_mut()
-        else {
-            return;
-        };
-        match savestate::load_from_file(sys, set, slot) {
-            Ok(p) => log::info!(target: "state", "loaded slot {slot} <- {}", p.display()),
-            Err(e) => log::error!(target: "state", "load failed: {e}"),
+        let Some(session) = self.session.as_mut() else { return; };
+        match session.load_slot(slot) {
+            Ok(p) => {
+                log::info!(target: "state", "loaded slot {slot} <- {}", p.display());
+                self.gui.report_state(format!("Loaded slot {slot}"), false);
+                // Disk/decoding time is not emulated time to catch up. Keep pause
+                // unchanged; the normal redraw also refreshes a paused machine.
+                if matches!(session.machine, Machine::Model1(_)) {
+                    self.last_frame = Instant::now();
+                }
+            }
+            Err(e) => {
+                log::error!(target: "state", "load failed: {e}");
+                self.gui.report_state(format!("Load failed: {e}"), true);
+            }
         }
         // Output preferences belong to the frontend, not to machine snapshots.
         if let Some(session) = &mut self.session {
