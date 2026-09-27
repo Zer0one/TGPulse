@@ -88,11 +88,11 @@ fn vf_both_players_have_independent_actions_and_directions() {
     let mut input = cabinet("vf");
     let mut out = Inputs::default();
     for (button, bit) in [
-        (B::West, 1),
+        (B::West, 4),
         (B::South, 2),
         (B::LeftTrigger, 2),
-        (B::East, 4),
-        (B::RightTrigger, 4),
+        (B::East, 1),
+        (B::RightTrigger, 1),
         (B::DPadUp, 0x20),
         (B::DPadDown, 0x10),
         (B::DPadLeft, 0x80),
@@ -115,7 +115,7 @@ fn duplicate_test_service_or_together_without_other_inputs() {
     for game in ["vf", "swa", "swaj", "vr", "wingwar"] {
         let mut input = cabinet(game);
         let mut out = Inputs::default();
-        for (button, bit) in [(B::LeftThumb, 4), (B::RightThumb, 8)] {
+        for (button, bit) in [(B::LeftThumb, 8), (B::RightThumb, 4)] {
             input.external.buttons = HashSet::from([button]);
             input.external_p2.buttons = HashSet::from([button]);
             input.poll(&mut out);
@@ -143,7 +143,7 @@ fn p2_rebinding_has_no_effect_on_p1_and_no_default_gameplay_keys() {
     assert_eq!(out.analog[5], 127);
     input
         .bindings
-        .set_player_expression(Player::Two, Signal::Action1, "KeyU")
+        .set_player_expression(Player::Two, Signal::SwaLaser, "KeyU")
         .unwrap();
     input
         .bindings
@@ -155,8 +155,8 @@ fn p2_rebinding_has_no_effect_on_p1_and_no_default_gameplay_keys() {
     assert_eq!(out.in1, 0xfa);
     assert_eq!(out.analog[5], 27);
     assert_eq!(
-        input.bindings.binding(Signal::Action1).text,
-        Signal::Action1.default_text()
+        input.bindings.binding(Signal::SwaLaser).text,
+        Signal::SwaLaser.default_text()
     );
 }
 

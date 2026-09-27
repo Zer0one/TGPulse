@@ -1,7 +1,6 @@
 //! User-facing signal bindings and emulator hotkeys.
-//! The old Control identifiers are internal cabinet requests, not a second catalogue.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -11,47 +10,15 @@ use crate::input::signals::{self, expression::Binding, Signal};
 use gilrs::{Axis, Button};
 use winit::keyboard::KeyCode;
 
-/// A cabinet control, named by what it does rather than where it is.
-///
-/// Not every machine has every one of these: a scheme reads the ones its
-/// cabinet had, so binding `GearUp` does nothing in a fighting game.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-pub enum Control {
-    // Direction, as an 8-way stick or the digital edges of an analog control.
-    Up,
-    Down,
-    Left,
-    Right,
-    // Attack/action buttons, in the order the I/O board reports them.
-    Button1,
-    Button2,
-    Button3,
-    Button4,
-    // Cabinet furniture.
-    Coin1,
-    Coin2,
-    Start1,
-    Test,
-    Service,
-    // Daytona's four coloured view buttons.
-    ViewRed,
-    ViewBlue,
-    ViewYellow,
-    ViewGreen,
-    // Racing.
-    Throttle,
-    Brake,
-    SteerLeft,
-    SteerRight,
-    GearUp,
-    GearDown,
-    // Lightgun.
-    Fire,
-    Reload,
-    // Bikes, jetskis, skis and skateboards.
-    LeanLeft,
-    LeanRight,
-    ViewChange,
+// Upgrade only exact shipped defaults; keep custom/empty expressions intact.
+// Loading never rewrites the user's file. Newly split signals inherit defaults.
+fn refreshed_stock_binding(signal: Signal, value: &str) -> &str {
+    match (signal, value) {
+        (Signal::Test, "F2, pad:LeftThumb")
+        | (Signal::Service, "F8, pad:RightThumb")
+        | (Signal::Elevation, "keys:KeyG/KeyT, pad:LeftStickY") => signal.default_text(),
+        _ => value,
+    }
 }
 
 /// Something the emulator itself does, rather than the machine.
@@ -319,6 +286,8 @@ impl Bindings {
             )
         });
         let model1_players = text.lines().any(|l| l.trim() == "format = signals-v2");
+        let mut explicit_p1 = BTreeSet::new();
+        let mut explicit_p2 = BTreeSet::new();
         if !modern {
             bindings.migrate_keyboard(&text);
         }
@@ -366,11 +335,14 @@ impl Bindings {
                             ("start2", "Digit2") => "Digit2, pad:Start",
                             _ => value,
                         };
+                        let value = refreshed_stock_binding(s, value);
                         if let Err(e) = bindings.set_player_expression(Player::Two, s, value) {
                             // Empty disabled rows are persisted for a complete catalogue.
                             if !value.is_empty() {
                                 log::warn!("Invalid binding {name}: {e}");
                             }
+                        } else {
+                            explicit_p2.insert(s);
                         }
                     }
                     None => log::warn!("Unknown P2 signal {name}"),
@@ -381,8 +353,12 @@ impl Bindings {
                     Err(e) => log::warn!("Invalid return_to_menu binding: {e}; keeping default"),
                 }
             } else if let Some(signal) = Signal::from_key(name).filter(|_| modern) {
-                if let Err(e) = bindings.set_expression(signal, value) {
+                if let Err(e) =
+                    bindings.set_expression(signal, refreshed_stock_binding(signal, value))
+                {
                     log::warn!("Invalid binding {name}: {e}; keeping default");
+                } else {
+                    explicit_p1.insert(signal);
                 }
             } else if let Some(hotkey) = Hotkey::from_key(name) {
                 if let Some(key) = parse_key(value) {
@@ -392,6 +368,42 @@ impl Bindings {
                 }
             } else if modern {
                 log::warn!(target: "input", "{}:{}: unknown control '{name}'", path.display(), number + 1);
+            }
+        }
+        // A pre-split file drove these cabinets through Action 1/2/3. Carry
+        // any customized expressions forward once; explicit per-game rows win.
+        // Saving writes independent keys, so later edits cannot recouple them.
+        for (dedicated, previous) in [
+            (Signal::DesertShift, Signal::Action3),
+            (Signal::NetmercButton1, Signal::Action1),
+            (Signal::NetmercButton2, Signal::Action2),
+            (Signal::NetmercMvdHolder, Signal::Action3),
+            (Signal::SledEntry, Signal::Action1),
+            (Signal::SledCall, Signal::Action2),
+            (Signal::SkiSelect1, Signal::Action3),
+            (Signal::SwaLaser, Signal::Action1),
+            (Signal::SwaTorpedo, Signal::Action2),
+            (Signal::SkaterJumpTail, Signal::Action1),
+            (Signal::SkaterJumpFront, Signal::Action2),
+            (Signal::StrikerShortPass, Signal::Action1),
+            (Signal::StrikerLongPass, Signal::Action2),
+            (Signal::StrikerShoot, Signal::Action3),
+            (Signal::WingMachineGun, Signal::Action1),
+            (Signal::WingMissile, Signal::Action2),
+            (Signal::WingSmoke, Signal::Action3),
+        ] {
+            if !explicit_p1.contains(&dedicated) && explicit_p1.contains(&previous) {
+                let value = bindings.binding(previous).text.clone();
+                bindings.set_expression(dedicated, &value).unwrap();
+            }
+            if dedicated.supports_p2()
+                && !explicit_p2.contains(&dedicated)
+                && explicit_p2.contains(&previous)
+            {
+                let value = bindings.player_binding(Player::Two, previous).text.clone();
+                bindings
+                    .set_player_expression(Player::Two, dedicated, &value)
+                    .unwrap();
             }
         }
         log::info!(target: "input", "bindings from {}", path.display());
@@ -431,8 +443,8 @@ impl Bindings {
             ("view_blue", Signal::View2),
             ("view_yellow", Signal::View3),
             ("view_green", Signal::View4),
-            ("gear_up", Signal::Action2),
-            ("gear_down", Signal::Action1),
+            ("gear_up", Signal::GearUp),
+            ("gear_down", Signal::GearDown),
             ("fire", Signal::Action1),
             ("reload", Signal::Action2),
         ] {
@@ -798,11 +810,99 @@ mod tests {
         assert_eq!(read.return_to_menu, written.return_to_menu);
         std::fs::remove_file(path).unwrap();
     }
+
+    #[test]
+    fn workbook_defaults_refresh_without_overwriting_custom_bindings() {
+        for (signal, old) in [
+            (Signal::Test, "F2, pad:LeftThumb"),
+            (Signal::Service, "F8, pad:RightThumb"),
+            (Signal::Elevation, "keys:KeyG/KeyT, pad:LeftStickY"),
+        ] {
+            assert_eq!(refreshed_stock_binding(signal, old), signal.default_text());
+            assert_eq!(
+                refreshed_stock_binding(signal, "F12, pad:South"),
+                "F12, pad:South"
+            );
+            assert_eq!(refreshed_stock_binding(signal, ""), "");
+        }
+    }
     #[test]
     fn invalid_binding_is_not_applied() {
         let mut b = Bindings::default();
         assert!(b.set_expression(Signal::Gear1, "KeyJ & nonsense").is_err());
         assert_eq!(b.binding(Signal::Gear1).text, Signal::Gear1.default_text());
+    }
+
+    #[test]
+    fn split_actions_inherit_only_missing_rows_and_then_save_independently() {
+        let path =
+            std::env::temp_dir().join(format!("tgpulse-split-actions-{}.conf", std::process::id()));
+        let original = "format = signals-v3\naction1 = F11\naction2 = \naction3 = F12\nswa_laser = KeyU\np2.action1 = pad:North\np2.swa_laser = pad:West\n";
+        std::fs::write(&path, original).unwrap();
+        let bindings = Bindings::load(&path);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(bindings.binding(Signal::SwaLaser).text, "KeyU");
+        assert_eq!(bindings.binding(Signal::WingMachineGun).text, "F11");
+        assert_eq!(bindings.binding(Signal::WingMissile).text, "");
+        assert_eq!(bindings.binding(Signal::DesertShift).text, "F12");
+        assert_eq!(
+            bindings.player_binding(Player::Two, Signal::SwaLaser).text,
+            "pad:West"
+        );
+        assert_eq!(
+            bindings.player_binding(Player::Two, Signal::SledEntry).text,
+            "pad:North"
+        );
+        bindings.save(&path).unwrap();
+        let loaded = Bindings::load(&path);
+        assert_eq!(loaded.binding(Signal::WingMachineGun).text, "F11");
+        assert_eq!(loaded.binding(Signal::SwaLaser).text, "KeyU");
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn dedicated_gears_default_load_save_and_legacy_keys_are_independent() {
+        let path = std::env::temp_dir().join(format!(
+            "tgpulse-dedicated-gears-{}.conf",
+            std::process::id()
+        ));
+        let original = "format = signals-v3\naction1 = F11\naction2 = F12\n";
+        std::fs::write(&path, original).unwrap();
+        let mut bindings = Bindings::load_or_create(&path);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert_eq!(
+            bindings.binding(Signal::GearDown).text,
+            "KeyE, pad:LeftTrigger"
+        );
+        assert_eq!(
+            bindings.binding(Signal::GearUp).text,
+            "KeyQ, pad:RightTrigger"
+        );
+        assert_eq!(bindings.binding(Signal::Action1).text, "F11");
+        assert_eq!(bindings.binding(Signal::Action2).text, "F12");
+        assert!(!Signal::GearUp.supports_p2());
+        assert!(!Signal::GearDown.supports_p2());
+        bindings
+            .set_expression(Signal::GearUp, "pad:North")
+            .unwrap();
+        bindings.set_expression(Signal::GearDown, "").unwrap();
+        bindings.save(&path).unwrap();
+        let loaded = Bindings::load(&path);
+        assert_eq!(loaded.binding(Signal::GearUp).text, "pad:North");
+        assert_eq!(loaded.binding(Signal::GearDown).text, "");
+        assert_eq!(loaded.binding(Signal::Action1).text, "F11");
+        assert_eq!(loaded.binding(Signal::Action2).text, "F12");
+        std::fs::remove_file(&path).unwrap();
+
+        let mut legacy = Bindings::default();
+        legacy.migrate_keyboard("gear_up = F11\ngear_down = F12\nbutton1 = KeyJ\nbutton2 = KeyK\n");
+        assert_eq!(legacy.binding(Signal::GearUp).text, "F11, pad:RightTrigger");
+        assert_eq!(
+            legacy.binding(Signal::GearDown).text,
+            "F12, pad:LeftTrigger"
+        );
+        assert!(!legacy.binding(Signal::Action1).text.contains("F12"));
+        assert!(!legacy.binding(Signal::Action2).text.contains("F11"));
     }
     #[test]
     fn p2_defaults_share_pad_conventions_but_not_gameplay_keys() {

@@ -1,11 +1,13 @@
-# Input translation layer
+# Native cabinet inputs
 
 The frontend has one public signal catalogue, one binding file
 (`config/input.conf`), and two unfiltered tabs in Settings → Input:
 **Cabinet P1** and **Cabinet P2**, both showing the same catalogue.
-Bindings produce logical signal values; the input translator routes them to
-the existing cabinet controls and I/O ports according to the ROM set and its
-`Scheme` / `AnalogRole` metadata. The core carries native digital/ADC values,
+Bindings produce logical signal values; cabinet polling builds native I/O
+ports and calibrated ADC values directly from them, according to the ROM set
+and its `Scheme` / `AnalogRole` metadata. There is no intermediate `Control`
+catalogue or generic-port pass followed by game-specific port overrides.
+The core carries native digital/ADC values,
 including independent P2 lightgun coordinates through the DPRAM and serial
 mux. Air Walkers also has a port-F player-pair mux; the public catalogue and
 bindings remain frontend-only.
@@ -38,9 +40,10 @@ P2 only shows a parenthesized game list when the corresponding P1 signal has
 one, adapting the list to P2 where applicable (Analog Joystick: SWA Gunner).
 
 - **Virtua Fighter:** directions and Action 1/2/3 use IN.2, independently of
-  P1's IN.1. Action 1 = Punch, Action 2 = Kick, Action 3 = Guard, as for P1.
+  P1's IN.1. Action 1 = Kick, Action 2 = Punch, Action 3 = Guard, as for P1
+  and VF2; this is the explicitly requested SM2 fighting-layout exception.
 - **Star Wars Arcade:** the Gunner is a subset of the Pilot: Analog Joystick
-  X/Y and Action 1/2 only, no Start, VR/view or throttle. Fire bits are IN.1
+  X/Y and the dedicated Laser/Torpedo signals only, no Start, VR/view or throttle. Fire bits are IN.1
   `04/08`, stick channels ADC 4/5, centre 127 and range 27..227. Stick polarity
   matches P1. MAME declares IN.0 `20` as Start2; intentionally left inactive
   in SWA/SWAJ. The user's INPUT TEST 1/2 screenshot (2026-09-27) confirms
@@ -56,13 +59,13 @@ one, adapting the list to P2 where applicable (Analog Joystick: SWA Gunner).
 - **Dynamite Baseball/97:** independent P2 Bat Swing drives `bat2`, 0..255;
   default Right Stick down, as for P1.
 - **Model 2 guns:** independent cursor, calibrated ADC/serial coordinates and
-  trigger for P2. Gun Yaw/Pitch default to Left Stick X/Y; Action 1 shoots,
-  Action 2 reloads only in serial gun cabinets (Virtua Cop/2, HOTD).
-  Behind Enemy Lines instead uses Action 2 for its missile. Mounted guns
+  trigger for P2. Gun Yaw/Pitch default to Left Stick X/Y; Primary Fire shoots,
+  Secondary Fire reloads only in serial gun cabinets (Virtua Cop/2, HOTD).
+  Behind Enemy Lines uses Secondary Fire for its missile on both seats. Mounted guns
   Gunblade NY and Rail Chase 2 have no off-screen reload. The mouse remains
   P1-only. Red/blue reticles distinguish P1/P2; P2 appears when its controller
   is connected or its gun controls have been used.
-- **Power Sled:** independent P2 Entry/Call on Action 1/2, right/left pedals
+- **Power Sled:** independent P2 Entry/Call signals, right/left pedals
   on Accelerator/Brake (R2/L2), ADC channels 5/7 with 0..255 travel.
   This game is absent from the SM2 workbook; its wiring follows MAME.
 - Coin 2 / Start 2 move out of P1 to P2 Coin / Start. Default keys are 6 / 2,
@@ -130,34 +133,62 @@ consumed (Select alone may insert a coin, Start alone may start a game).
 ## Shared defaults and game meanings
 
 One signal has one binding, regardless of the game. SM2-Emu positions are
-retained where compatible with this rule. There are no game-specific hidden
-physical bindings and no redundant Shot/Shift/Foot Sensor entries.
+retained where compatible with this rule. Gun and Sky Target fire are separate
+assignable signals; their matching defaults do not couple later edits.
 
 | Signal | Pad | Keyboard | Examples of routed functions |
 | --- | --- | --- | --- |
-| Action 1 | South OR L1 | J, E, Space | Punch, long pass, shot, shift down, left twin shot, right pitch/foot |
-| Action 2 | East OR R1 | K, Q, R | Kick, short pass, secondary/reload, shift up, right twin shot, left pitch/foot |
-| Action 3 | West | L | Guard/hold, shoot in soccer, Desert shift, left dash, Water Ski set |
-| Extra Action | North | I | Rally handbrake, right dash, Ski Super G Select 2 |
+| Button 1 / Kick | South OR L1 | J, E, Space | Remaining shared first-button cabinets, including Motor Raid Kick |
+| Button 2 / Punch | East OR R1 | K, Q, R | Remaining shared second-button cabinets, including Motor Raid Punch |
+| Button 3 / Guard / Jump / Hold / Barrier | West | L | Remaining shared third-button cabinets |
+| Power Sled: Cancel Error | North | I | Power Sled only |
+| Sky Target: Machine Gun / Missile | South OR R1 / East OR L1 | J, E, Space / K, Q, R | Independent Sky Target fire signals |
+| Gun Primary Fire / Gun Secondary Fire | South OR R1 / East OR L1 | J, E, Space / K, Q, R | Shot / secondary action according to cabinet |
 | View / Select 1–4 | Down, Left, Right, Up | Z, X, C, V | VR buttons, view changes, menu selections and zoom |
 | H-Gate gears 1–4 | Right-stick diagonals | 1–4 | Direct gear selection |
 | H-Gate neutral | West | 0 | Neutral |
+| Gear Down | L1 | E | Sequential downshift / step down through an H-gate |
+| Gear Up | R1 | Q | Sequential upshift / step up through an H-gate |
+
+Virtua Striker, Wing War, Star Wars Arcade, Top Skater, Power Sled, Ski Super G,
+Desert Tank and NetMerc now expose their actions as separate, game-prefixed
+signals grouped by game, without section headings. Their physical defaults match the former Action
+bindings, but later edits are independent. When loading an older binding file,
+an absent dedicated entry inherits an explicit old Action 1/2/3 binding once;
+saving writes the independent entries. No user file is rewritten on load.
+
+**Virtua Fighter / Virtua Fighter 2 exception (both players, all VF2 revisions):**
+Action 1 (South/L1) is **Kick**, Action 2 (East/R1) is **Punch**, Action 3
+(West) is **Guard**, matching the tested SM2 Libretro fighting positions.
+Keyboard keys remain bound to those same Actions, so they follow the new game
+meaning without any config rewrite. Other fighting games and sequential
+shifts retain their existing mappings; this is not a global Action swap.
 
 Sega Rally (all revisions), Super GT 24h and Star Wars Arcade/SWAJ have
 one View button: their `View / Select 1` also accepts the gamepad binding of
 `View / Select 4`. With the defaults this is **D-pad Down OR D-pad Up**.
-The GUI notes this rule below View / Select 1. Keyboard bindings are unchanged;
+The GUI has no game list below View / Select 1. Keyboard bindings are unchanged;
 reassigning View / Select 4's gamepad binding also reassigns the alternative.
 Multi-view cabinets remain separate. Titles already using View / Select 4 for
 their single view already accept D-pad Up and need no extra binding.
 
 Face buttons and shoulders are OR alternatives, not a chord: either one
 activates the same signal. R2/L2 remain analog pedals. The aliases preserve
-the requested global action positions; sequential shifts retain L1 down/R1 up.
-Gear Down routes to Action 1 and Gear Up to Action 2, including sequential
-stepping of an H-gate. Direct H-gate bindings do not change. Keyboard bindings
-stay with their actions: J/E/Space now shift down, K/Q/R shift up. Other game
-functions stay on the same logical actions, so their physical positions swap.
+the requested global action positions. Sequential shifts now use dedicated
+**Gear Down / Gear Up** signals, default L1/R1 and E/Q. They also step through
+an H-gate; its direct gear bindings and latching policy do not change.
+South/East and J/K/Space/R no longer shift by default. Rebinding Action 1/2
+cannot affect the gearbox, nor can rebinding Gear Down/Up affect actions.
+E/Q remain existing Action keyboard aliases in other games; those bindings
+and user customizations are not silently removed or rewritten. Racing games
+read E/Q through the dedicated Gear bindings, not the Action aliases.
+Motor Raid's Punch/Kick remain Action 1/2; Desert Tank's toggle now has its
+own Shift signal. Neither consumes Gear Down/Up.
+The new rows follow H-Gate in Cabinet P1, with disabled counterparts in
+Cabinet P2 (no local second gearbox). Existing `signals-v3` files without
+`gear_down`/`gear_up` inherit defaults; saving includes the new keys. Explicit
+empty or custom entries are preserved. Legacy separate gear keyboard entries
+are imported into the new signals, not merged into Action 1/2.
 Virtual On uses the four action signals for its four independent shot/dash
 functions, with both sticks kept independent.
 
@@ -173,7 +204,7 @@ By user request, the ADC polarity is inverted and the trigger assignments are
 swapped; signal labels, right-stick Y and keyboard bindings remain unchanged.
 The unchanged stick/keyboard bindings consequently have inverted ADC effects.
 Both triggers read positive travel; gilrs right-stick Y is positive up.
-The translator subtracts Down from Up on the single throttle ADC. Released/equal inputs
+Cabinet sampling subtracts Down from Up on the single throttle ADC. Released/equal inputs
 give 0x80. Full Up/Down give 0xFF/0x01 for Wing War and 228/28 for SWA,
 preserving each cabinet's ADC range with the same polarity. Alternatives use the
 stronger input, not a sum; opposite directions compensate.
@@ -185,11 +216,24 @@ Previously customized `wingwar_throttle_up/down` entries are accepted on load
 and saved as `throttle_up/down`; there are no duplicate signals in the GUI.
 Slide is split into Water Ski: Slide (left X, arrows/A/D) and Top Skater:
 Slide (right X, U/O), matching their respective SM2-Emu defaults.
-The GUI shows game-family names in parentheses below Analog Joystick X/Y
-and Extra Action; below each Throttle entry it shows `(Star Wars Arcade, Wing War)`.
-For Extra Action, each game also includes its function:
-Sega Rally: Handbrake; Virtual On: Right Dash / Turbo; Ski Super G: Select 2.
-Power Sled uses Extra Action for Cancel Error. This is explanatory text, not a game filter.
+The GUI shows game-family names in parentheses below Analog Joystick X/Y;
+below each Throttle entry it shows `(Star Wars Arcade (Pilot), Wing War)`.
+In Cabinet P1 the Star Wars Arcade action rows name the Pilot; in Cabinet P2
+they name the Gunner. The P2 analog-joystick note uses the Gunner name too.
+Power Sled: Cancel Error is explicit. Sega Rally's analog Handbrake,
+Virtual On's four triggers/dashes, separate Gun and Sky Target fire controls,
+Water Ski's Set/Pitch controls,
+and Ski Super G's two foot sensors and Select 2/3 have their own assignable
+rows. The list is not filtered by game. The new signals inherit defaults in an
+existing `signals-v3` file without overwriting it. Exact former stock Test,
+Service and Elevation expressions refresh in memory; customized or empty
+expressions remain unchanged. The existing `primary_fire`/`secondary_fire`
+config keys now name the Gun signals; Sky Target has new independent keys.
+Gun Secondary Fire also drives Behind Enemy Lines' missile but has no
+game-list note in the GUI.
+The Gun rows appear together immediately before the alphabetical game-specific
+groups; Power Sled: Cancel Error is in its own game's group. The relative order
+within each game remains unchanged.
 Driving signals are ordered Steering / Bank, Accelerator, Brake, then all
 H-Gate gears and neutral. Cars and bikes use the same `steering` binding.
 
@@ -232,7 +276,7 @@ selection latches when released. Conflicting direct selections leave the
 current gear unchanged. Sequential shifting remains edge-triggered.
 
 Virtua Racing / Virtua Formula do not use the Daytona H-gate encoding:
-Action 1/2 drive their native active-low Shift Down/Up switches. Both are
+Gear Down/Up drive their native active-low Shift Down/Up switches. Both are
 released at rest and on conflicting requests. Direct H-gate signals are
 unused for those two games. VR4 remains independent of the shift switches.
 
@@ -260,20 +304,28 @@ above to avoid co-activating pedals or actions.
 
 - `input/signals/mod.rs`: sole public catalogue and defaults.
 - `input/signals/expression.rs`: expression parser/evaluator.
-- `input/signals/routing.rs`: game-aware translation, independent axes,
-  digital exceptions and direct gear selection.
+- `input/sampling.rs`: physical binding evaluation and native touch signals.
+- `input/cabinet.rs`: direct digital wiring and polling by cabinet family.
+- `input/cabinet/analog.rs`: calibrated ADC roles, independent axes and
+  stateful gear/cursor setup.
 - `bindings.rs`: persistence, migration and hotkeys.
-- `input.rs`: existing polling/calibration, with narrow calls to the translator.
+- `input.rs`: host event/device state, per-frame dispatch and ADC publication.
 - `input/players.rs`: frontend-only device identity and independent seat assignment.
-- `app.rs`: passes the identified ROM set to input.
+- `app.rs`: passes the identified ROM set to input and the touch overlay.
+- `touch/`: emits the same native P1 signals, including signed axes.
 - `gui/mod.rs`: displays the full catalogue and edits its bindings.
 - Core `config.rs` / `memory.rs` / `system.rs`: native P2 lightgun values and
   publication; `savestate.rs` versions the resulting snapshot layout.
 
-The retained `Control` enum identifies internal cabinet requests and touch
-overlay inputs. It has no separate user-facing catalogue or configuration.
+The legacy `Control` enum and `signals/routing.rs` have been removed.
 Digital cabinet wiring is not fully represented in the ROM database, so
-those exceptions live in the translator rather than changing the core.
+game-specific wiring remains in the cabinet module rather than changing the
+core. This is a frontend refactor, not a Libretro adapter: the host-independent
+core `Inputs` contract and all machine save-state formats remain unchanged.
+The initial native refactor had no catalogue change. The subsequent workbook
+functional-alignment checkpoint adds dedicated cabinet signals while retaining
+the single GUI catalogue and `signals-v3` file format.
+See [per-family equivalence checkpoints](INPUT_AUDIT.md#native-input-refactor--2026-09-27).
 
 ## Per-cabinet audit
 
@@ -284,8 +336,8 @@ for Model 2, including where they differ from MAME. MAME is used for the
 Model 1 cabinets and Power Sled, which are absent from that reference.
 
 With the shared defaults, Indy 500 / Sega Touring Car / Over Rev now use:
-Start → Start; D-pad Up → View 1; D-pad Down → View 2; R1/East → Shift Up;
-L1/South → Shift Down. D-pad Left/Right do not start the game or change views.
+Start → Start; D-pad Up → View 1; D-pad Down → View 2; R1 → Shift Up;
+L1 → Shift Down. D-pad Left/Right do not start the game or change views.
 Rebinding these signals in the existing list still works; no per-game binding
 file or second GUI list was introduced.
 

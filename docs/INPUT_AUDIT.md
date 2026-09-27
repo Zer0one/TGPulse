@@ -29,6 +29,48 @@ multiplayer implementation.
 
 ## Corrections
 
+### Workbook functional alignment — 2026-09-28
+
+Acceptance is physical button → in-game action. Extra aliases may remain only
+when they do not activate a second cabinet function on the same press. The
+single public GUI catalogue now exposes independent Sega Rally Handbrake,
+Desert Gun/Cannon, Virtual On left/right Shot/Dash, Ski Super G left/right
+Foot Sensor and Select 2/3, and Water Ski Set/Pitch Left/Pitch Right signals.
+No second mapping layer or game-filtered GUI list was added. Motor Raid reuses
+the existing Action 1/2 OR defaults (South/L1 Kick, East/R1 Punch) but corrects
+their electrical route. Fighter/baseball/soccer and Top Skater action wiring is
+corrected without inventing per-game duplicate face-button signals. Default
+Test/Service now follow SM2 R3/L3 physical positions respectively; exact old
+stock expressions refresh on load, but custom and empty values are preserved.
+
+The workbook-only Model 3 rows are out of scope. Air Walkers P1/P2 face
+positions are aligned; the workbook's P3/P4 electrical matrix needs a separate
+multiplayer milestone. No manual game/device acceptance is implied by tests.
+The legacy 100-set fingerprints remain frozen and are still checked for
+unchanged families; intentionally corrected families use explicit isolated
+port and physical-button assertions instead of falsifying the old fingerprints.
+
+### Signal catalogue cleanup — 2026-09-28
+
+Extra Action is labelled `Power Sled: Cancel Error` without a redundant usage
+note. View / Select 1 no longer displays its game-list note; the existing
+single-view D-pad OR behavior is unchanged. Sky Target: Machine Gun and
+Sky Target: Missile now have their own keys and GUI rows, independent of
+Gun Primary Fire and Gun Secondary Fire. The four Gun rows (Yaw, Pitch,
+Primary Fire, Secondary Fire) are consecutive in the one catalogue.
+Gun configuration keeps the `primary_fire` and `secondary_fire` keys so existing
+custom assignments survive; Sky Target inherits its separate defaults when its
+new keys are absent. No ROM, NVRAM or user config file was rewritten.
+Behind Enemy Lines' P1/P2 missile remains on Gun Secondary Fire, without a
+per-game usage note. The touch missile button uses that same signal.
+
+The GUI now separates the Gun rows from the lexicographically ordered
+game-specific groups. Power Sled: Cancel Error and Dynamite Baseball: Bat Swing
+are among those groups; signals within one game retain their existing relative
+order. Cabinet P1/P2 keep visual separators but no section headings; the
+display order does not alter saved keys, defaults or hardware routing.
+
+
 | Cabinet / family | Corrected routing |
 | --- | --- |
 | Indy 500, all revisions | Start at IN0:40; View 1/2 at IN1:01/02; no D-pad Left → Start alias |
@@ -36,7 +78,7 @@ multiplayer implementation.
 | Indy / Touring / Over Rev / Super GT / Manx | Momentary shifts have no H-gate residue; conflicting shifts are released |
 | Motor Raid | Punch and Kick remain independent and may be pressed together |
 | Sky Target | Start at IN0:40, not IN0:10; proper full-range stick axes and channel order |
-| Behind Enemy Lines | Service IN0:04, Test IN0:08, without swapping the user's physical bindings; Missile is not off-screen reload |
+| Behind Enemy Lines | Service IN0:04, Test IN0:08; Missile is not off-screen reload |
 | Wing War | Machine Gun / Missile / Smoke at IN1:10/20/40; all four views restored; 360 variant has no view switches and has different stick polarity |
 | NetMerc | MVD Holder at IN1:04, no invented Start switch; Y reaches channel 2, not the throttle mirror |
 | Star Wars Arcade | At this audit: Start 2 restored; Y direction, throttle centre/range and independent idle gunner axes. Superseded by the P2 follow-up below. |
@@ -60,26 +102,40 @@ sample so another cabinet's handbrake/port values cannot leak through.
 The agreed **single global signal catalogue and binding file** remain in place.
 This audit is not permission to replace them with per-game RetroPad bindings.
 
-- Action 1 is South OR L1 (Punch / Shot / Shift Down and other collapsed
-  primary functions), Action 2 East OR R1 (including Shift Up), Action 3 West,
-  Extra Action North. Sequential shifts therefore retain L1 down/R1 up;
-  Motor Raid's Punch/Kick are not shifts. Fighting, soccer and baseball retain their semantic
-  port-order exceptions. Shoulder/face aliases remain OR, not chords.
-- Service remains R3/F8 and Test L3/F2, as explicitly requested previously.
+- The remaining shared cabinet actions are labelled Button 1 / Kick (South OR
+  L1), Button 2 / Punch (East OR R1), and Button 3 / Guard / Jump / Hold /
+  Barrier (West). Virtua Striker, Wing War, Star Wars Arcade, Top Skater,
+  Power Sled, Ski Super G, Desert Tank and NetMerc have independent
+  game-prefixed action signals with the former defaults. Dedicated Gear
+  Down/Up use L1/R1.
+  Gun and Sky Target fire use independent Primary/Secondary Fire with
+  South/R1 and East/L1, as does Desert Tank's Gun/Cannon pair. Motor Raid's
+  Punch/Kick remain on Action 2/1 and are not shifts. Fighting, soccer and
+  baseball retain their semantic port-order exceptions. Shoulder/face aliases
+  remain OR, not chords.
+- **VF and VF2 override, explicitly confirmed by the user:** Action 1
+  South/L1 = Kick (`02`), Action 2 East/R1 = Punch (`01`), Action 3 West =
+  Guard (`04`), for P1 and P2. All four VF2 revisions share this rule.
+  Other fighters now use the workbook's South Kick / East Punch positions;
+  DOA retains its distinct electrical bits and Hold on West.
+- Service now uses L3/F8 and Test R3/F2, matching the workbook's physical positions.
   BEL swaps the destination bits, not these bindings.
 - Views retain the one global Down/Left/Right/Up list. Two-view driving
   cabinets consume View / Select 4 (Up) and 1 (Down), following SM2's layout.
-- Start also serves Manx TT/Motor Raid Start/VR, Water Ski Select Down and
-  Ski Super G Select 3. There are no redundant configurable Start aliases.
-- Ski Super G uses Action 2/R1 for left foot and Action 1/L1 for right foot,
-  Action 3 for Select 1 and Extra Action for Select 2; it does not copy SM2's
+- Start also serves the shared Manx TT/Motor Raid Start/VR and Water Ski
+  Select Down lines. Ski Super G Select 3 is now independent, as in the
+  workbook; Start alone no longer activates it.
+- Ski Super G uses separate left/right foot sensors, a dedicated Select 1
+  signal and Select 2/3 signals; it does not copy SM2's
   separate face-button and shoulder assignments.
 - Keyboard ramping, deadzones, H-gate latching and initial gear policy are
   retained. This is not a port of all SM2 controller tuning options.
 
 ## Implementation boundary
 
-Most changes are confined to `input/signals/routing.rs`, `input.rs` and tests.
+The original audit changed `input/signals/routing.rs`, `input.rs` and tests;
+the native refactor below replaces that compatibility route with `input/cabinet.rs`
+and `input/cabinet/analog.rs`, preserving the audited electrical mappings.
 Ski Super G's channel override is guarded by the old metadata order; a future
 corrected database does not get swapped back. No ROM database regeneration or
 second public input list is required.
@@ -188,3 +244,129 @@ P1 isolation, action release, two-button masks, analog endpoints/polarity,
 independent gun cursor hold/reload, migration and both native gun transports
 with mid-mux snapshot/restore. These are not two-controller gameplay proof;
 real device/input-test validation remains pending.
+
+### Native input refactor — 2026-09-27
+
+Work isolated on `codex/native-cabinet-inputs`, from `main` at `1fedad9`.
+Merge requires the user's manual acceptance. No default, expression grammar,
+binding-file version, GUI catalogue, ROM database, core input structure or
+machine snapshot format change is part of this refactor.
+
+The old `Signal -> Control -> generic ports -> route_ports` path is removed.
+Each family builds ports directly from the public signals; calibrated ADCs
+retain the existing game/role decisions. `input/sampling.rs` owns binding
+evaluation; `input/cabinet.rs` and `cabinet/analog.rs` own cabinet behavior.
+These remain frontend modules; the core continues accepting plain `Inputs`.
+
+Before changing production polling, `cabinet_trace_equivalence` captured one
+deterministic FNV-1a fingerprint per set in `input/signals/equivalence.txt`.
+It covers all 100 database sets: idle, keyboard holds/releases, P1/P2 pad
+buttons, assignable signals rebound to full/half axes, deadzone/threshold
+samples, simultaneous shift inputs and stateful continuation. Each sample
+contains all `Inputs` fields plus both displayed gun positions. This is a
+regression baseline, not new hardware truth: the independent source-backed
+port/ADC audits remain necessary. Do not regenerate fingerprints to conceal
+a mismatch. A legitimate output/trace-format change needs explicit review
+against the base revision and the source-backed assertions.
+
+| Checkpoint / family | Equivalence and independent audit |
+| --- | --- |
+| Joysticks / twin sticks / P2 | 100-set trace and 19 audit tests passed after the family replacement. |
+| Cars / bikes / H-gate / sequential shifts | Same full gate passed; ramps, thresholds, latch behavior and bindings retained. |
+| Flight / SWA Gunner / throttle | Same full gate passed; polarity and half-axis conventions unchanged. |
+| Serial and positional guns / P2 | Same full gate passed, including cursor hold, reload and calibrated channels. |
+| Jetski / skate / ski / sled | Same full gate passed. The first comparison caught a Ski Super G Start threshold regression (0 instead of 0.5); new code was corrected without changing the baseline. |
+| Removal of legacy enum / sampling / touch | Full input suite passes; dedicated touch adapter tests cover signed axes and native signal values. |
+
+Checkpoint command: `cargo test --offline -p tgpulse --bin tgpulse input::signals::audit`.
+Final gate: `cargo test --offline --workspace`, then
+`cargo build --offline --release -p tgpulse`.
+Tests are device-free and do not poll the user's controller or alter settings,
+NVRAM or saves. TCP unit tests need permission to bind local ports.
+
+Final verification on this branch: **466 workspace tests passed**, release
+build succeeded, and `target/release/tgpulse --list` found all 100 ROM sets.
+The focused native-input suite has 50 tests and the touch suite 12. Remaining
+compiler warnings come from the unchanged `m68000` / `block` dependencies.
+The list command is a loader/catalogue smoke check, not a gameplay test.
+
+Touch necessarily moves from old control identifiers to native signals;
+its numbered actions now refer to the public Action signals, and its sticks
+emit signed game-appropriate axes. Dedicated adapter-contract tests are kept
+separate from the frozen keyboard/gamepad traces: old touch behavior is not
+claimed bit-for-bit equivalent or tested on Android hardware. No P2 touch
+support is added.
+
+Before merge, use the development binary `target/release/tgpulse`
+(`tgpulse.dev`), for example: VR and Sega Rally (ramps/view/shifts), Indy 500
+(Start/view), VF/VF2 (actions/P2), Wing War/SWA (stick/throttle/Gunner),
+and one gun game (aim/reload). Existing config, calibration and save data
+must be retained. Automated equivalence does not replace this manual
+acceptance or imply fresh gameplay proof for every ROM set.
+
+### VF / VF2 semantic correction after equivalence — 2026-09-27
+
+The user requested SM2's South=Kick, East=Punch, West=Guard exception for
+both Virtua Fighter generations. Source: SM2 Libretro
+`src/libretro/input.cpp`, `fighting_bindings` (RetroPad B `02` Kick,
+A `01` Punch, Y `04` Guard); the Sega
+[VF service manual](https://manualzz.com/doc/23138502/sega-virtua-fighter-arcade-game-service-manual)
+identifies SW1 Punch, SW2 Kick, SW3 Guard. MAME `model1.cpp`'s VF ports map
+SW1/2/3 to `01/02/04` for both players.
+
+The earlier VF expectation incorrectly reused DOA's port order. VF2's earlier
+Action order also failed the requested SM2 physical convention. These were
+pre-existing semantic errors, not refactor regressions: the original audit
+expectations and the frozen trace reproduced them. They are now corrected
+for `vf`, `vf2`, `vf2a`, `vf2b`, `vf2o`, without modifying global binding
+defaults, user config, NVRAM, other titles or sequential shifting.
+
+Regression strategy: **all original fingerprints remain untouched**. For
+only these five sets, the trace comparison maps a copy of the two player
+ports back to the old bit order (VF swaps `01/04`; VF2 swaps `01/02`). Thus
+all other bits, axes and stateful behavior still compare to the original
+baseline. A separate test asserts the actual, unnormalized Punch/Kick/Guard
+bits for both players, each face/shoulder OR alternative, default P1 keyboard
+keys, custom P2 keys and release/isolation. It failed before the production
+fix (`vf`, P1 East) and passes with the correction. Real-game acceptance of
+the rebuilt binary remains for the user; no merge is implied.
+
+Verification after this correction: **467 workspace tests passed** and
+`cargo build --offline --release -p tgpulse` succeeded. The development
+binary is `target/release/tgpulse`, launched by `tgpulse.dev`; toolkit
+current/my releases and personal configuration/NVRAM were not modified.
+
+### Dedicated sequential gear signals — 2026-09-27
+
+User-authorized catalogue extension after the native refactor: `Gear Down`
+(`gear_down = KeyE, pad:LeftTrigger`) and `Gear Up`
+(`gear_up = KeyQ, pad:RightTrigger`). Cabinet P1 displays them after H-Gate;
+P2 shows disabled rows because no current local P2 gearbox exists. The GUI
+uses the existing catalogue editor, not a separate section or binding layer.
+
+Native sequential cabinets and sequential stepping of H-gates now consume
+these signals, not Action 1/2. Direct H-gate assignments, native port polarity,
+momentary versus latched behavior and conflicting-input policy are unchanged.
+Motor Raid attacks and Desert Tank fire/toggle are not sequential gears and
+retain their Action signals. The touch G+/G- controls follow the new signals
+except for those existing non-sequential action layouts.
+
+No user configuration is rewritten. Missing new keys inherit defaults and
+explicit bindings/empty values survive save/load. Historical merged Action
+keyboard aliases are retained for other games, but cannot shift a racing
+cabinet unless independently assigned to Gear Down/Up. Old separate gear
+keyboard entries migrate directly into the dedicated signals.
+
+Original 100-set trace fingerprints are unchanged. A test-only adapter
+replays historical Action1/2 requests on GearDown/Up and omits the two new
+signals from the old stimulus sequence; this checks unchanged cabinet
+behavior, not equality of the deliberately changed defaults. Independent
+raw-port tests cover each new signal across the full roster and rebind both
+gear signals on every applicable driving set, proving the old Action keys,
+faces and shoulders no longer shift after that rebind. Default tests check
+L1/R1, no South/East shift, E/Q persistence, release/conflicts, H-gate latching,
+P2-disabled capability, legacy import and touch/native agreement.
+
+Verification: **469 workspace tests passed**, development release built.
+Manual GUI/gamepad acceptance remains with the user. No commit, merge,
+toolkit deployment or ROM/NVRAM modification is part of this checkpoint.

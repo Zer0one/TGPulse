@@ -22,8 +22,8 @@ use winit::event::TouchPhase;
 use tgpulse_core::config::Config;
 use tgpulse_core::library::Entry;
 
-use crate::bindings::Control;
 use crate::gui::Action;
+use crate::input::signals::Signal;
 use crate::input::ControlScheme;
 
 pub use menu::Menu;
@@ -126,13 +126,7 @@ pub(crate) fn centred_text(
     dl.add_text([cx - size[0] * 0.5, cy - size[1] * 0.5], colour, text);
 }
 
-pub(crate) fn text_at(
-    dl: &imgui::DrawListMut<'_>,
-    x: f32,
-    y: f32,
-    text: &str,
-    colour: [f32; 4],
-) {
+pub(crate) fn text_at(dl: &imgui::DrawListMut<'_>, x: f32, y: f32, text: &str, colour: [f32; 4]) {
     dl.add_text([x, y], colour, text);
 }
 
@@ -154,7 +148,7 @@ struct Pointer {
 #[derive(Clone, Copy)]
 pub(crate) enum Target {
     /// A control on the in-game overlay, by index.
-    Control(usize),
+    Signal(usize),
     /// The picture itself, aiming a lightgun.
     Aim,
     /// A button on the menu.
@@ -181,7 +175,7 @@ pub struct TouchUi {
     menu: Menu,
     pointers: Vec<Pointer>,
     /// Recomputed whenever a finger moves; what the machine reads.
-    amounts: Vec<(Control, f32)>,
+    amounts: Vec<(Signal, f32)>,
     aim: (f32, f32),
     firing: bool,
 }
@@ -236,6 +230,14 @@ impl TouchUi {
     }
 
     /// The control layout follows the cabinet, so it changes with the game.
+    pub fn set_game(&mut self, game: &str) {
+        if self.overlay.game != game {
+            self.overlay.game = game.to_owned();
+            self.release_all();
+            self.relayout();
+        }
+    }
+
     pub fn set_scheme(&mut self, scheme: Option<ControlScheme>) {
         if self.overlay.scheme() != scheme {
             self.overlay.set_scheme(scheme);
@@ -267,7 +269,7 @@ impl TouchUi {
     }
 
     /// What the machine's controls read from the screen, as amounts in 0..1.
-    pub fn amounts(&self) -> &[(Control, f32)] {
+    pub fn amounts(&self) -> &[(Signal, f32)] {
         &self.amounts
     }
 
@@ -290,7 +292,7 @@ impl TouchUi {
                 match target {
                     Target::MenuButton(button) => self.menu.press(button),
                     Target::MenuAdjust(setting, delta) => self.menu.adjust(setting, delta),
-                    Target::Control(index) => self.overlay.press(index),
+                    Target::Signal(index) => self.overlay.press(index),
                     _ => {}
                 }
                 self.pointers.push(Pointer {
@@ -341,7 +343,7 @@ impl TouchUi {
             return self.menu.pick(x, y);
         }
         if let Some(index) = self.overlay.pick(x, y) {
-            return Target::Control(index);
+            return Target::Signal(index);
         }
         // On a lightgun cabinet the picture is the gun, so a finger anywhere
         // the controls do not claim is an aim and a trigger pull.
@@ -353,25 +355,33 @@ impl TouchUi {
 
     /// Folds every finger down into one set of control amounts.
     fn recompute(&mut self) {
-        let mut amounts: Vec<(Control, f32)> = Vec::new();
+        let mut amounts: Vec<(Signal, f32)> = Vec::new();
         let mut firing = false;
         let mut aim = self.aim;
 
         for pointer in &self.pointers {
             match pointer.target {
-                Target::Control(index) => {
-                    self.overlay
-                        .amounts(index, pointer.start, pointer.pos, &mut |control, amount| {
-                            if amount <= 0.0 {
+                Target::Signal(index) => {
+                    self.overlay.amounts(
+                        index,
+                        pointer.start,
+                        pointer.pos,
+                        &mut |control, amount| {
+                            if amount == 0.0 {
                                 return;
                             }
                             match amounts.iter_mut().find(|(c, _)| *c == control) {
                                 // Two fingers on controls sharing a binding
                                 // read as the firmer of the two, not the sum.
-                                Some((_, held)) => *held = held.max(amount),
+                                Some((_, held)) => {
+                                    if amount.abs() > held.abs() {
+                                        *held = amount;
+                                    }
+                                }
                                 None => amounts.push((control, amount)),
                             }
-                        });
+                        },
+                    );
                 }
                 Target::Aim => {
                     let (vx, vy, vw, vh) = self.view;
@@ -411,7 +421,7 @@ impl TouchUi {
             .pointers
             .iter()
             .filter_map(|p| match p.target {
-                Target::Control(index) => Some((index, p.start, p.pos)),
+                Target::Signal(index) => Some((index, p.start, p.pos)),
                 _ => None,
             })
             .collect();

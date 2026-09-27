@@ -249,6 +249,19 @@ to the shared I/O board and cannot be treated as a proven complete reference.
 
 ## Phase 3 — fidelity and remaining features
 
+- [ ] **🔵 Deferred — Wave Runner throttle travel (Model 2 follow-up):**
+  user reports RT drives Throttle Lever and LT does not. This matches the
+  current SM2 Libretro profile and the pre-refactor behavior, but equivalence
+  alone does not establish correct hardware travel. The original Sega
+  [WaveRunner owner's manual](https://manualzilla.com/doc/7426256/sega-waverunner-owner-s-manual)
+  describes gripping/releasing an accelerator and specifies about `E0 ±9`
+  with the lever released; the current mapping produces `80 -> 00` on RT.
+  Later compare useful travel, polarity and the game's saved Volume Setting
+  calibration before deciding whether the ADC mapping needs correction.
+  Do not infer a bidirectional lever merely from MAME's centered analog port.
+  **User explicitly requested leaving it unchanged for now (2026-09-27):**
+  preserve binding, ADC range, NVRAM and frozen refactor baseline.
+
 - [x] **Per-source output gains and mute:** GUI rows expose an absolute gain
   slider, independent Mute checkbox and source name, with a fixed reference
   tick (PCM 50%, FM 30%, DSB/SCSP 100%). Persist gains in settings and reapply
@@ -406,6 +419,29 @@ manual gameplay confirmation; the clipping check above remains open.
   fallback. The current general loader matches names, not expected hashes.
 
 ## Phase 4 — consolidation
+
+### Native cabinet input cleanup — 2026-09-27
+
+🟡 Implemented on the dedicated `codex/native-cabinet-inputs` branch and
+integrated into `main`; manual gameplay acceptance remains. The single public signal catalogue now feeds
+cabinet ports/ADCs without the old `Control` compatibility catalogue or
+post-poll port corrections. Model 1 and Model 2 mappings are preserved by
+100-set baseline traces and independent wiring tests after each control-family
+checkpoint. The core input/snapshot APIs remain unchanged; this is not a
+Libretro adapter. [Checkpoint evidence and limits](INPUT_AUDIT.md#native-input-refactor--2026-09-27).
+
+Subsequent user-approved VF/VF2 exception: South/L1 Kick, East/R1 Punch,
+West Guard, for P1/P2 and every VF2 revision. The five affected sets compare
+to the frozen trace after only the documented action-bit permutation; raw
+port tests separately assert the corrected semantics. All other sets retain
+strict equivalence. [Rationale and regression strategy](INPUT_AUDIT.md#vf--vf2-semantic-correction-after-equivalence--2026-09-27).
+
+Dedicated Gear Down/Up now separate sequential shifting from Action 1/2,
+with E/L1 and Q/R1 defaults and ordinary catalogue GUI rows. Direct H-Gate,
+Motor Raid attacks and Desert Tank's toggle remain unchanged. Old trace
+stimuli are adapted explicitly to the new channels; separate tests assert
+binding independence. Workspace tests and release build passed; manual
+gameplay acceptance remains separate. [Details](INPUT_AUDIT.md#dedicated-sequential-gear-signals--2026-09-27).
 
 ### Save-state restart — 2026-09-27
 

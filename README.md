@@ -52,10 +52,12 @@ fullscreen, while the Debugger requires the interface to be visible. Add
 `--fullscreen off` to inspect the Debugger if games normally start fullscreen.
 
 **Controls.** Coin `5` (Select), start `Enter` (Start), digital movement on
-arrows/WASD or the d-pad. Action 1 is South OR L1, Action 2 is East OR R1,
-and Action 3 is West; Extra Action uses
-North. Each has one binding across games: Action 1/2 also handle firing,
-secondary fire/reload and sequential shifting. Analog driving uses left
+arrows/WASD or the d-pad. Shared Button 1/Kick is South OR L1, Button 2/Punch
+is East OR R1, and Button 3/Guard/Jump/Hold/Barrier is West. Eight cabinets
+have independent game-prefixed action signals; Power Sled: Cancel Error uses North. Gun Primary/Secondary
+Fire and Sky Target: Machine Gun/Missile have separate assignable signals.
+Dedicated Gear Down (E/L1) and Gear Up (Q/R1) control
+sequential shifting independently of Action 1/2. Analog driving uses left
 stick X and R2/L2. Direct gears 1–4 use right-stick diagonals and latch when
 released; West selects neutral. Gun aim uses the mouse or left stick.
 Service is R3 and Test L3. The full, unfiltered signal list is editable in

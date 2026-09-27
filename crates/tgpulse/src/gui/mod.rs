@@ -90,7 +90,9 @@ mod tests {
                 assert!(!ui.is_any_item_active());
                 let draw = gui.context.render();
                 // ImGui measures a newly auto-sized window on its first frame.
-                if frame > 0 { assert!(draw.total_vtx_count > 0); }
+                if frame > 0 {
+                    assert!(draw.total_vtx_count > 0);
+                }
             }
         }
     }
@@ -124,17 +126,32 @@ mod tests {
         let mut reset_held = false;
         for _ in 0..2 {
             let ui = context.frame();
-            ui.window("Audio rows").position([0.0,0.0], imgui::Condition::Always)
-                .size([420.0,300.0], imgui::Condition::Always).build(|| {
-                for (label, reference) in [("MultiPCM 1",50), ("MultiPCM 2",50), ("FM (YM3438)",30), ("DSB (MPEG)",100), ("SCSP",100)] {
-                    let mut gain = reference;
-                    let mut muted = false;
-                    assert!(!audio_gain_row(ui, label, &mut gain, &mut muted, reference, &mut reset_held));
-                    assert_eq!(gain, reference);
-                    assert!(!muted);
-                    assert!(ui.item_rect_max()[0] <= ui.window_pos()[0] + ui.window_size()[0]);
-                }
-            });
+            ui.window("Audio rows")
+                .position([0.0, 0.0], imgui::Condition::Always)
+                .size([420.0, 300.0], imgui::Condition::Always)
+                .build(|| {
+                    for (label, reference) in [
+                        ("MultiPCM 1", 50),
+                        ("MultiPCM 2", 50),
+                        ("FM (YM3438)", 30),
+                        ("DSB (MPEG)", 100),
+                        ("SCSP", 100),
+                    ] {
+                        let mut gain = reference;
+                        let mut muted = false;
+                        assert!(!audio_gain_row(
+                            ui,
+                            label,
+                            &mut gain,
+                            &mut muted,
+                            reference,
+                            &mut reset_held
+                        ));
+                        assert_eq!(gain, reference);
+                        assert!(!muted);
+                        assert!(ui.item_rect_max()[0] <= ui.window_pos()[0] + ui.window_size()[0]);
+                    }
+                });
             assert!(context.render().total_vtx_count > 0);
         }
     }
@@ -151,12 +168,23 @@ mod gain_interaction_tests {
         context.io_mut().display_size = [1024.0, 1200.0];
         context.fonts().build_rgba32_texture();
         let mut config = Config::default();
-        let mut network = crate::network::Config { port_in: 18000, ..Default::default() };
+        let mut network = crate::network::Config {
+            port_in: 18000,
+            ..Default::default()
+        };
         let expected = network.clone();
         for _ in 0..2 {
             let mut actions = Vec::new();
-            settings_window(context.frame(), &mut config, &[], &mut network,
-                "TCP: waiting", &mut false, &mut true, &mut actions);
+            settings_window(
+                context.frame(),
+                &mut config,
+                &[],
+                &mut network,
+                "TCP: waiting",
+                &mut false,
+                &mut true,
+                &mut actions,
+            );
             assert!(context.render().total_vtx_count > 0);
             assert!(actions.is_empty(), "network changes require Apply");
             assert_eq!(network, expected);
@@ -172,7 +200,8 @@ mod gain_interaction_tests {
         context.fonts().build_rgba32_texture();
         context.style_mut().colors[imgui::StyleColor::FrameBg as usize] = [0.2, 0.4, 0.8, 1.0];
         context.style_mut().colors[imgui::StyleColor::SliderGrab as usize] = [0.4, 0.6, 1.0, 1.0];
-        let reference = imgui::ImColor32::from_rgba_f32s(0.2 * 0.55, 0.4 * 0.55, 0.8 * 0.55, 1.0).to_rgba();
+        let reference =
+            imgui::ImColor32::from_rgba_f32s(0.2 * 0.55, 0.4 * 0.55, 0.8 * 0.55, 1.0).to_rgba();
         let grab = imgui::ImColor32::from_rgba_f32s(0.4, 0.6, 1.0, 0.5).to_rgba();
         let master_grab = imgui::ImColor32::from_rgba_f32s(0.4, 0.6, 1.0, 1.0).to_rgba();
         let mut gain = 50;
@@ -181,20 +210,36 @@ mod gain_interaction_tests {
         let mut held = false;
         for _ in 0..2 {
             let ui = context.frame();
-            ui.window("Layers").position([0.0, 0.0], imgui::Condition::Always)
-                .size([420.0, 300.0], imgui::Condition::Always).build(|| {
-                let before = ui.clone_style();
-                audio_gain_row(ui, "MultiPCM 1", &mut gain, &mut mute, 50, &mut held);
-                assert_eq!(ui.clone_style().colors, before.colors);
-                ui.slider("Native slider", 0, 800, &mut master);
-            });
+            ui.window("Layers")
+                .position([0.0, 0.0], imgui::Condition::Always)
+                .size([420.0, 300.0], imgui::Condition::Always)
+                .build(|| {
+                    let before = ui.clone_style();
+                    audio_gain_row(ui, "MultiPCM 1", &mut gain, &mut mute, 50, &mut held);
+                    assert_eq!(ui.clone_style().colors, before.colors);
+                    ui.slider("Native slider", 0, 800, &mut master);
+                });
             let data = context.render();
-            let colours: Vec<_> = data.draw_lists().flat_map(|list| {
-                list.idx_buffer().iter().map(|idx| list.vtx_buffer()[*idx as usize].col)
-            }).collect();
-            let marker_at = colours.iter().position(|c| *c == reference).expect("dark blue reference");
-            let grab_at = colours.iter().position(|c| *c == grab).expect("50% opaque grab");
-            let master_at = colours.iter().position(|c| *c == master_grab).expect("unmodified master grab");
+            let colours: Vec<_> = data
+                .draw_lists()
+                .flat_map(|list| {
+                    list.idx_buffer()
+                        .iter()
+                        .map(|idx| list.vtx_buffer()[*idx as usize].col)
+                })
+                .collect();
+            let marker_at = colours
+                .iter()
+                .position(|c| *c == reference)
+                .expect("dark blue reference");
+            let grab_at = colours
+                .iter()
+                .position(|c| *c == grab)
+                .expect("50% opaque grab");
+            let master_at = colours
+                .iter()
+                .position(|c| *c == master_grab)
+                .expect("unmodified master grab");
             assert!(marker_at < grab_at && grab_at < master_at);
         }
     }
@@ -213,21 +258,45 @@ mod gain_interaction_tests {
         for frame in 0..7 {
             if frame >= 2 {
                 context.io_mut().add_mouse_pos_event(point);
-                context.io_mut().add_mouse_button_event(imgui::MouseButton::Left, matches!(frame, 2 | 4 | 5));
+                context
+                    .io_mut()
+                    .add_mouse_button_event(imgui::MouseButton::Left, matches!(frame, 2 | 4 | 5));
             }
             let ui = context.frame();
-            ui.window("Double click").position([0.0, 0.0], imgui::Condition::Always)
-                .size([420.0, 300.0], imgui::Condition::Always).build(|| {
-                let origin = ui.cursor_screen_pos();
-                point = [origin[0] + 25.0, origin[1] + 8.0];
-                let changed = audio_gain_row(ui, "MultiPCM 1", &mut gain, &mut muted, 50, &mut reset_held);
-                if frame == 4 { assert!(changed, "reset must be persisted"); }
-                audio_gain_row(ui, "Other", &mut other, &mut other_muted, 30, &mut reset_held);
-                master_volume_slider(ui, &mut master, &mut reset_held);
-            });
+            ui.window("Double click")
+                .position([0.0, 0.0], imgui::Condition::Always)
+                .size([420.0, 300.0], imgui::Condition::Always)
+                .build(|| {
+                    let origin = ui.cursor_screen_pos();
+                    point = [origin[0] + 25.0, origin[1] + 8.0];
+                    let changed = audio_gain_row(
+                        ui,
+                        "MultiPCM 1",
+                        &mut gain,
+                        &mut muted,
+                        50,
+                        &mut reset_held,
+                    );
+                    if frame == 4 {
+                        assert!(changed, "reset must be persisted");
+                    }
+                    audio_gain_row(
+                        ui,
+                        "Other",
+                        &mut other,
+                        &mut other_muted,
+                        30,
+                        &mut reset_held,
+                    );
+                    master_volume_slider(ui, &mut master, &mut reset_held);
+                });
             context.render();
-            if frame == 2 { assert!(gain < 50, "first click adjusts normally"); }
-            if frame >= 4 { assert_eq!(gain, 50, "frame {frame}"); }
+            if frame == 2 {
+                assert!(gain < 50, "first click adjusts normally");
+            }
+            if frame >= 4 {
+                assert_eq!(gain, 50, "frame {frame}");
+            }
             assert_eq!(other, 25);
             assert!(muted);
             assert_eq!(master, 400);
@@ -248,21 +317,36 @@ mod gain_interaction_tests {
         for frame in 0..7 {
             if frame >= 2 {
                 context.io_mut().add_mouse_pos_event(point);
-                context.io_mut().add_mouse_button_event(imgui::MouseButton::Left, matches!(frame, 2 | 4 | 5));
+                context
+                    .io_mut()
+                    .add_mouse_button_event(imgui::MouseButton::Left, matches!(frame, 2 | 4 | 5));
             }
             let ui = context.frame();
-            ui.window("Master reset").position([0.0, 0.0], imgui::Condition::Always)
-                .size([420.0, 300.0], imgui::Condition::Always).build(|| {
-                let origin = ui.cursor_screen_pos();
-                point = [origin[0] + 150.0, origin[1] + 8.0];
-                let changed = master_volume_slider(ui, &mut master, &mut reset_held);
-                if frame == 4 { assert!(changed, "reset must be persisted"); }
-                audio_gain_row(ui, "MultiPCM 1", &mut gain, &mut muted, 50, &mut reset_held);
-            });
+            ui.window("Master reset")
+                .position([0.0, 0.0], imgui::Condition::Always)
+                .size([420.0, 300.0], imgui::Condition::Always)
+                .build(|| {
+                    let origin = ui.cursor_screen_pos();
+                    point = [origin[0] + 150.0, origin[1] + 8.0];
+                    let changed = master_volume_slider(ui, &mut master, &mut reset_held);
+                    if frame == 4 {
+                        assert!(changed, "reset must be persisted");
+                    }
+                    audio_gain_row(ui, "MultiPCM 1", &mut gain, &mut muted, 50, &mut reset_held);
+                });
             context.render();
-            if frame < 2 { assert_eq!(master, 800); }
-            if frame == 2 { assert!(master > 100 && master < 800, "normal adjustment preserves the master range"); }
-            if frame >= 4 { assert_eq!(master, 100, "frame {frame}"); }
+            if frame < 2 {
+                assert_eq!(master, 800);
+            }
+            if frame == 2 {
+                assert!(
+                    master > 100 && master < 800,
+                    "normal adjustment preserves the master range"
+                );
+            }
+            if frame >= 4 {
+                assert_eq!(master, 100, "frame {frame}");
+            }
             assert_eq!(gain, 25);
             assert!(muted);
         }
@@ -455,7 +539,11 @@ impl Gui {
         touch: Option<&mut crate::touch::TouchUi>,
     ) -> Vec<Action> {
         self.context.io_mut().delta_time = dt.as_secs_f32().max(1.0 / 1000.0);
-        if self.state_message.as_ref().is_some_and(|(_, _, until)| std::time::Instant::now() >= *until) {
+        if self
+            .state_message
+            .as_ref()
+            .is_some_and(|(_, _, until)| std::time::Instant::now() >= *until)
+        {
             self.state_message = None;
         }
 
@@ -475,7 +563,9 @@ impl Gui {
             // Still render, so the stats window can stay up during play.
             if self.show_stats || self.state_message.is_some() {
                 let ui = self.context.frame();
-                if self.show_stats { stats_window(ui, stats); }
+                if self.show_stats {
+                    stats_window(ui, stats);
+                }
                 state_notice(ui, self.state_message.as_ref());
                 renderer.capture(self.context.render());
             } else {
@@ -795,12 +885,28 @@ fn audio_gain_row(
     let style = ui.clone_style();
     // Reserve only the unlabelled checkbox, gaps and widest source name.
     // Use all remaining width for the aligned channel sliders.
-    let label_width = ["MultiPCM 1", "MultiPCM 2", "FM (YM3438)", "DSB (MPEG)", "SCSP"]
-        .iter().map(|name| ui.calc_text_size(name)[0]).fold(0.0_f32, f32::max);
-    let trailing_width = ui.current_font_size() + 2.0 * style.frame_padding[1]
-        + 2.0 * style.item_spacing[0] + label_width;
+    let label_width = [
+        "MultiPCM 1",
+        "MultiPCM 2",
+        "FM (YM3438)",
+        "DSB (MPEG)",
+        "SCSP",
+    ]
+    .iter()
+    .map(|name| ui.calc_text_size(name)[0])
+    .fold(0.0_f32, f32::max);
+    let trailing_width = ui.current_font_size()
+        + 2.0 * style.frame_padding[1]
+        + 2.0 * style.item_spacing[0]
+        + label_width;
     ui.set_next_item_width((ui.content_region_avail()[0] - trailing_width).max(80.0));
-    let mut changed = audio_gain_slider(ui, gain, reference, tgpulse_core::config::AudioGains::MAX, reset_held);
+    let mut changed = audio_gain_slider(
+        ui,
+        gain,
+        reference,
+        tgpulse_core::config::AudioGains::MAX,
+        reset_held,
+    );
     ui.same_line();
     changed |= ui.checkbox("##mute", muted);
     if ui.is_item_hovered() {
@@ -849,7 +955,8 @@ fn audio_gain_slider(
                 active[3] = 0.5;
                 let _grab = ui.push_style_color(imgui::StyleColor::SliderGrab, grab);
                 let _grab_active = ui.push_style_color(imgui::StyleColor::SliderGrabActive, active);
-                changed = ui.slider_config("##gain", 0, max as i32)
+                changed = ui
+                    .slider_config("##gain", 0, max as i32)
                     .display_format("%d%%")
                     .build(&mut value);
             }
@@ -863,13 +970,24 @@ fn audio_gain_slider(
                 imgui::StyleColor::FrameBg
             } as usize];
             channels.set_current(0);
-            draw.add_rect(min, end, background).filled(true)
-                .rounding(style.frame_rounding).build();
+            draw.add_rect(min, end, background)
+                .filled(true)
+                .rounding(style.frame_rounding)
+                .build();
             let usable = (end[0] - min[0] - 4.0).max(0.0);
-            let grab = (usable / (max + 1) as f32).max(style.grab_min_size).min(usable);
+            let grab = (usable / (max + 1) as f32)
+                .max(style.grab_min_size)
+                .min(usable);
             let x = min[0] + 2.0 + grab * 0.5 + (usable - grab) * reference as f32 / max as f32;
-            let reference_colour = [background[0] * 0.55, background[1] * 0.55, background[2] * 0.55, 1.0];
-            draw.add_line([x, min[1]], [x, end[1]], reference_colour).thickness(2.0).build();
+            let reference_colour = [
+                background[0] * 0.55,
+                background[1] * 0.55,
+                background[2] * 0.55,
+                1.0,
+            ];
+            draw.add_line([x, min[1]], [x, end[1]], reference_colour)
+                .thickness(2.0)
+                .build();
         });
     }
     let reset = ui.is_item_hovered() && ui.is_mouse_double_clicked(imgui::MouseButton::Left);
@@ -884,7 +1002,9 @@ fn audio_gain_slider(
         *gain = value.clamp(0, max as i32) as u32;
     }
     if ui.is_item_hovered() {
-        ui.tooltip_text(format!("Default: {reference}%. Double-click to reset; Ctrl-click to type a value."));
+        ui.tooltip_text(format!(
+            "Default: {reference}%. Double-click to reset; Ctrl-click to type a value."
+        ));
     }
     changed
 }
@@ -1086,12 +1206,18 @@ fn input_window(
                         );
                     }
                     let bound = &bindings.return_to_menu.text;
-                    binding_row(ui, "Return to game menu / quit", if bound.is_empty() { "Unbound" } else { bound }, false, || {
-                        *awaiting = None;
-                        editor.return_to_menu = Some(bound.clone());
-                        editor.return_to_menu_error = None;
-                        ui.open_popup("return_to_menu_binding");
-                    });
+                    binding_row(
+                        ui,
+                        "Return to game menu / quit",
+                        if bound.is_empty() { "Unbound" } else { bound },
+                        false,
+                        || {
+                            *awaiting = None;
+                            editor.return_to_menu = Some(bound.clone());
+                            editor.return_to_menu_error = None;
+                            ui.open_popup("return_to_menu_binding");
+                        },
+                    );
                     if let Some(_popup) = ui.begin_popup("return_to_menu_binding") {
                         let text = editor.return_to_menu.get_or_insert_with(|| bound.clone());
                         ui.input_text("Expression", text).build();
@@ -1108,7 +1234,9 @@ fn input_window(
                             }
                         }
                         ui.same_line();
-                        if ui.button("Cancel") { ui.close_current_popup(); }
+                        if ui.button("Cancel") {
+                            ui.close_current_popup();
+                        }
                         if let Some(error) = &editor.return_to_menu_error {
                             ui.text_colored([1.0, 0.4, 0.3, 1.0], error);
                         }
@@ -1116,46 +1244,77 @@ fn input_window(
                     tab.end();
                 }
                 for player in Player::ALL {
-                if let Some(tab) = ui.tab_item(if player == Player::One { "Cabinet P1" } else { "Cabinet P2" }) {
-                    let _id = ui.push_id_usize(player.index());
-                    let current = &bindings.controllers[player.index()];
-                    let preview = match current.as_str() {
-                        "auto" => format!("Auto — {}", controller_labels[player.index()]),
-                        "none" => "None (keyboard only)".into(),
-                        _ => controller_labels[player.index()].clone(),
-                    };
-                    if let Some(_combo) = ui.begin_combo("Controller", preview) {
-                        for (key, label) in [("auto", "Automatic (distinct device per player)"), ("none", "None (keyboard only)")]
-                            .into_iter().map(|(k,l)| (k.to_owned(), l.to_owned()))
-                            .chain(devices.iter().map(|d| (d.key.clone(), format!("{}{}", d.label, if d.connected { "" } else { " (disconnected)" })))) {
-                            if ui.selectable_config(&label).selected(bindings.controllers[player.index()] == key).build() {
-                                bindings.set_controller(player, key);
-                                actions.push(Action::BindingsChanged);
+                    if let Some(tab) = ui.tab_item(if player == Player::One {
+                        "Cabinet P1"
+                    } else {
+                        "Cabinet P2"
+                    }) {
+                        let _id = ui.push_id_usize(player.index());
+                        let current = &bindings.controllers[player.index()];
+                        let preview = match current.as_str() {
+                            "auto" => format!("Auto — {}", controller_labels[player.index()]),
+                            "none" => "None (keyboard only)".into(),
+                            _ => controller_labels[player.index()].clone(),
+                        };
+                        if let Some(_combo) = ui.begin_combo("Controller", preview) {
+                            for (key, label) in [
+                                ("auto", "Automatic (distinct device per player)"),
+                                ("none", "None (keyboard only)"),
+                            ]
+                            .into_iter()
+                            .map(|(k, l)| (k.to_owned(), l.to_owned()))
+                            .chain(devices.iter().map(|d| {
+                                (
+                                    d.key.clone(),
+                                    format!(
+                                        "{}{}",
+                                        d.label,
+                                        if d.connected { "" } else { " (disconnected)" }
+                                    ),
+                                )
+                            })) {
+                                if ui
+                                    .selectable_config(&label)
+                                    .selected(bindings.controllers[player.index()] == key)
+                                    .build()
+                                {
+                                    bindings.set_controller(player, key);
+                                    actions.push(Action::BindingsChanged);
+                                }
                             }
                         }
-                    }
-                    ui.text_wrapped("All signals are shown. The loaded game determines which ones are used.");
-                    ui.separator();
-                    ui.text_wrapped("Comma = alternatives; & = simultaneous. Signed axis: pad:LeftStickX; inverted: pad:LeftStickX~; half axis: pad:RightStickX-. Keyboard axis: keys:ArrowLeft/ArrowRight.");
-                    if let Some(signal) = editor.signal.filter(|s| editor.player == player && (player == Player::One || s.supports_p2())) {
-                        ui.text(signal.label());
-                        ui.input_text("Expression", &mut editor.text).build();
-                        if ui.button("Apply") {
-                            match bindings.set_player_expression(player, signal, &editor.text) {
-                                Ok(()) => { editor.error=None; actions.push(Action::BindingsChanged); }
-                                Err(e) => editor.error=Some(e),
+                        ui.text_wrapped("Comma = alternatives; & = simultaneous.");
+                        if let Some(signal) = editor.signal.filter(|s| {
+                            editor.player == player && (player == Player::One || s.supports_p2())
+                        }) {
+                            ui.text(cabinet_signal_label(player, signal));
+                            ui.input_text("Expression", &mut editor.text).build();
+                            if ui.button("Apply") {
+                                match bindings.set_player_expression(player, signal, &editor.text) {
+                                    Ok(()) => {
+                                        editor.error = None;
+                                        actions.push(Action::BindingsChanged);
+                                    }
+                                    Err(e) => editor.error = Some(e),
+                                }
                             }
+                            ui.same_line();
+                            if ui.button("Cancel") {
+                                *editor = BindingEditor::default();
+                            }
+                            if let Some(error) = &editor.error {
+                                ui.text_colored([1.0, 0.4, 0.3, 1.0], error);
+                            }
+                            ui.separator();
                         }
-                        ui.same_line();
-                        if ui.button("Cancel") { *editor=BindingEditor::default(); }
-                        if let Some(error)=&editor.error { ui.text_colored([1.0,0.4,0.3,1.0],error); }
-                        ui.separator();
+                        for signal in Signal::ALL {
+                            if *signal == Signal::GunYaw || *signal == Signal::Elevation {
+                                ui.separator();
+                            }
+                            cabinet_signal_row(ui, player, *signal, bindings, editor);
+                        }
+                        tab.end();
                     }
-                    for signal in Signal::ALL {
-                        cabinet_signal_row(ui, player, *signal, bindings, editor);
-                    }
-                    tab.end();
-                }
                 }
                 tabs.end();
             }
@@ -1174,7 +1333,7 @@ fn cabinet_signal_row(
     let bound = &bindings.player_binding(player, signal).text;
     binding_row(
         ui,
-        signal.label(),
+        cabinet_signal_label(player, signal),
         if !enabled {
             "Not available for P2"
         } else if bound.is_empty() {
@@ -1192,7 +1351,7 @@ fn cabinet_signal_row(
     );
     let usage = match (player, signal, signal.usage()) {
         (Player::One, _, usage) => usage,
-        (Player::Two, Signal::SkyX | Signal::SkyY, Some(_)) => Some("(Star Wars Arcade: Gunner)"),
+        (Player::Two, Signal::SkyX | Signal::SkyY, Some(_)) => Some("(Star Wars Arcade (Gunner))"),
         _ => None,
     };
     if let Some(usage) = usage {
@@ -1201,9 +1360,42 @@ fn cabinet_signal_row(
     }
 }
 
+fn cabinet_signal_label(player: Player, signal: Signal) -> &'static str {
+    match (player, signal) {
+        (Player::One, Signal::SwaLaser) => "Star Wars Arcade (Pilot): Laser",
+        (Player::One, Signal::SwaTorpedo) => "Star Wars Arcade (Pilot): Torpedo",
+        (Player::Two, Signal::SwaLaser) => "Star Wars Arcade (Gunner): Laser",
+        (Player::Two, Signal::SwaTorpedo) => "Star Wars Arcade (Gunner): Torpedo",
+        _ => signal.label(),
+    }
+}
+
 #[cfg(test)]
 mod player_binding_tests {
     use super::*;
+    #[test]
+    fn star_wars_arcade_labels_distinguish_pilot_and_gunner() {
+        assert_eq!(
+            cabinet_signal_label(Player::One, Signal::SwaLaser),
+            "Star Wars Arcade (Pilot): Laser"
+        );
+        assert_eq!(
+            cabinet_signal_label(Player::Two, Signal::SwaLaser),
+            "Star Wars Arcade (Gunner): Laser"
+        );
+        assert_eq!(
+            cabinet_signal_label(Player::One, Signal::SwaTorpedo),
+            "Star Wars Arcade (Pilot): Torpedo"
+        );
+        assert_eq!(
+            cabinet_signal_label(Player::Two, Signal::SwaTorpedo),
+            "Star Wars Arcade (Gunner): Torpedo"
+        );
+        assert_eq!(
+            cabinet_signal_label(Player::Two, Signal::StrikerShoot),
+            Signal::StrikerShoot.label()
+        );
+    }
     #[test]
     fn unsupported_p2_rows_are_visible_but_cannot_open_an_editor() {
         let _lock = tests::IMGUI_TEST_LOCK.lock().unwrap();
@@ -1352,10 +1544,15 @@ fn stats_window(ui: &imgui::Ui, stats: Stats) {
 
 /// Non-interactive feedback also visible with the menu hidden/fullscreen.
 fn state_notice(ui: &imgui::Ui, message: Option<&(String, bool, std::time::Instant)>) {
-    let Some((text, error, _)) = message else { return; };
+    let Some((text, error, _)) = message else {
+        return;
+    };
     ui.window("Save state status")
         .position([12.0, 42.0], imgui::Condition::Always)
-        .size([ui.io().display_size[0].min(660.0) - 24.0, 0.0], imgui::Condition::Always)
+        .size(
+            [ui.io().display_size[0].min(660.0) - 24.0, 0.0],
+            imgui::Condition::Always,
+        )
         .title_bar(false)
         .resizable(false)
         .movable(false)
@@ -1364,7 +1561,11 @@ fn state_notice(ui: &imgui::Ui, message: Option<&(String, bool, std::time::Insta
         .focus_on_appearing(false)
         .no_inputs()
         .build(|| {
-            let colour = if *error { [1.0, 0.45, 0.4, 1.0] } else { [0.65, 1.0, 0.65, 1.0] };
+            let colour = if *error {
+                [1.0, 0.45, 0.4, 1.0]
+            } else {
+                [0.65, 1.0, 0.65, 1.0]
+            };
             let _colour = ui.push_style_color(imgui::StyleColor::Text, colour);
             ui.text_wrapped(text);
         });

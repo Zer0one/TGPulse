@@ -1,4 +1,4 @@
-//! Controller and keyboard mapping onto the Model 1 I/O board's inputs.
+//! Host input sampling and native Model 1 / Model 2 cabinet inputs.
 //!
 //! Daytona is a dedicated cabinet: a 270-degree wheel, two pedals, a 4-speed
 //! H-pattern shifter and four coloured view buttons. None of that maps onto a
@@ -10,9 +10,11 @@
 //! give steering, throttle and brake a travel of 0x20..0xe0, centred at 0x80 for
 //! the wheel and resting at 0x20 for both pedals.
 
+mod cabinet;
 #[cfg(test)]
 mod player_tests;
 pub mod players;
+mod sampling;
 pub mod signals;
 use players::{PadAssignments, PadDevice, Player};
 use signals::Signal;
@@ -23,7 +25,7 @@ use winit::keyboard::KeyCode;
 
 use tgpulse_core::config::Inputs;
 
-use crate::bindings::{Bindings, Control, Sign, Source};
+use crate::bindings::{Bindings, Sign, Source};
 
 // --- Drive board command encoding -------------------------------------------
 //
@@ -63,36 +65,6 @@ const PEDAL_KEYDELTA: i32 = 20;
 const STICK_DEADZONE: f32 = 0.15;
 /// Trigger travel below which a pedal is treated as released.
 const TRIGGER_DEADZONE: f32 = 0.05;
-
-/// Active-low bits of IN0.
-const IN0_COIN1: u8 = 0x01;
-const IN0_COIN2: u8 = 0x02;
-const IN0_TEST: u8 = 0x04;
-const IN0_SERVICE: u8 = 0x08;
-const IN0_START1: u8 = 0x10;
-const IN0_VR1_RED: u8 = 0x20;
-const IN0_VR2_BLUE: u8 = 0x40;
-const IN0_VR3_YELLOW: u8 = 0x80;
-/// Active-low bit of IN1.
-const IN1_VR4_GREEN: u8 = 0x01;
-
-// The 8-way joystick + 3-button IN.1 layout, all active-low. Virtua Fighter
-// (Model 1) and Virtua Striker (Model 2B) use identical bits; only the button
-// names differ -- Guard/Punch/Kick versus Long Pass/Shoot/Short Pass. From
-// The reference and `( vstriker )`.
-const IN1_JOY_BTN1: u8 = 0x01;
-const IN1_JOY_BTN2: u8 = 0x02;
-const IN1_JOY_BTN3: u8 = 0x04;
-const IN1_JOY_DOWN: u8 = 0x10;
-const IN1_JOY_UP: u8 = 0x20;
-const IN1_JOY_RIGHT: u8 = 0x40;
-const IN1_JOY_LEFT: u8 = 0x80;
-
-// Star Wars Arcade IN.1, active-low. From the reference:
-// three fire buttons for player 1, two for player 2.
-const IN1_SWA_BTN1: u8 = 0x01; // P1 trigger / primary fire
-const IN1_SWA_BTN2: u8 = 0x02; // P1 button 2
-const IN1_SWA_BTN3: u8 = 0x10; // P1 button 3
 
 // Star Wars' analog channels are two-axis flight sticks rather than a wheel with an 0x80 centre. The I/O
 // board reads them on the same ADC channels 0/1/2 the racers use for
@@ -158,10 +130,10 @@ pub struct InputState {
     analog_roles: [AnalogRole; 8],
     /// What the player has bound each control to.
     bindings: Bindings,
-    /// What the on-screen controls are asking for, as amounts in 0..1. These
+    /// On-screen signals: 0..1 for buttons, -1..1 for signed axes. These
     /// sit alongside the bound sources rather than inside them: a thumb is not
     /// a key or a pad button, and the player never bound it to anything.
-    touch: Vec<(Control, f32)>,
+    touch: Vec<(Signal, f32)>,
     /// A pad the platform reports for itself.
     external: ExternalPad,
     external_p2: ExternalPad,
@@ -355,7 +327,7 @@ impl InputState {
 
     /// Publishes what the on-screen controls are asking for. Called once a
     /// frame with the overlay's current state.
-    pub fn set_touch(&mut self, amounts: &[(Control, f32)]) {
+    pub fn set_touch(&mut self, amounts: &[(Signal, f32)]) {
         self.touch.clear();
         self.touch.extend_from_slice(amounts);
     }
@@ -393,7 +365,7 @@ impl InputState {
     /// Places the axes a scheme produced onto the channels this game reads.
     fn scatter(&self, axes: &Axes, out: &mut Inputs) {
         for (ch, role) in self.analog_roles.iter().enumerate() {
-            out.analog[ch] = self.routed_axis(*role, axes);
+            out.analog[ch] = self.cabinet_axis(*role, axes);
         }
         // The original I/O board reads these mirrors rather than the mux.
         // Mirror the *routed channels*, including NetMerc's Y on channel 2.
@@ -580,20 +552,8 @@ impl InputState {
         }
     }
 
-    /// Whether any source bound to `control` is active. A stick counts as
-    /// pressed once it is past the deadzone, which is what makes the analog
-    /// controls usable as digital ones.
-    pub fn on(&self, control: Control) -> bool {
-        self.amount(control) > 0.0
-    }
-
-    /// How far `control` is pressed, 0..1. Digital sources read as fully on,
-    /// so a keyboard drives the same code path a trigger does.
-    pub fn amount(&self, control: Control) -> f32 {
-        self.routed_amount(control).max(self.touch_amount(control))
-    }
-
-    fn touch_amount(&self, control: Control) -> f32 {
+    /// Native P1 signal supplied by the touch overlay, independent of bindings.
+    fn touch_amount(&self, control: Signal) -> f32 {
         self.touch
             .iter()
             .find(|(c, _)| *c == control)
@@ -632,12 +592,6 @@ impl InputState {
         } else {
             hardware
         }
-    }
-
-    /// The signed travel of a pair of opposed controls, -1..1. Keys give the
-    /// extremes; a stick gives everything in between.
-    pub fn axis(&self, negative: Control, positive: Control) -> f32 {
-        self.amount(positive) - self.amount(negative)
     }
 
     fn source_amount(&self, source: Source) -> f32 {
@@ -709,8 +663,16 @@ impl InputState {
     /// Samples every device and publishes the result the way the I/O board sees
     /// it. Call once per emulated frame, before the board's input command runs.
     pub fn poll(&mut self, out: &mut Inputs) {
-        self.poll_cabinet(out);
-        self.route_ports(out);
+        match self.scheme {
+            ControlScheme::Racing | ControlScheme::Bike => self.poll_native_racing(out),
+            ControlScheme::Joystick => self.poll_native_joystick(out),
+            ControlScheme::Flight => self.poll_native_flight(out),
+            ControlScheme::Gun => self.poll_native_gun(out),
+            ControlScheme::Jetski
+            | ControlScheme::Skate
+            | ControlScheme::Ski
+            | ControlScheme::Sled => self.poll_native_body(out),
+        }
     }
 
     /// Sample devices before advancing the machine, even while paused.
@@ -735,506 +697,6 @@ impl InputState {
         let pressed = active && !self.return_to_menu_held;
         self.return_to_menu_held = active;
         pressed
-    }
-
-    fn poll_cabinet(&mut self, out: &mut Inputs) {
-        match self.scheme {
-            ControlScheme::Joystick => {
-                self.poll_joystick(out);
-                return;
-            }
-            ControlScheme::Flight => {
-                self.poll_swa(out);
-                return;
-            }
-            ControlScheme::Gun => {
-                self.poll_gun(out);
-                return;
-            }
-            ControlScheme::Jetski => {
-                self.poll_waverunr(out);
-                return;
-            }
-            // Ski, skateboard and sled cabinets share one shape: a couple of
-            // buttons plus one or two body-lean axes driven from the stick.
-            ControlScheme::Skate | ControlScheme::Ski | ControlScheme::Sled => {
-                self.poll_body(out);
-                return;
-            }
-            // A bike's levers and lean map onto the same wheel/pedal inputs;
-            // only the channel wiring differs, and that comes from the database.
-            ControlScheme::Racing | ControlScheme::Bike => {}
-        }
-
-        let mut in0: u8 = 0xff;
-        let mut in1: u8 = !0x70;
-
-        // --- gamepad ---------------------------------------------------------
-        let mut pad_steer: Option<f32> = None;
-        let (mut pad_accel, mut pad_brake) = (0.0f32, 0.0f32);
-        let (mut want_up, mut want_down) = (false, false);
-
-        if self.has_analog() {
-            // The wheel takes the signed travel of the two steer controls,
-            // rescaled past the deadzone so it starts moving from rest rather
-            // than jumping. The pedals are one-sided, so their travel is the
-            // amount alone -- a trigger gives the middle of the range, a key
-            // gives the end of it.
-            let x = self.axis(Control::SteerLeft, Control::SteerRight);
-            pad_steer = Some(if x.abs() > STICK_DEADZONE {
-                x.signum() * (x.abs() - STICK_DEADZONE) / (1.0 - STICK_DEADZONE)
-            } else {
-                0.0
-            });
-            pad_accel = self.amount(Control::Throttle);
-            pad_brake = self.amount(Control::Brake);
-
-            want_up = self.on(Control::GearUp);
-            want_down = self.on(Control::GearDown);
-        }
-
-        // --- keyboard --------------------------------------------------------
-        let k_left = self.on(Control::Left);
-        let k_right = self.on(Control::Right);
-        let k_accel = self.on(Control::Up);
-        let k_brake = self.on(Control::Down);
-
-        if self.on(Control::ViewRed) {
-            in0 &= !IN0_VR1_RED;
-        }
-        if self.on(Control::ViewBlue) {
-            in0 &= !IN0_VR2_BLUE;
-        }
-        if self.on(Control::ViewYellow) {
-            in0 &= !IN0_VR3_YELLOW;
-        }
-        if self.on(Control::ViewGreen) {
-            in1 &= !IN1_VR4_GREEN;
-        }
-        if self.on(Control::Start1) {
-            in0 &= !IN0_START1;
-        }
-        if self.on(Control::Coin1) {
-            in0 &= !IN0_COIN1;
-        }
-        if self.on(Control::Coin2) {
-            in0 &= !IN0_COIN2;
-        }
-        if self.on(Control::Test) {
-            in0 &= !IN0_TEST;
-        }
-        if self.on(Control::Service) {
-            in0 &= !IN0_SERVICE;
-        }
-
-        want_up |= self.on(Control::GearUp);
-        want_down |= self.on(Control::GearDown);
-
-        // --- sequential shifter ---------------------------------------------
-        // Edge-triggered: holding the button must not run through every gear.
-        if want_up && !self.shift_up_held {
-            self.shift(true);
-        }
-        if want_down && !self.shift_down_held {
-            self.shift(false);
-        }
-        self.shift_up_held = want_up;
-        self.shift_down_held = want_down;
-
-        self.apply_direct_gear();
-
-        // --- analog ----------------------------------------------------------
-        let half = (ANALOG_MAX - STEER_CENTRE) as f32;
-        match pad_steer {
-            // A stick has a position of its own, so it drives the wheel
-            // directly; only fall back to key travel when it is centred.
-            Some(s) if s.abs() > 0.0 => {
-                self.steer = (STEER_CENTRE as f32 + s * half).round() as i32;
-            }
-            _ => {
-                let target = if k_left {
-                    ANALOG_MIN
-                } else if k_right {
-                    ANALOG_MAX
-                } else {
-                    STEER_CENTRE
-                };
-                self.steer = Self::approach(self.steer, target, STEER_KEYDELTA);
-            }
-        }
-
-        let pedal = |cur: i32, pad: f32, key: bool| -> i32 {
-            if pad > TRIGGER_DEADZONE {
-                (ANALOG_MIN as f32 + pad * (ANALOG_MAX - ANALOG_MIN) as f32).round() as i32
-            } else {
-                let target = if key { ANALOG_MAX } else { ANALOG_MIN };
-                Self::approach(cur, target, PEDAL_KEYDELTA)
-            }
-        };
-        self.accel = pedal(self.accel, pad_accel, k_accel);
-        self.brake = pedal(self.brake, pad_brake, k_brake);
-
-        self.steer = self.steer.clamp(ANALOG_MIN, ANALOG_MAX);
-        self.accel = self.accel.clamp(ANALOG_MIN, ANALOG_MAX);
-        self.brake = self.brake.clamp(ANALOG_MIN, ANALOG_MAX);
-
-        out.in0 = in0;
-        out.in1 = in1;
-        let axes = Axes {
-            steer: self.steer as u8,
-            accel: self.accel as u8,
-            brake: self.brake as u8,
-            // A bike's throttle grip is the same pedal input on another channel.
-            throttle: self.accel as u8,
-            ..Default::default()
-        };
-        self.scatter(&axes, out);
-        out.set_gear(self.gear);
-    }
-
-    /// Joystick mapping (Virtua Fighter, Virtua Striker): IN.0 keeps
-    /// coin/start/test/service; IN.1 carries
-    /// player 1's three attack buttons and 8-way joystick (all active-low).
-    /// steer/accel/brake stay neutral -- vf ignores the analog channels.
-    fn poll_joystick(&mut self, out: &mut Inputs) {
-        let mut in0: u8 = 0xff;
-        let mut in1: u8 = 0xff;
-        let (mut up, mut down, mut left, mut right) = (false, false, false, false);
-
-        // Guard, punch and kick, on whatever the player bound them to.
-        if self.on(Control::Button1) {
-            in1 &= !IN1_JOY_BTN1;
-        }
-        if self.on(Control::Button2) {
-            in1 &= !IN1_JOY_BTN2;
-        }
-        if self.on(Control::Button3) {
-            in1 &= !IN1_JOY_BTN3;
-        }
-        left |= self.on(Control::Left);
-        right |= self.on(Control::Right);
-        up |= self.on(Control::Up);
-        down |= self.on(Control::Down);
-        if self.on(Control::Start1) {
-            in0 &= !IN0_START1;
-        }
-        if self.on(Control::Coin1) {
-            in0 &= !IN0_COIN1;
-        }
-        if self.on(Control::Coin2) {
-            in0 &= !IN0_COIN2;
-        }
-        if self.on(Control::Test) {
-            in0 &= !IN0_TEST;
-        }
-        if self.on(Control::Service) {
-            in0 &= !IN0_SERVICE;
-        }
-
-        if left {
-            in1 &= !IN1_JOY_LEFT;
-        }
-        if right {
-            in1 &= !IN1_JOY_RIGHT;
-        }
-        if up {
-            in1 &= !IN1_JOY_UP;
-        }
-        if down {
-            in1 &= !IN1_JOY_DOWN;
-        }
-
-        out.in0 = in0;
-        out.in1 = in1;
-        out.in2 = 0xff;
-        self.scatter(&Axes::default(), out);
-    }
-
-    /// Star Wars Arcade: a two-axis flight stick (aim), a throttle, and three
-    /// fire buttons. IN.1 layout from the reference; the
-    /// stick and throttle ride the same ADC channels 0/1/2 the racers use, so
-    /// they go out through `steer`/`accel`/`brake`.
-    fn poll_swa(&mut self, out: &mut Inputs) {
-        let mut in0: u8 = 0xff;
-        let mut in1: u8 = 0xff;
-
-        let aim_x = self.axis(Control::Left, Control::Right);
-        let aim_y = self.axis(Control::Down, Control::Up);
-        let throttle = self.amount(Control::Throttle) - self.amount(Control::Brake);
-        let fire1 = self.on(Control::Button1);
-        let fire2 = self.on(Control::Button2);
-        let fire3 = self.on(Control::Button3);
-
-        if self.on(Control::Start1) {
-            in0 &= !IN0_START1;
-        }
-        if self.on(Control::Coin1) {
-            in0 &= !IN0_COIN1;
-        }
-        if self.on(Control::Coin2) {
-            in0 &= !IN0_COIN2;
-        }
-        if self.on(Control::Test) {
-            in0 &= !IN0_TEST;
-        }
-        if self.on(Control::Service) {
-            in0 &= !IN0_SERVICE;
-        }
-
-        if fire1 {
-            in1 &= !IN1_SWA_BTN1;
-        }
-        if fire2 {
-            in1 &= !IN1_SWA_BTN2;
-        }
-        if fire3 {
-            in1 &= !IN1_SWA_BTN3;
-        }
-
-        // Map a [-1, 1] fraction to the ADC's 0x7f-centred range.
-        let axis =
-            |frac: f32| (SWA_CENTRE + (frac * SWA_STICK_RANGE as f32) as i32).clamp(0, 0xff) as u8;
-        out.in0 = in0;
-        out.in1 = in1;
-        out.in2 = 0xff;
-        // The stick's X axis and the throttle are reversed: a rightward or
-        // forward push lowers the ADC value. The Y axis is direct.
-        let axes = Axes {
-            stickx: axis(-aim_x),
-            sticky: axis(aim_y),
-            throttle: axis(-throttle),
-            stick2x: axis(-aim_x),
-            stick2y: axis(aim_y),
-            steer: axis(-aim_x),
-            accel: axis(aim_y),
-            brake: axis(-throttle),
-            ..Default::default()
-        };
-        self.scatter(&axes, out);
-    }
-
-    /// Wave Runner: a jet-ski cabinet. The handle bar and the throttle lever
-    /// are the two controls a player actually holds; roll and pitch come from
-    /// the seat's tilt sensors, which we drive from the same stick so the ski
-    /// leans into a turn. IN.0 puts START1 on bit 6 rather than the usual bit
-    /// 4, and IN.1 carries a single View button (the reference
-    /// `INPUT_PORTS_START( waverunr )`).
-    fn poll_waverunr(&mut self, out: &mut Inputs) {
-        const IN0_WR_START1: u8 = 0x40;
-        const IN1_WR_VIEW: u8 = 0x01;
-
-        let mut in0: u8 = 0xff;
-        let mut in1: u8 = 0xff;
-
-        let handle = self.axis(Control::LeanLeft, Control::LeanRight);
-        let throttle = self.amount(Control::Throttle);
-        if self.on(Control::ViewChange) {
-            in1 &= !IN1_WR_VIEW;
-        }
-        if self.on(Control::Start1) {
-            in0 &= !IN0_WR_START1;
-        }
-        if self.on(Control::Coin1) {
-            in0 &= !IN0_COIN1;
-        }
-        if self.on(Control::Coin2) {
-            in0 &= !IN0_COIN2;
-        }
-        if self.on(Control::Test) {
-            in0 &= !IN0_TEST;
-        }
-        if self.on(Control::Service) {
-            in0 &= !IN0_SERVICE;
-        }
-
-        // Match the tested SM2 channel interpretation: centred handle bar,
-        // reversed throttle lever, with its positive half used by the trigger.
-        let axis = |frac: f32| (0x80 + (frac * 0x7f as f32) as i32).clamp(0, 0xff) as u8;
-        out.in0 = in0;
-        out.in1 = in1;
-        // Bit 3 is the safety sensor, which reads low until the seat reports
-        // a rider; the reference leaves it that way and the game still runs.
-        out.in2 = 0xf7;
-        let axes = Axes {
-            steer: axis(handle),
-            // Roll and pitch are the seat's tilt sensors. A desk player has
-            // nothing to lean, so both sit at their neutral reading.
-            roll: 0x80,
-            pitch: 0x80,
-            // SM2's tested profile drives the reversed positive half of this
-            // centred channel: 80 at rest, 00 at full throttle.
-            throttle: (128.0 * (1.0 - throttle.clamp(0.0, 1.0))).round() as u8,
-            ..Default::default()
-        };
-        self.scatter(&axes, out);
-    }
-
-    /// Virtua Cop: the mouse is the lightgun. Its position maps across the ADC
-    /// range; the left button fires (IN.1 bit 0), the right reloads by pointing
-    /// off-screen. Bound gun axes aim for players without a mouse.
-    fn poll_gun(&mut self, out: &mut Inputs) {
-        let mut in0: u8 = 0xff;
-        let mut in1: u8 = 0xff;
-
-        let mut fire = self.mouse_fire;
-        let mut reload = self.mouse_reload;
-
-        // SM2's Analog Stick gun mode moves a persistent cursor. Releasing
-        // the stick must not jump back to the last mouse position/centre.
-        let step = |value: f32| {
-            const DEADZONE: f32 = 6000.0 / 32767.0;
-            if value.abs() <= DEADZONE {
-                return 0.0;
-            }
-            value.signum() * (1.0 + ((value.abs() - DEADZONE) / (1.0 - DEADZONE) * 11.0).round())
-        };
-        self.cursor.0 = (self.cursor.0 + step(self.signal(Signal::GunYaw)) / 495.0).clamp(0.0, 1.0);
-        self.cursor.1 =
-            (self.cursor.1 - step(self.signal(Signal::GunPitch)) / 383.0).clamp(0.0, 1.0);
-        self.cursor_p2_active |= step(self.signal_p2(Signal::GunYaw)) != 0.0
-            || step(self.signal_p2(Signal::GunPitch)) != 0.0
-            || self.signal_p2(Signal::Action1) > 0.5
-            || self.signal_p2(Signal::Action2) > 0.5;
-        self.cursor_p2.0 =
-            (self.cursor_p2.0 + step(self.signal_p2(Signal::GunYaw)) / 495.0).clamp(0.0, 1.0);
-        self.cursor_p2.1 =
-            (self.cursor_p2.1 - step(self.signal_p2(Signal::GunPitch)) / 383.0).clamp(0.0, 1.0);
-        let (mut nx, mut ny) = self.cursor;
-
-        fire |= self.on(Control::Fire);
-        reload |= self.on(Control::Reload);
-        if self.on(Control::Start1) {
-            in0 &= !IN0_START1;
-        }
-        if self.on(Control::Coin1) {
-            in0 &= !IN0_COIN1;
-        }
-        if self.on(Control::Coin2) {
-            in0 &= !IN0_COIN2;
-        }
-        if self.on(Control::Test) {
-            in0 &= !IN0_TEST;
-        }
-        if self.on(Control::Service) {
-            in0 &= !IN0_SERVICE;
-        }
-
-        // Reloading is done by shooting off-screen: report the gun off-screen
-        // and pull the trigger, which is exactly what the cabinet's gun does.
-        reload &= self.serial_gun();
-        if reload {
-            fire = true;
-            nx = 0.0;
-            ny = 0.0;
-        }
-        if fire {
-            in1 &= !IN1_VCOP_TRIGGER;
-        }
-
-        let lerp = |t: f32, lo: i32, hi: i32| (lo as f32 + t * (hi - lo) as f32).round() as u16;
-        out.in0 = in0;
-        out.in1 = in1;
-        out.in2 = 0xff;
-        let (xmin, xmax, ymin, ymax) = if self.game.starts_with("hotd") {
-            (173, 596, 87, 380)
-        } else if self.game == "vcop2" {
-            (137, 630, 36, 425)
-        } else {
-            (GUN_X_MIN, GUN_X_MAX, GUN_Y_MIN, GUN_Y_MAX)
-        };
-        out.gun_x = lerp(nx, xmin, xmax);
-        out.gun_y = lerp(ny, ymin, ymax);
-        out.gun_offscreen = reload;
-        let reload2 = self.serial_gun() && self.signal_p2(Signal::Action2) > 0.5;
-        let fire2 = reload2 || self.signal_p2(Signal::Action1) > 0.5;
-        let (nx2, ny2) = if reload2 { (0.0, 0.0) } else { self.cursor_p2 };
-        // SM2 games.xml: hotd uses IN2:01. hotdo/hotdp explicitly declare
-        // their own lightgun spec (no trigger override), hence use IN1:02.
-        if fire2 {
-            if self.game == "hotd" {
-                out.in2 &= !1;
-            } else {
-                out.in1 &= !2;
-            }
-        }
-        let (xmin2, xmax2, ymin2, ymax2) = if self.game.starts_with("hotd") {
-            (0x0a3, 0x254, 0x057, 0x17c)
-        } else if self.game == "vcop2" {
-            (0x086, 0x273, 0x024, 0x1a9)
-        } else {
-            (0x080, 0x273, 0x027, 0x1a9)
-        };
-        out.gun2_x = lerp(nx2, xmin2, xmax2);
-        out.gun2_y = lerp(ny2, ymin2, ymax2);
-        out.gun2_offscreen = reload2;
-        // The mounted-gun cabinets (Gunblade, Rail Chase 2, Behind Enemy Lines)
-        // read aim straight off the ADC instead of the gun interface board, so
-        // publish both independent cursors there as 8-bit values.
-        let byte = |t: f32| (t.clamp(0.0, 1.0) * 255.0) as u8;
-        let axes = Axes {
-            gun1x: byte(nx),
-            gun1y: byte(ny),
-            gun2x: byte(nx2),
-            gun2y: byte(ny2),
-            ..Default::default()
-        };
-        self.scatter(&axes, out);
-    }
-
-    /// Ski, skateboard and sled cabinets. All three are a footplate the player
-    /// leans on: one or two lean axes plus a couple of buttons, so they share a
-    /// mapping and the ROM database decides which channels carry which axis.
-    fn poll_body(&mut self, out: &mut Inputs) {
-        let mut in0: u8 = 0xff;
-        let mut in1: u8 = 0xff;
-        let lean_x = self.axis(Control::LeanLeft, Control::LeanRight);
-        let lean_y = self.axis(Control::Down, Control::Up);
-        let right = self.amount(Control::Throttle);
-        let left = self.amount(Control::Brake);
-        if self.on(Control::Button1) {
-            in1 &= !0x01;
-        }
-        if self.on(Control::Button2) {
-            in1 &= !0x02;
-        }
-        if self.on(Control::Button3) {
-            in1 &= !0x04;
-        }
-
-        if self.on(Control::Start1) {
-            in0 &= !IN0_START1;
-        }
-        if self.on(Control::Coin1) {
-            in0 &= !IN0_COIN1;
-        }
-        if self.on(Control::Coin2) {
-            in0 &= !IN0_COIN2;
-        }
-        if self.on(Control::Test) {
-            in0 &= !IN0_TEST;
-        }
-        if self.on(Control::Service) {
-            in0 &= !IN0_SERVICE;
-        }
-
-        let axis = |frac: f32| (0x80 + (frac * 0x7f as f32) as i32).clamp(0, 0xff) as u8;
-        let pedal = |frac: f32| (frac.clamp(0.0, 1.0) * 255.0) as u8;
-        out.in0 = in0;
-        out.in1 = in1;
-        out.in2 = 0xff;
-        let axes = Axes {
-            slide: axis(lean_x),
-            swing: axis(lean_x),
-            curving: axis(lean_x),
-            incline: axis(lean_y),
-            // Power Sled's four foot pedals: the triggers drive one seat's
-            // pair, and the other seat stays at rest.
-            p1r: pedal(right),
-            p1l: pedal(left),
-            steer: axis(lean_x),
-            ..Default::default()
-        };
-        self.scatter(&axes, out);
     }
 }
 
@@ -1267,6 +729,13 @@ fn update_pad_buttons(buttons: &mut HashSet<gilrs::Button>, event: gilrs::EventT
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const IN0_COIN1: u8 = 0x01;
+    const IN0_COIN2: u8 = 0x02;
+    const IN0_TEST: u8 = 0x04;
+    const IN0_SERVICE: u8 = 0x08;
+    const IN0_START1: u8 = 0x10;
+    const IN1_JOY_BTN1: u8 = 0x01;
 
     #[test]
     fn analog_trigger_buttons_supply_missing_z_axes() {
@@ -1331,11 +800,11 @@ mod tests {
 
     /// The cabinet furniture every machine has, and the IN0 bit each pulls low.
     /// Wave Runner puts start on a different bit, which the check allows for.
-    const FURNITURE: [(Control, u8); 4] = [
-        (Control::Coin1, IN0_COIN1),
-        (Control::Coin2, IN0_COIN2),
-        (Control::Test, IN0_TEST),
-        (Control::Service, IN0_SERVICE),
+    const FURNITURE: [(Player, Signal, u8); 4] = [
+        (Player::One, Signal::Coin, IN0_COIN1),
+        (Player::Two, Signal::Coin, IN0_COIN2),
+        (Player::One, Signal::Test, IN0_TEST),
+        (Player::One, Signal::Service, IN0_SERVICE),
     ];
 
     fn state(scheme: ControlScheme) -> InputState {
@@ -1399,26 +868,11 @@ mod tests {
     #[test]
     fn every_scheme_reads_the_binding_not_the_key() {
         for scheme in SCHEMES {
-            for (control, bit) in FURNITURE {
+            for (player, control, bit) in FURNITURE {
                 let mut input = state(scheme);
                 let mut bindings = Bindings::default();
-                let signal = match control {
-                    Control::Coin1 => Signal::Coin,
-                    Control::Coin2 => Signal::Coin,
-                    Control::Test => Signal::Test,
-                    Control::Service => Signal::Service,
-                    _ => unreachable!(),
-                };
                 bindings
-                    .set_player_expression(
-                        if control == Control::Coin2 {
-                            Player::Two
-                        } else {
-                            Player::One
-                        },
-                        signal,
-                        "F12",
-                    )
+                    .set_player_expression(player, control, "F12")
                     .unwrap();
                 input.set_bindings(bindings);
 
@@ -1444,10 +898,13 @@ mod tests {
     #[test]
     fn every_scheme_reads_the_on_screen_controls() {
         for scheme in SCHEMES {
-            for (control, bit) in FURNITURE {
+            for (player, control, bit) in FURNITURE {
                 let mut input = state(scheme);
                 let mut out = Inputs::default();
 
+                if player == Player::Two {
+                    continue;
+                } // touch is P1-only
                 input.set_touch(&[(control, 1.0)]);
                 input.poll(&mut out);
                 assert_eq!(
@@ -1469,7 +926,7 @@ mod tests {
     fn a_partly_turned_wheel_lands_between_the_stops() {
         let mut input = state(ControlScheme::Racing);
         let mut out = Inputs::default();
-        input.set_touch(&[(Control::SteerRight, 0.5)]);
+        input.set_touch(&[(Signal::Steering, 0.5)]);
         input.poll(&mut out);
         assert!(
             out.steer > STEER_CENTRE as u8 && out.steer < ANALOG_MAX as u8,
@@ -1639,9 +1096,9 @@ mod tests {
             input.set_game(game);
             let mut out = Inputs::default();
             for (button, expected) in [
-                (B::East, 0xef),
+                (B::East, 0xff),
                 (B::RightTrigger, 0xef),
-                (B::South, 0xdf),
+                (B::South, 0xff),
                 (B::LeftTrigger, 0xdf),
             ] {
                 input.set_pad_button(button, true);
@@ -1667,10 +1124,10 @@ mod tests {
             let mut out = Inputs::default();
             input.poll(&mut out);
             assert_eq!((out.in0, out.in1), (0xff, 0xff), "{game}: idle");
-            input.set_pad_button(B::RightThumb, true);
+            input.set_pad_button(B::LeftThumb, true);
             input.poll(&mut out);
             assert_eq!((out.in0, out.in1), (0xf7, 0xff), "{game}: service");
-            input.set_pad_button(B::RightThumb, false);
+            input.set_pad_button(B::LeftThumb, false);
             input.set_pad_button(B::RightTrigger, true);
             input.poll(&mut out);
             assert_eq!(out.in1, 0xdf, "{game}: shift up");
@@ -1717,10 +1174,10 @@ mod tests {
         input.set_pad_button(gilrs::Button::South, true);
         let mut out = Inputs::default();
         input.poll(&mut out);
-        assert_eq!(out.in1 & 7, 5); // Model 1 Punch is bit 2.
+        assert_eq!(out.in1 & 7, 5); // VF: South is Kick, mask 0x02.
         input.set_game("vf2");
         input.poll(&mut out);
-        assert_eq!(out.in1 & 7, 6); // Model 2 Punch is bit 1.
+        assert_eq!(out.in1 & 7, 5); // VF2: same requested SM2 convention.
         input.set_scheme(ControlScheme::Ski);
         input.set_game("segawski");
         input.set_pad_button(gilrs::Button::Start, true);

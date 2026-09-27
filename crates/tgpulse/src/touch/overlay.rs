@@ -5,13 +5,13 @@
 //! same place on a phone and on a tablet, and everything is sized from the
 //! short edge so a control stays the size of a thumb whatever the aspect.
 //!
-//! Nothing here knows about the I/O board. A touch resolves to `Control`
+//! Nothing here knows about the I/O board. A touch resolves to `Signal`
 //! amounts -- the same abstract controls a pad or a keyboard drives -- so
 //! every control scheme works through the screen without knowing that touch
 //! exists.
 
 use super::{centred_text, draw_disc, Disc, Held, TEXT_DIM};
-use crate::bindings::Control;
+use crate::input::signals::Signal;
 use crate::input::ControlScheme;
 
 /// An overlay button that drives the emulator rather than the machine.
@@ -24,14 +24,14 @@ pub enum Press {
 }
 
 enum Kind {
-    Button(Control),
+    Button(Signal),
     /// A thumbstick. It recentres wherever the thumb lands, which is what
     /// makes a stick with no rim to feel for usable at all; `vertical` is
     /// absent on a wheel, which only turns.
     Stick {
-        left: Control,
-        right: Control,
-        vertical: Option<(Control, Control)>,
+        left: (Signal, f32),
+        right: (Signal, f32),
+        vertical: Option<((Signal, f32), (Signal, f32))>,
     },
     Emulator(Press),
 }
@@ -46,6 +46,7 @@ struct Widget {
 }
 
 pub struct Overlay {
+    pub game: String,
     scheme: Option<ControlScheme>,
     collapsed: bool,
     widgets: Vec<Widget>,
@@ -53,8 +54,17 @@ pub struct Overlay {
 }
 
 impl Overlay {
+    fn lean_signal(&self) -> Signal {
+        match self.scheme {
+            Some(ControlScheme::Skate) => Signal::Curving,
+            Some(ControlScheme::Ski) if self.game == "skisuprg" => Signal::Swing,
+            Some(ControlScheme::Ski) => Signal::WaterSlide,
+            _ => Signal::Steering,
+        }
+    }
     pub fn new() -> Self {
         Self {
+            game: String::new(),
             scheme: None,
             collapsed: false,
             widgets: Vec::new(),
@@ -112,7 +122,7 @@ impl Overlay {
         index: usize,
         start: (f32, f32),
         pos: (f32, f32),
-        push: &mut dyn FnMut(Control, f32),
+        push: &mut dyn FnMut(Signal, f32),
     ) {
         let Some(widget) = self.widgets.get(index) else {
             return;
@@ -137,9 +147,9 @@ impl Overlay {
                             dy /= length;
                         }
                         if dy < 0.0 {
-                            push(*up, -dy);
+                            push(up.0, -dy * up.1);
                         } else {
-                            push(*down, dy);
+                            push(down.0, dy * down.1);
                         }
                     }
                     // A wheel ignores how far up or down the thumb has drifted;
@@ -147,9 +157,9 @@ impl Overlay {
                     None => dx = dx.clamp(-1.0, 1.0),
                 }
                 if dx < 0.0 {
-                    push(*left, -dx);
+                    push(left.0, -dx * left.1);
                 } else {
-                    push(*right, dx);
+                    push(right.0, dx * right.1);
                 }
             }
             Kind::Emulator(_) => {}
@@ -158,12 +168,7 @@ impl Overlay {
 
     /// `held` is every finger currently on a control, with where it landed and
     /// where it has been dragged to.
-    pub fn render(
-        &self,
-        ui: &imgui::Ui,
-        dl: &imgui::DrawListMut<'_>,
-        held: &[Held],
-    ) {
+    pub fn render(&self, ui: &imgui::Ui, dl: &imgui::DrawListMut<'_>, held: &[Held]) {
         for (index, widget) in self.widgets.iter().enumerate() {
             let finger = held.iter().find(|(i, _, _)| *i == index);
             let down = finger.is_some();
@@ -171,7 +176,8 @@ impl Overlay {
                 Kind::Stick { .. } => {
                     // While held the base follows the thumb, so the player can
                     // see where the stick has been recentred to.
-                    let base = finger.map_or((widget.disc.x, widget.disc.y), |(_, start, _)| *start);
+                    let base =
+                        finger.map_or((widget.disc.x, widget.disc.y), |(_, start, _)| *start);
                     draw_disc(
                         ui,
                         dl,
@@ -271,7 +277,7 @@ impl Overlay {
             w - margin - small,
             margin + small,
             small,
-            Kind::Button(Control::Start1),
+            Kind::Button(Signal::Start),
             "START",
             0.0,
         );
@@ -279,7 +285,7 @@ impl Overlay {
             w - margin - small * 3.4,
             margin + small,
             small,
-            Kind::Button(Control::Coin1),
+            Kind::Button(Signal::Coin),
             "COIN",
             0.0,
         );
@@ -287,11 +293,8 @@ impl Overlay {
         // The action buttons sit in a diamond, in the order the I/O board
         // reports them and in the same places the pad bindings use.
         let offset = button * 1.7;
-        let (cx, cy) = (
-            w - margin - button - offset,
-            h - margin - button - offset,
-        );
-        let diamond = |this: &mut Self, controls: &[(Control, &'static str)]| {
+        let (cx, cy) = (w - margin - button - offset, h - margin - button - offset);
+        let diamond = |this: &mut Self, controls: &[(Signal, &'static str)]| {
             const PLACES: [(f32, f32); 4] = [(-1.0, 0.0), (0.0, 1.0), (1.0, 0.0), (0.0, -1.0)];
             for ((control, label), (px, py)) in controls.iter().zip(PLACES) {
                 this.widgets.push(Widget {
@@ -314,8 +317,8 @@ impl Overlay {
             ControlScheme::Racing | ControlScheme::Bike => {
                 self.widgets.push(Widget {
                     kind: Kind::Stick {
-                        left: Control::SteerLeft,
-                        right: Control::SteerRight,
+                        left: (Signal::Steering, -1.0),
+                        right: (Signal::Steering, 1.0),
                         vertical: None,
                     },
                     label: "STEER",
@@ -338,49 +341,83 @@ impl Overlay {
                     w - margin - button * 1.2,
                     h - margin - button * 1.2,
                     button * 1.2,
-                    Kind::Button(Control::Throttle),
+                    Kind::Button(Signal::Accelerator),
                     "GAS",
                 );
                 disc(
                     w - margin - button * 3.7,
                     h - margin - button * 1.0,
                     button,
-                    Kind::Button(Control::Brake),
+                    Kind::Button(Signal::Brake),
                     "BRAKE",
                 );
                 disc(
                     w - margin - button * 1.2,
                     h - margin - button * 3.8,
                     button * 0.72,
-                    Kind::Button(Control::GearUp),
+                    Kind::Button(if self.game == "desert" {
+                        Signal::DesertCannon
+                    } else if self.game.starts_with("motoraid") {
+                        Signal::Action2
+                    } else {
+                        Signal::GearUp
+                    }),
                     "G+",
                 );
                 disc(
                     w - margin - button * 3.4,
                     h - margin - button * 3.4,
                     button * 0.72,
-                    Kind::Button(Control::GearDown),
+                    Kind::Button(if self.game == "desert" {
+                        Signal::DesertGun
+                    } else if self.game.starts_with("motoraid") {
+                        Signal::Action1
+                    } else {
+                        Signal::GearDown
+                    }),
                     "G-",
                 );
                 disc(
                     w - margin - small,
                     margin + small * 3.4,
                     small,
-                    Kind::Button(Control::ViewRed),
+                    Kind::Button(Signal::View1),
                     "VIEW",
                 );
             }
             // An 8-way stick and the attack buttons.
             ControlScheme::Joystick => {
-                self.push_stick(stick_at, stick, Control::Left, Control::Right, true, "");
+                self.push_stick(
+                    stick_at,
+                    stick,
+                    (Signal::Left, 1.0),
+                    (Signal::Right, 1.0),
+                    true,
+                    "",
+                );
                 diamond(
                     self,
-                    &[
-                        (Control::Button1, "1"),
-                        (Control::Button2, "2"),
-                        (Control::Button3, "3"),
-                        (Control::Button4, "4"),
-                    ],
+                    if self.game.starts_with("von") {
+                        &[
+                            (Signal::TwinLeftShot, "L SHOT"),
+                            (Signal::TwinRightShot, "R SHOT"),
+                            (Signal::TwinLeftDash, "L DASH"),
+                            (Signal::TwinRightDash, "R DASH"),
+                        ]
+                    } else if self.game.starts_with("vstriker") {
+                        &[
+                            (Signal::StrikerShortPass, "SHORT"),
+                            (Signal::StrikerLongPass, "LONG"),
+                            (Signal::StrikerShoot, "SHOOT"),
+                        ]
+                    } else {
+                        &[
+                            (Signal::Action1, "1"),
+                            (Signal::Action2, "2"),
+                            (Signal::Action3, "3"),
+                            (Signal::Action4, "4"),
+                        ]
+                    },
                 );
             }
             // The screen is the gun: no stick, and the trigger doubles as a
@@ -398,28 +435,54 @@ impl Overlay {
                     w - margin - button * 1.3,
                     h - margin - button * 1.3,
                     button * 1.3,
-                    Kind::Button(Control::Fire),
+                    Kind::Button(Signal::PrimaryFire),
                     "FIRE",
                 );
                 disc(
                     w - margin - button * 3.9,
                     h - margin - button * 1.1,
                     button * 1.1,
-                    Kind::Button(Control::Reload),
-                    "RELOAD",
+                    Kind::Button(Signal::SecondaryFire),
+                    if self.game == "bel" {
+                        "MISSILE"
+                    } else {
+                        "RELOAD"
+                    },
                 );
             }
             // A flight stick, three fire buttons, and a throttle that runs
             // both ways.
             ControlScheme::Flight => {
-                self.push_stick(stick_at, stick, Control::Left, Control::Right, true, "");
+                self.push_stick(
+                    stick_at,
+                    stick,
+                    (Signal::SkyX, -1.0),
+                    (Signal::SkyX, 1.0),
+                    true,
+                    "",
+                );
+                let actions = if self.game.starts_with("wingwar") {
+                    [
+                        Signal::WingMachineGun,
+                        Signal::WingMissile,
+                        Signal::WingSmoke,
+                    ]
+                } else if self.game.starts_with("swa") {
+                    [Signal::SwaLaser, Signal::SwaTorpedo, Signal::View1]
+                } else if self.game == "netmerc" {
+                    [
+                        Signal::NetmercButton1,
+                        Signal::NetmercButton2,
+                        Signal::NetmercMvdHolder,
+                    ]
+                } else if self.game == "skytargt" {
+                    [Signal::SkyMachineGun, Signal::SkyMissile, Signal::View4]
+                } else {
+                    [Signal::Action1, Signal::Action2, Signal::Action3]
+                };
                 diamond(
                     self,
-                    &[
-                        (Control::Button1, "1"),
-                        (Control::Button2, "2"),
-                        (Control::Button3, "3"),
-                    ],
+                    &[(actions[0], "1"), (actions[1], "2"), (actions[2], "3")],
                 );
                 let mut disc = |x, y, r, kind, label| {
                     self.widgets.push(Widget {
@@ -433,14 +496,14 @@ impl Overlay {
                     margin + stick * 0.55,
                     h - margin - stick * 2.0 - button * 1.1,
                     button * 0.75,
-                    Kind::Button(Control::Throttle),
+                    Kind::Button(Signal::ThrottleUp),
                     "THR+",
                 );
                 disc(
                     margin + stick * 1.75,
                     h - margin - stick * 2.0 - button * 1.1,
                     button * 0.75,
-                    Kind::Button(Control::Brake),
+                    Kind::Button(Signal::ThrottleDown),
                     "THR-",
                 );
             }
@@ -449,8 +512,8 @@ impl Overlay {
                 self.push_stick(
                     stick_at,
                     stick,
-                    Control::LeanLeft,
-                    Control::LeanRight,
+                    (Signal::Handle, -1.0),
+                    (Signal::Handle, 1.0),
                     false,
                     "LEAN",
                 );
@@ -466,14 +529,14 @@ impl Overlay {
                     w - margin - button * 1.2,
                     h - margin - button * 1.2,
                     button * 1.2,
-                    Kind::Button(Control::Throttle),
+                    Kind::Button(Signal::Accelerator),
                     "GAS",
                 );
                 disc(
                     w - margin - small,
                     margin + small * 3.4,
                     small,
-                    Kind::Button(Control::ViewChange),
+                    Kind::Button(Signal::View4),
                     "VIEW",
                 );
             }
@@ -483,18 +546,39 @@ impl Overlay {
                 self.push_stick(
                     stick_at,
                     stick,
-                    Control::LeanLeft,
-                    Control::LeanRight,
+                    (self.lean_signal(), -1.0),
+                    (self.lean_signal(), 1.0),
                     true,
                     "LEAN",
                 );
                 diamond(
                     self,
-                    &[
-                        (Control::Button1, "1"),
-                        (Control::Button2, "2"),
-                        (Control::Button3, "3"),
-                    ],
+                    if self.game == "segawski" {
+                        &[
+                            (Signal::WaterSet, "SET"),
+                            (Signal::WaterPitchRight, "RIGHT"),
+                            (Signal::WaterPitchLeft, "LEFT"),
+                        ]
+                    } else if self.game == "skisuprg" {
+                        &[
+                            (Signal::SkiSelect2, "2"),
+                            (Signal::SkiSelect3, "3"),
+                            (Signal::SkiSelect1, "1"),
+                        ]
+                    } else if self.game.starts_with("topskatr") {
+                        &[
+                            (Signal::SkaterJumpTail, "TAIL"),
+                            (Signal::SkaterJumpFront, "FRONT"),
+                        ]
+                    } else if self.game.starts_with("powsled") {
+                        &[(Signal::SledEntry, "ENTRY"), (Signal::SledCall, "CALL")]
+                    } else {
+                        &[
+                            (Signal::Action1, "1"),
+                            (Signal::Action2, "2"),
+                            (Signal::Action3, "3"),
+                        ]
+                    },
                 );
                 let mut disc = |x, y, r, kind, label| {
                     self.widgets.push(Widget {
@@ -508,14 +592,22 @@ impl Overlay {
                     w - margin - small,
                     margin + small * 3.4,
                     small,
-                    Kind::Button(Control::Throttle),
+                    Kind::Button(if self.game == "skisuprg" {
+                        Signal::SkiFootRight
+                    } else {
+                        Signal::Accelerator
+                    }),
                     "R",
                 );
                 disc(
                     w - margin - small * 3.4,
                     margin + small * 3.4,
                     small,
-                    Kind::Button(Control::Brake),
+                    Kind::Button(if self.game == "skisuprg" {
+                        Signal::SkiFootLeft
+                    } else {
+                        Signal::Brake
+                    }),
                     "L",
                 );
             }
@@ -527,8 +619,8 @@ impl Overlay {
         &mut self,
         at: (f32, f32),
         r: f32,
-        left: Control,
-        right: Control,
+        left: (Signal, f32),
+        right: (Signal, f32),
         vertical: bool,
         label: &'static str,
     ) {
@@ -536,7 +628,13 @@ impl Overlay {
             kind: Kind::Stick {
                 left,
                 right,
-                vertical: vertical.then_some((Control::Up, Control::Down)),
+                vertical: vertical.then_some(match self.scheme {
+                    Some(ControlScheme::Flight) => ((Signal::SkyY, 1.0), (Signal::SkyY, -1.0)),
+                    Some(ControlScheme::Ski) if self.game == "skisuprg" => {
+                        ((Signal::Inclining, 1.0), (Signal::Inclining, -1.0))
+                    }
+                    _ => ((Signal::Up, 1.0), (Signal::Down, 1.0)),
+                }),
             },
             label,
             disc: Disc {
@@ -624,13 +722,13 @@ mod tests {
         for scheme in SCHEMES {
             let overlay = laid_out(scheme);
             assert!(
-                overlay.widgets.iter().any(|w| matches!(
-                    w.kind,
-                    Kind::Emulator(Press::Menu)
-                )),
+                overlay
+                    .widgets
+                    .iter()
+                    .any(|w| matches!(w.kind, Kind::Emulator(Press::Menu))),
                 "{scheme:?} has no menu key",
             );
-            for control in [Control::Coin1, Control::Start1] {
+            for control in [Signal::Coin, Signal::Start] {
                 assert!(
                     overlay
                         .widgets
@@ -655,9 +753,16 @@ mod tests {
             .all(|w| matches!(w.kind, Kind::Emulator(_))));
     }
 
-    fn amount_of(overlay: &Overlay, index: usize, from: (f32, f32), to: (f32, f32)) -> Vec<(Control, f32)> {
+    fn amount_of(
+        overlay: &Overlay,
+        index: usize,
+        from: (f32, f32),
+        to: (f32, f32),
+    ) -> Vec<(Signal, f32)> {
         let mut out = Vec::new();
-        overlay.amounts(index, from, to, &mut |control, amount| out.push((control, amount)));
+        overlay.amounts(index, from, to, &mut |control, amount| {
+            out.push((control, amount))
+        });
         out
     }
 
@@ -675,13 +780,27 @@ mod tests {
         let at = (overlay.widgets[index].disc.x, overlay.widgets[index].disc.y);
 
         let half = amount_of(&overlay, index, at, (at.0 + r * 0.5, at.1));
-        let right = half.iter().find(|(c, _)| *c == Control::Right).expect("right");
-        assert!((right.1 - 0.5).abs() < 0.01, "half travel read as {}", right.1);
+        let right = half
+            .iter()
+            .find(|(c, _)| *c == Signal::Right)
+            .expect("right");
+        assert!(
+            (right.1 - 0.5).abs() < 0.01,
+            "half travel read as {}",
+            right.1
+        );
 
         // Dragged past the rim it saturates rather than running away.
         let past = amount_of(&overlay, index, at, (at.0 + r * 4.0, at.1));
-        let right = past.iter().find(|(c, _)| *c == Control::Right).expect("right");
-        assert!((right.1 - 1.0).abs() < 0.01, "over-travel read as {}", right.1);
+        let right = past
+            .iter()
+            .find(|(c, _)| *c == Signal::Right)
+            .expect("right");
+        assert!(
+            (right.1 - 1.0).abs() < 0.01,
+            "over-travel read as {}",
+            right.1
+        );
     }
 
     /// A wheel only turns. A thumb that drifts up the screen while steering
@@ -701,14 +820,66 @@ mod tests {
         let drifted = amount_of(&overlay, index, at, (at.0 + r * 0.5, at.1 - r * 0.9));
         let steer = drifted
             .iter()
-            .find(|(c, _)| *c == Control::SteerRight)
+            .find(|(c, _)| *c == Signal::Steering)
             .expect("steer");
-        assert!((steer.1 - 0.5).abs() < 0.01, "drift changed the lock to {}", steer.1);
+        assert!(
+            (steer.1 - 0.5).abs() < 0.01,
+            "drift changed the lock to {}",
+            steer.1
+        );
         assert!(
             !drifted
                 .iter()
-                .any(|(c, _)| matches!(c, Control::Up | Control::Down)),
+                .any(|(c, _)| matches!(c, Signal::Up | Signal::Down)),
             "a wheel produced a vertical control",
         );
+    }
+
+    #[test]
+    fn signed_sticks_emit_native_axes_in_both_directions() {
+        for (game, scheme, horizontal, vertical) in [
+            ("vr", ControlScheme::Racing, Signal::Steering, None),
+            (
+                "wingwar",
+                ControlScheme::Flight,
+                Signal::SkyX,
+                Some(Signal::SkyY),
+            ),
+            (
+                "swa",
+                ControlScheme::Flight,
+                Signal::SkyX,
+                Some(Signal::SkyY),
+            ),
+            ("waverunr", ControlScheme::Jetski, Signal::Handle, None),
+            ("topskatr", ControlScheme::Skate, Signal::Curving, None),
+            ("segawski", ControlScheme::Ski, Signal::WaterSlide, None),
+            (
+                "skisuprg",
+                ControlScheme::Ski,
+                Signal::Swing,
+                Some(Signal::Inclining),
+            ),
+        ] {
+            let mut overlay = Overlay::new();
+            overlay.game = game.to_owned();
+            overlay.set_scheme(Some(scheme));
+            overlay.layout(SCREEN.0, SCREEN.1);
+            let index = overlay
+                .widgets
+                .iter()
+                .position(|w| matches!(w.kind, Kind::Stick { .. }))
+                .unwrap();
+            let disc = &overlay.widgets[index].disc;
+            let at = (disc.x, disc.y);
+            for sign in [-1.0, 1.0] {
+                let values = amount_of(&overlay, index, at, (at.0 + disc.r * sign, at.1));
+                assert!(values.contains(&(horizontal, sign)), "{game}: {values:?}");
+                if let Some(axis) = vertical {
+                    let values = amount_of(&overlay, index, at, (at.0, at.1 - disc.r * sign));
+                    assert!(values.contains(&(axis, sign)), "{game}: {values:?}");
+                }
+            }
+        }
     }
 }

@@ -71,7 +71,12 @@ struct Session {
 }
 
 impl Session {
-    fn open(path: &Path, config: &Config, network_config: &crate::network::Config, nvram_file: Option<crate::settings::NvramFile>) -> Result<(Self, Config), String> {
+    fn open(
+        path: &Path,
+        config: &Config,
+        network_config: &crate::network::Config,
+        nvram_file: Option<crate::settings::NvramFile>,
+    ) -> Result<(Self, Config), String> {
         let entry = library::describe(path);
         let set = entry.set.clone();
         let title = if entry.is_known() {
@@ -102,7 +107,9 @@ impl Session {
 
         let network = if matches!(&machine, Machine::Model1(s) if s.comm.is_some()) {
             Some(crate::network::Network::open(network_config)?)
-        } else { None };
+        } else {
+            None
+        };
         let mut input = InputState::new();
         input.enable_rumble(config.rumble);
         input.set_scheme(scheme);
@@ -153,7 +160,11 @@ impl Session {
                     Machine::Model1(sys) => sys.set_nvram_blocks(&b, &e),
                     Machine::Model2(sys) => sys.set_nvram_blocks(&b, &e),
                 }
-                let path = self.nvram_file.as_ref().map(|f| f.0.clone()).unwrap_or_else(|| nvram::path_for(&self.set));
+                let path = self
+                    .nvram_file
+                    .as_ref()
+                    .map(|f| f.0.clone())
+                    .unwrap_or_else(|| nvram::path_for(&self.set));
                 log::info!(target: "nvram", "loaded {}", path.display());
             }
             None => log::info!(target: "nvram", "none saved; the game will initialise it"),
@@ -188,7 +199,9 @@ impl Session {
             Machine::Model2(sys) => sys.nvram_blocks(),
         };
         if let Some(file) = &self.nvram_file {
-            if let Err(e) = file.save(&b, &e) { log::error!(target: "nvram", "{e}"); }
+            if let Err(e) = file.save(&b, &e) {
+                log::error!(target: "nvram", "{e}");
+            }
         } else {
             nvram::save(&self.set, &b, &e);
         }
@@ -200,7 +213,9 @@ impl Session {
             Machine::Model1(sys) => {
                 self.input.poll(&mut sys.inputs);
                 if let (Some(net), Some(board)) = (&mut self.network, &mut sys.comm) {
-                    if let Err(e) = net.poll(board) { log::warn!(target: "network", "{e}"); }
+                    if let Err(e) = net.poll(board) {
+                        log::warn!(target: "network", "{e}");
+                    }
                 }
                 sys.run_slice(tgpulse_core::model1::CYCLES_PER_FRAME)
                     .map_err(|e| e.to_string())?;
@@ -208,7 +223,9 @@ impl Session {
                 self.input.set_rumble(sys.drive_cmd);
                 sys.trigger_vblank();
                 if let (Some(net), Some(board)) = (&mut self.network, &mut sys.comm) {
-                    if let Err(e) = net.poll(board) { log::warn!(target: "network", "{e}"); }
+                    if let Err(e) = net.poll(board) {
+                        log::warn!(target: "network", "{e}");
+                    }
                 }
             }
             Machine::Model2(sys) => {
@@ -232,9 +249,16 @@ impl Session {
         // Release the old listener before rebinding the same endpoint.
         self.network = None;
         if let Machine::Model1(sys) = &mut self.machine {
-            if let Some(board) = &mut sys.comm { board.set_connected(false); }
+            if let Some(board) = &mut sys.comm {
+                board.set_connected(false);
+            }
         }
-        match Session::open(Path::new(&config.rom_path), config, network, self.nvram_file.clone()) {
+        match Session::open(
+            Path::new(&config.rom_path),
+            config,
+            network,
+            self.nvram_file.clone(),
+        ) {
             Ok((fresh, _)) => {
                 *self = fresh;
             }
@@ -253,7 +277,12 @@ fn analog_roles(rom_path: &str) -> [AnalogRole; 8] {
         .unwrap_or([AnalogRole::None; 8])
 }
 
-pub fn run(config: Config, rom: Option<PathBuf>, panels: StartupPanels, profile: crate::settings::Profile) -> Result<(), String> {
+pub fn run(
+    config: Config,
+    rom: Option<PathBuf>,
+    panels: StartupPanels,
+    profile: crate::settings::Profile,
+) -> Result<(), String> {
     run_with(
         EventLoop::new().map_err(|e| e.to_string())?,
         config,
@@ -344,13 +373,22 @@ struct App {
 }
 
 impl App {
-    fn new(config: Config, pending_rom: Option<PathBuf>, panels: StartupPanels, profile: crate::settings::Profile) -> Self {
+    fn new(
+        config: Config,
+        pending_rom: Option<PathBuf>,
+        panels: StartupPanels,
+        profile: crate::settings::Profile,
+    ) -> Self {
         let now = Instant::now();
         let bindings = Bindings::load_or_create(&Bindings::path());
         let mut menu_input = InputState::new();
         menu_input.set_bindings(bindings.clone());
         let network_config = profile.settings.network.clone();
-        let nvram_game = profile.settings.nvram.as_ref().and_then(|_| pending_rom.as_ref().map(|p| library::describe(p).set));
+        let nvram_game = profile
+            .settings
+            .nvram
+            .as_ref()
+            .and_then(|_| pending_rom.as_ref().map(|p| library::describe(p).set));
         let mut gui = Gui::new(&config, panels);
         gui.network_draft = network_config.clone();
         Self {
@@ -403,7 +441,11 @@ impl App {
     /// worked; the renderer is the caller's business, because the two boards
     /// need different pipelines and the order matters at startup.
     fn open_session(&mut self, window: &Window, rom: &Path) -> bool {
-        if self.nvram_game.as_ref().is_some_and(|set| *set != library::describe(rom).set) {
+        if self
+            .nvram_game
+            .as_ref()
+            .is_some_and(|set| *set != library::describe(rom).set)
+        {
             self.gui.report_error("This NVRAM profile is reserved for the CLI romset. Restart without this profile to select another game.");
             return false;
         }
@@ -415,7 +457,12 @@ impl App {
         self.session = None;
         self.debugger = None;
 
-        match Session::open(rom, &self.config, &self.network_config, self.profile.nvram_file()) {
+        match Session::open(
+            rom,
+            &self.config,
+            &self.network_config,
+            self.profile.nvram_file(),
+        ) {
             Ok((mut session, config)) => {
                 self.config = config;
                 window.set_title(&format!("TGPulse - {}", session.title));
@@ -748,12 +795,14 @@ impl App {
             Hotkey::NextSlot => {
                 self.gui.state_slot = (self.gui.state_slot + 1) % 10;
                 log::info!(target: "state", "slot {}", self.gui.state_slot);
-                self.gui.report_state(format!("State slot {}", self.gui.state_slot), false);
+                self.gui
+                    .report_state(format!("State slot {}", self.gui.state_slot), false);
             }
             Hotkey::PreviousSlot => {
                 self.gui.state_slot = (self.gui.state_slot + 9) % 10;
                 log::info!(target: "state", "slot {}", self.gui.state_slot);
-                self.gui.report_state(format!("State slot {}", self.gui.state_slot), false);
+                self.gui
+                    .report_state(format!("State slot {}", self.gui.state_slot), false);
             }
             Hotkey::Reset => {
                 let config = self.config.clone();
@@ -771,7 +820,9 @@ impl App {
     }
 
     fn save_state(&mut self, slot: u32) {
-        let Some(session) = self.session.as_ref() else { return; };
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
         match session.machine.save_slot(&session.set, slot) {
             Ok(p) => {
                 log::info!(target: "state", "saved slot {slot} -> {}", p.display());
@@ -785,7 +836,9 @@ impl App {
     }
 
     fn load_state(&mut self, slot: u32) {
-        let Some(session) = self.session.as_mut() else { return; };
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
         match session.load_slot(slot) {
             Ok(p) => {
                 log::info!(target: "state", "loaded slot {slot} <- {}", p.display());
@@ -890,10 +943,19 @@ impl App {
             |session| match &session.machine {
                 Machine::Model1(sys) if sys.comm.is_some() => session.network.as_ref().map_or_else(
                     || "TCP disabled for this session".into(),
-                    |net| format!("{}; COMM status {:02X}, ID {}, count {}", net.description(),
-                        sys.comm.as_ref().unwrap().shared_read(0), sys.comm.as_ref().unwrap().shared_read(2), sys.comm.as_ref().unwrap().shared_read(3))),
+                    |net| {
+                        format!(
+                            "{}; COMM status {:02X}, ID {}, count {}",
+                            net.description(),
+                            sys.comm.as_ref().unwrap().shared_read(0),
+                            sys.comm.as_ref().unwrap().shared_read(2),
+                            sys.comm.as_ref().unwrap().shared_read(3)
+                        )
+                    },
+                ),
                 _ => "No Model 1 COMM board in this game".into(),
-            });
+            },
+        );
         if let Some(input) = self
             .session
             .as_ref()
@@ -925,6 +987,7 @@ impl App {
         // The controls follow the cabinet, so the overlay is told which one is
         // loaded before it draws itself.
         touch.set_scheme(session.as_ref().map(|s| s.scheme));
+        touch.set_game(session.as_ref().map_or("", |s| s.set.as_str()));
         // Fullscreen is the "get out of the way" mode: the interface is
         // suppressed there whatever the player last toggled, so the picture
         // fills the screen with nothing over it. A handset is always
@@ -1106,7 +1169,9 @@ impl App {
     /// frame loop for the same state.
     fn run_debug_command(&mut self, line: &str) {
         if self.profile.settings.nvram.is_some() {
-            self.gui.push_debug_output(["error: the independent debugger does not support a custom NVRAM profile".into()]);
+            self.gui.push_debug_output([
+                "error: the independent debugger does not support a custom NVRAM profile".into(),
+            ]);
             return;
         }
         if self.debugger.is_none() {
