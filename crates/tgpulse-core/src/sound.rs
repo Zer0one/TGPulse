@@ -23,13 +23,17 @@
 //!   f00000-f0ffff work RAM
 //! ```
 
-use crate::config::AudioMutes;
+use crate::config::{AudioGains, AudioMutes};
 use crate::multipcm::MultiPcm;
 use m68000::cpu_details::Mc68000;
 use m68000::exception::{Exception, Vector};
 use m68000::memory_access::MemoryAccess;
 use m68000::M68000;
+mod dsb;
 mod fm;
+pub use dsb::DsbPathState;
+#[cfg(test)]
+mod dsb_tests;
 use fm::FmPath;
 pub use fm::FmPathState;
 
@@ -43,6 +47,7 @@ pub enum AudioSource {
     MultiPcm2,
     Ym3438,
     Scsp,
+    Dsb,
 }
 
 pub const MULTIPCM_SOURCES: &[AudioSource] = &[
@@ -51,10 +56,114 @@ pub const MULTIPCM_SOURCES: &[AudioSource] = &[
     AudioSource::Ym3438,
 ];
 pub const SCSP_SOURCES: &[AudioSource] = &[AudioSource::Scsp];
+const DSB_SOURCES: &[AudioSource] = &[
+    AudioSource::MultiPcm1,
+    AudioSource::MultiPcm2,
+    AudioSource::Ym3438,
+    AudioSource::Dsb,
+];
 
 #[cfg(test)]
 mod mute_tests {
     use super::*;
+
+    #[test]
+    fn absolute_gains_replace_reference_and_defaults_preserve_old_rounding() {
+        for a in [-100000, -32768, -101, -1, 0, 1, 101, 32767, 100000] {
+            for b in [-32001, -1, 0, 1, 32001] {
+                for fm in [-32896, -3, 0, 3, 32768] {
+                    for dsb in [-900, 0, 900] {
+                        let old = (((a.clamp(-32768, 32767) + b) * 5 + fm * 3) / 10 + dsb)
+                            .clamp(-32768, 32767) as i16;
+                        assert_eq!(
+                            mix_with_gains(
+                                (a, a),
+                                (b, b),
+                                [fm; 2],
+                                [false; 3],
+                                [dsb; 2],
+                                AudioGains::default()
+                            ),
+                            (old, old)
+                        );
+                    }
+                }
+            }
+        }
+        let gains = AudioGains {
+            multipcm1: 80,
+            multipcm2: 20,
+            ym3438: 40,
+            dsb: 25,
+            scsp: 100,
+        };
+        for (pcm1, pcm2, fm, dsb, expected) in [
+            ((1000, -1000), (0, 0), [0; 2], [0; 2], 800),
+            ((0, 0), (1000, -1000), [0; 2], [0; 2], 200),
+            ((0, 0), (0, 0), [1000, -1000], [0; 2], 400),
+            ((0, 0), (0, 0), [0; 2], [1000, -1000], 250),
+        ] {
+            assert_eq!(
+                mix_with_gains(pcm1, pcm2, fm, [false; 3], dsb, gains),
+                (expected, -expected)
+            );
+        }
+        let max = AudioGains {
+            multipcm1: u32::MAX,
+            multipcm2: u32::MAX,
+            ym3438: u32::MAX,
+            dsb: u32::MAX,
+            scsp: u32::MAX,
+        }
+        .clamped();
+        assert_eq!(max.multipcm1, 100);
+        assert_eq!(
+            mix_with_gains(
+                (32767, -32768),
+                (32767, -32768),
+                [32767, -32768],
+                [false; 3],
+                [32767, -32768],
+                max
+            ),
+            (32767, -32768)
+        );
+    }
+
+    #[test]
+    fn zero_gain_preserves_hardware_and_mute_retains_custom_gain() {
+        for chip in 0..2 {
+            let mut reference = sounding_board(chip);
+            let mut adjusted = sounding_board(chip);
+            let mut gains = AudioGains::default();
+            gains.multipcm1 = 0;
+            gains.multipcm2 = 0;
+            adjusted.set_gains(gains);
+            reference.run(70_013, SND_CPU_HZ);
+            adjusted.run(70_013, SND_CPU_HZ);
+            assert!(adjusted.samples.iter().all(|s| *s == (0, 0)));
+            assert_eq!(reference.cpu.regs.pc, adjusted.cpu.regs.pc);
+            assert_eq!(reference.snapshot_fm_path(), adjusted.snapshot_fm_path());
+            gains.multipcm1 = 75;
+            gains.multipcm2 = 25;
+            reference.set_gains(gains);
+            adjusted.set_gains(gains);
+            adjusted.set_mutes(AudioMutes {
+                multipcm1: true,
+                multipcm2: true,
+                ..AudioMutes::default()
+            });
+            reference.run(10_007, SND_CPU_HZ);
+            adjusted.run(10_007, SND_CPU_HZ);
+            adjusted.set_mutes(AudioMutes::default());
+            assert_eq!(adjusted.gains, gains);
+            assert!(adjusted.samples.is_empty());
+            reference.samples.clear();
+            reference.run(10_001, SND_CPU_HZ);
+            adjusted.run(10_001, SND_CPU_HZ);
+            assert_eq!(reference.samples, adjusted.samples);
+        }
+    }
 
     fn sounding_board(chip: usize) -> SoundSystem {
         let mut program = vec![0; 16];
@@ -290,6 +399,9 @@ const UART_TX_EMPTY: u8 = 0x04;
 
 /// The board's memory map and devices, everything except the 68000 itself.
 pub struct SoundBoard {
+    /// Optional DSB link, selected by Model 1 ROM resources. The Model 1 owner
+    /// propagates its sticky errors through the normal machine error path.
+    pub dsb: Option<crate::dsbz80::Board>,
     pub rom: Vec<u8>,
     pub ram: Vec<u8>,
     /// The two samplers. Between them they carry Daytona's entire mix bar the
@@ -316,6 +428,7 @@ pub struct SoundBoard {
 impl SoundBoard {
     pub fn new(rom: Vec<u8>, pcm1: Vec<u8>, pcm2: Vec<u8>) -> Self {
         Self {
+            dsb: None,
             rom,
             ram: vec![0; SND_RAM_SIZE],
             pcm: [
@@ -374,7 +487,10 @@ impl SoundBoard {
     }
 
     fn uart_status(&self) -> u8 {
-        let mut s = UART_TX_RDY | UART_TX_EMPTY;
+        let mut s = self
+            .dsb
+            .as_ref()
+            .map_or(UART_TX_RDY | UART_TX_EMPTY, |d| d.sender_status());
         if !self.rx.is_empty() {
             s |= UART_RX_RDY;
         }
@@ -423,10 +539,17 @@ impl SoundBoard {
             0xc20001 => {
                 log::trace!(target: "sound", "driver -> main: {:02X}", val);
                 self.tx = Some(val);
+                if let Some(dsb) = &mut self.dsb {
+                    dsb.sender_write(val);
+                }
             }
-            // Mode/command register: the driver configures the UART here. We
-            // have no framing to configure, so there is nothing to keep.
-            0xc20003 => {}
+            // The optional DSB wire uses real framing. The existing immediate
+            // main-board reply path remains unchanged.
+            0xc20003 => {
+                if let Some(dsb) = &mut self.dsb {
+                    dsb.sender_control(val);
+                }
+            }
 
             0xc50000..=0xc50001 => self.pcm[0].set_bank(val as u32),
             0xc70000..=0xc70001 => self.pcm[1].set_bank(val as u32),
@@ -478,6 +601,9 @@ pub struct SoundSystem {
     /// Main-CPU to sound-CPU fractional conversion; callers keep main Hz fixed.
     main_fraction: u64,
     muted: [bool; 3],
+    dsb_muted: bool,
+    gains: AudioGains,
+    dsb_conversion: dsb::Conversion,
     /// Rendered stereo output at the chip rate, drained by the front end.
     /// Headless tools never drain it, so it is capped rather than unbounded.
     pub samples: std::collections::VecDeque<(i16, i16)>,
@@ -489,21 +615,81 @@ pub struct SoundSystem {
 /// Upper bound on buffered audio (~2s) so headless runs don't accumulate it.
 const MAX_BUFFERED_SAMPLES: usize = 90_000;
 
+#[cfg(test)]
 fn mix(pcm1: (i32, i32), pcm2: (i32, i32), fm: [i32; 2], muted: [bool; 3]) -> (i16, i16) {
-    let side = |a: i32, b: i32, fm: i32| {
+    mix_dsb(pcm1, pcm2, fm, muted, [0; 2])
+}
+
+#[cfg(test)]
+fn mix_dsb(
+    pcm1: (i32, i32),
+    pcm2: (i32, i32),
+    fm: [i32; 2],
+    muted: [bool; 3],
+    dsb: [i32; 2],
+) -> (i16, i16) {
+    mix_with_gains(pcm1, pcm2, fm, muted, dsb, AudioGains::default())
+}
+
+fn mix_with_gains(
+    pcm1: (i32, i32),
+    pcm2: (i32, i32),
+    fm: [i32; 2],
+    muted: [bool; 3],
+    dsb: [i32; 2],
+    gains: AudioGains,
+) -> (i16, i16) {
+    let side = |a: i32, b: i32, fm: i32, dsb: i32| {
         let a = if muted[0] { 0 } else { a.clamp(-32768, 32767) };
         let b = if muted[1] { 0 } else { b.clamp(-32768, 32767) };
         let fm = if muted[2] { 0 } else { fm };
-        // MAME board gains: MultiPCM 0.5 each, FM 0.30. Clip only the final mix
-        // after the existing per-MultiPCM clamp; never normalize for muted chips.
-        (((a + b) * 5 + fm * 3) / 10).clamp(-32768, 32767) as i16
+        // Absolute route gains replace the reference 0.5/0.5/0.3/1.0.
+        // Keep the old rounding boundary before DSB for bit-identical defaults.
+        let main = (i64::from(a) * i64::from(gains.multipcm1)
+            + i64::from(b) * i64::from(gains.multipcm2)
+            + i64::from(fm) * i64::from(gains.ym3438))
+            / 100;
+        (main + i64::from(dsb) * i64::from(gains.dsb) / 100).clamp(-32768, 32767) as i16
     };
-    (side(pcm1.0, pcm2.0, fm[0]), side(pcm1.1, pcm2.1, fm[1]))
+    (
+        side(pcm1.0, pcm2.0, fm[0], dsb[0]),
+        side(pcm1.1, pcm2.1, fm[1], dsb[1]),
+    )
 }
 
 impl SoundSystem {
     pub fn new(rom: Vec<u8>, pcm1: Vec<u8>, pcm2: Vec<u8>) -> Self {
+        Self::from_board(SoundBoard::new(rom, pcm1, pcm2))
+    }
+    /// Opt-in resource-owned pair, connected before the first instruction
+    /// executes. Existing game constructors do not select this path yet.
+    pub fn with_dsb(
+        rom: Vec<u8>,
+        pcm1: Vec<u8>,
+        pcm2: Vec<u8>,
+        firmware: &[u8],
+    ) -> Result<Self, crate::dsbz80::Error> {
         let mut board = SoundBoard::new(rom, pcm1, pcm2);
+        let mut dsb = crate::dsbz80::Board::new(firmware)?;
+        dsb.connect_sender();
+        board.dsb = Some(dsb);
+        Ok(Self::from_board(board))
+    }
+    /// Full resource-owned pair, connected before the first 68000 instruction.
+    pub fn with_dsb_audio(
+        rom: Vec<u8>,
+        pcm1: Vec<u8>,
+        pcm2: Vec<u8>,
+        firmware: &[u8],
+        mpeg: Vec<u8>,
+    ) -> Result<Self, crate::dsbz80::Error> {
+        let mut board = SoundBoard::new(rom, pcm1, pcm2);
+        let mut dsb = crate::dsbz80::Board::with_mpeg(firmware, mpeg)?;
+        dsb.connect_sender();
+        board.dsb = Some(dsb);
+        Ok(Self::from_board(board))
+    }
+    fn from_board(mut board: SoundBoard) -> Self {
         // M68000::new() resets, which reads the vectors through the bus.
         let cpu = {
             let mut c: M68000<Mc68000> = M68000::new();
@@ -525,6 +711,9 @@ impl SoundSystem {
             irq_pending: false,
             main_fraction: 0,
             muted: [false; 3],
+            dsb_muted: false,
+            gains: AudioGains::default(),
+            dsb_conversion: dsb::Conversion::default(),
             samples: std::collections::VecDeque::new(),
             exception_counts: [0; 256],
         }
@@ -537,10 +726,59 @@ impl SoundSystem {
 
     pub fn set_mutes(&mut self, mutes: AudioMutes) {
         let muted = [mutes.multipcm1, mutes.multipcm2, mutes.ym3438];
-        if self.muted != muted {
+        if self.muted != muted || self.dsb_muted != mutes.dsb {
             self.muted = muted;
+            self.dsb_muted = mutes.dsb;
             self.samples.clear();
         }
+    }
+
+    pub fn set_gains(&mut self, gains: AudioGains) {
+        let gains = gains.clamped();
+        if self.gains != gains {
+            self.gains = gains;
+            self.samples.clear();
+        }
+    }
+
+    pub fn sources(&self) -> &'static [AudioSource] {
+        if self.board.dsb.is_some() {
+            DSB_SOURCES
+        } else {
+            MULTIPCM_SOURCES
+        }
+    }
+
+    pub fn dsb_fault(&self) -> Option<crate::dsbz80::Error> {
+        self.board.dsb.as_ref().and_then(|d| d.fault())
+    }
+
+    pub fn snapshot_dsb_path(&self) -> Option<DsbPathState> {
+        self.board.dsb.as_ref().map(|b| DsbPathState {
+            board: b.snapshot(),
+            conversion: self.dsb_conversion.clone(),
+        })
+    }
+
+    pub fn restore_dsb_path(&mut self, state: &DsbPathState) -> Result<(), crate::dsbz80::Error> {
+        if !state.conversion.valid()
+            || state.board.sound_ticks() != Some(state.conversion.time())
+            || state
+                .board
+                .executed_ticks()
+                .is_none_or(|limit| state.conversion.latest_sample_time() > limit)
+        {
+            return Err(crate::dsbz80::Error::InvalidSnapshot);
+        }
+        let board = self
+            .board
+            .dsb
+            .as_mut()
+            .ok_or(crate::dsbz80::Error::InvalidSnapshot)?;
+        board.restore(&state.board)?;
+        self.dsb_conversion = state.conversion.clone();
+        self.samples.clear();
+        Ok(())
     }
 
     /// Hands the driver a byte from the i960 and raises the UART's interrupt,.
@@ -566,6 +804,46 @@ impl SoundSystem {
     /// occur at that instruction's start, then we render its elapsed interval.
     /// This preserves write order without pretending to be bus-cycle accurate.
     fn render_cycles(&mut self, cycles: usize) {
+        if self.board.dsb.is_some() {
+            let mut remaining = cycles;
+            while remaining > 0 {
+                // At most one destination sample per chunk. Both converters
+                // start at phase zero and retain their 224-clock phase.
+                let step = remaining.min(224);
+                let conversion = &mut self.dsb_conversion;
+                let board = self.board.dsb.as_mut().unwrap();
+                if board
+                    .run_sound_cycles_with_audio(step as u32, |s| conversion.push(s))
+                    .is_err()
+                {
+                    return; // sticky fault propagated by Model1System
+                }
+                let mut dsb_sample = [0; 2];
+                conversion.advance(step, |s| dsb_sample = s);
+                if self.dsb_muted {
+                    dsb_sample = [0; 2];
+                }
+                let SoundBoard { ym, pcm, .. } = &mut self.board;
+                let muted = self.muted;
+                let gains = self.gains;
+                let samples = &mut self.samples;
+                ym.advance(step, |fm| {
+                    let mixed = mix_with_gains(
+                        pcm[0].generate(),
+                        pcm[1].generate(),
+                        fm,
+                        muted,
+                        dsb_sample,
+                        gains,
+                    );
+                    if samples.len() < MAX_BUFFERED_SAMPLES {
+                        samples.push_back(mixed);
+                    }
+                });
+                remaining -= step;
+            }
+            return;
+        }
         let SoundBoard { ym, pcm, .. } = &mut self.board;
         let muted = self.muted;
         let samples = &mut self.samples;
@@ -573,7 +851,7 @@ impl SoundSystem {
             // All chips run even if muted or if the bounded output queue is full.
             let pcm1 = pcm[0].generate();
             let pcm2 = pcm[1].generate();
-            let mixed = mix(pcm1, pcm2, fm, muted);
+            let mixed = mix_with_gains(pcm1, pcm2, fm, muted, [0; 2], self.gains);
             if samples.len() < MAX_BUFFERED_SAMPLES {
                 samples.push_back(mixed);
             }
@@ -582,6 +860,9 @@ impl SoundSystem {
 
     /// Runs the board for `i960_cycles` of main-board time.
     pub fn run(&mut self, i960_cycles: i32, i960_hz: u32) {
+        if self.board.dsb.as_ref().is_some_and(|d| d.fault().is_some()) {
+            return;
+        }
         // Convert the main board's budget into this board's clock.
         let scaled = i960_cycles as i64 * SND_CPU_HZ as i64 + self.main_fraction as i64;
         self.remainder += scaled.div_euclid(i960_hz as i64);
@@ -618,6 +899,9 @@ impl SoundSystem {
                 self.remainder -= used as i64;
                 self.render_cycles(used);
             }
+            if self.board.dsb.as_ref().is_some_and(|d| d.fault().is_some()) {
+                break;
+            }
         }
     }
 }
@@ -636,6 +920,12 @@ pub enum Sound {
 }
 
 impl Sound {
+    pub fn set_gains(&mut self, gains: AudioGains) {
+        match self {
+            Self::MultiPcm(s) => s.set_gains(gains),
+            Self::Scsp(s) => s.set_gain(gains.scsp),
+        }
+    }
     pub fn sources(&self) -> &'static [AudioSource] {
         match self {
             Self::MultiPcm(_) => MULTIPCM_SOURCES,

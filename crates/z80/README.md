@@ -12,6 +12,8 @@ See the board integration contract for the observed boot and gameplay limits.
 The original registry `z80` dependency remains in use by `model1io.rs`.
 Do not silently redirect existing consumers to this copy. Consolidation after
 board-2 validation is tracked in [the roadmap](../../docs/MODEL1_ROADMAP.md).
+The user selected this adaptation for the upcoming Star Wars DSB and as the
+destination of final consolidation; neither implies that migration is done.
 
 Original `z80.rs` SHA-256:
 `e95042b2c07cadab457ffef155f87df29499bfb9cb96dc386623002b4602dc75`.

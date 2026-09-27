@@ -198,6 +198,7 @@ pub struct SoundSystem2A {
     /// Fractional sample-clock accumulator (SCSP samples per 68000 cycle).
     sample_acc: f64,
     muted: bool,
+    gain: u32,
     /// Rendered stereo output at the SCSP rate, drained by the front end.
     /// Headless tools never drain it, so it is capped rather than unbounded.
     pub samples: std::collections::VecDeque<(i16, i16)>,
@@ -240,6 +241,32 @@ mod mute_tests {
             scsp.write(reg, value, 0xffff);
         }
         sound
+    }
+
+    #[test]
+    fn scsp_direct_gain_scales_output_without_changing_continuation() {
+        let mut reference = sounding_board();
+        let mut adjusted = sounding_board();
+        adjusted.set_gain(50);
+        reference.run(200_013, SND2A_CPU_HZ);
+        adjusted.run(200_013, SND2A_CPU_HZ);
+        assert!(reference.samples.iter().any(|s| *s != (0, 0)));
+        for (a, b) in reference.samples.iter().zip(&adjusted.samples) {
+            assert_eq!(*b, (a.0 / 2, a.1 / 2));
+        }
+        adjusted.set_muted(true);
+        assert_eq!(adjusted.gain, 50);
+        adjusted.set_gain(0);
+        reference.samples.clear();
+        reference.run(10_013, SND2A_CPU_HZ);
+        adjusted.run(10_013, SND2A_CPU_HZ);
+        adjusted.set_gain(100);
+        adjusted.set_muted(false);
+        reference.samples.clear();
+        reference.run(10_003, SND2A_CPU_HZ);
+        adjusted.run(10_003, SND2A_CPU_HZ);
+        assert_eq!(reference.samples, adjusted.samples);
+        assert_eq!(reference.cpu.regs.pc, adjusted.cpu.regs.pc);
     }
 
     #[test]
@@ -295,6 +322,7 @@ impl SoundSystem2A {
             remainder: 0,
             sample_acc: 0.0,
             muted: false,
+            gain: crate::config::AudioGains::REFERENCE.scsp,
             samples: std::collections::VecDeque::new(),
             exception_counts: [0; 256],
         }
@@ -308,6 +336,14 @@ impl SoundSystem2A {
     pub fn set_muted(&mut self, muted: bool) {
         if self.muted != muted {
             self.muted = muted;
+            self.samples.clear();
+        }
+    }
+
+    pub fn set_gain(&mut self, gain: u32) {
+        let gain = gain.min(crate::config::AudioGains::MAX);
+        if self.gain != gain {
+            self.gain = gain;
             self.samples.clear();
         }
     }
@@ -330,8 +366,8 @@ impl SoundSystem2A {
             let (l, r) = self.board.scsp.generate();
             // Timers, MIDI, DSP and voices must continue while muted.
             let (l, r) = if self.muted { (0, 0) } else { (l, r) };
-            let l = l.clamp(-32768, 32767) as i16;
-            let r = r.clamp(-32768, 32767) as i16;
+            let l = (i64::from(l) * i64::from(self.gain) / 100).clamp(-32768, 32767) as i16;
+            let r = (i64::from(r) * i64::from(self.gain) / 100).clamp(-32768, 32767) as i16;
             if self.samples.len() < MAX_BUFFERED_SAMPLES {
                 self.samples.push_back((l, r));
             }

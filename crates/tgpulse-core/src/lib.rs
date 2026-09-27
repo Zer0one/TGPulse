@@ -7,11 +7,13 @@
 
 pub mod config;
 pub mod debugger;
+pub mod dsbz80;
 pub mod eeprom93c46;
 pub mod geometry;
 pub mod library;
 pub mod loader;
 pub mod memory;
+pub mod mpeg;
 pub mod model1;
 pub mod model1_video;
 pub mod model1io;

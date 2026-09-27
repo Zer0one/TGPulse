@@ -480,12 +480,30 @@ describe different source trees. The existing `block` 0.1.6 future-compatibility
 warning remains. User gameplay evidence confirms some VR FM sounds, not a complete
 per-title audio acceptance matrix.
 
-## Output-only mute contract (implemented)
+## Output-only gain and mute contract (implemented)
 
-Settings -> Audio shows `Mute MultiPCM 1`, `Mute MultiPCM 2` and
-`Mute FM (YM3438)` for the MultiPCM board, or `Mute SCSP` for the actual loaded
-SCSP board. The library asks to load a game rather than guessing its hardware.
-No DSB switch is shown for absent synthesis.
+Settings -> Audio shows one **gain slider / unlabelled mute checkbox / source name** row
+for each implemented output: MultiPCM 1/2 and FM (YM3438), or SCSP, according
+to the loaded board. SWA/SWAJ additionally expose DSB (MPEG). The library
+asks to load a game rather than guessing its hardware.
+No DSB switch is shown for games without this board.
+The mute checkbox has only a `Mute` tooltip, no inline label; the freed space
+extends the gain sliders.
+
+Sliders select absolute output-route gain from 0 to 100 percent, not a
+multiplier of the reference gain. At 80%, a MultiPCM route uses 0.8 instead
+of 0.5. Initial values and fixed reference markers are 50% for each
+MultiPCM, 30% for FM, and 100% for DSB and SCSP. The marker spans the
+full bar height in a darker shade of the bar's blue. The native grab is 50%
+opaque (idle and active), above the marker; the value text stays above both.
+The master slider shares this style, with its fixed reference at 100%.
+Double-click a channel slider to restore that channel's
+reference without changing its mute state or other channels. Hover shows the
+reference; Ctrl-click allows numeric entry. The master remains independent
+with its 0–800% range; double-click restores 100% without changing channel gains
+or mute states. The reset also holds while the second click remains pressed.
+Initial settings preserve the previous integer mixing/rounding exactly.
+Larger gains may clip; neither automatic normalization nor a limiter is added.
 
 The checkboxes mean **muted when checked**. No CPU, IRQ, timer, MIDI/UART,
 voice, envelope or DSP is paused. Chips generate normally; their outputs are
@@ -495,17 +513,26 @@ another. Core setters are independent of windows, host devices and paths.
 Preferences are global per source, persisted with the existing settings:
 
 ```ini
+gain_multipcm1 = 50
+gain_multipcm2 = 50
+gain_ym3438 = 30
+gain_dsb = 100
+gain_scsp = 100
 mute_multipcm1 = off
 mute_multipcm2 = off
 mute_ym3438 = off
+mute_dsb = off
 mute_scsp = off
 ```
 
-Absent keys default to off (all outputs audible). Existing files need not be
-deleted or reset. GUI changes save normally; Revert to defaults unmutes all.
+Absent gain keys use the reference values; absent mute keys default to off.
+Invalid or out-of-range gain entries are warned about and retain the default.
+Existing files need not be deleted or reset. GUI changes save normally;
+Revert to defaults restores gains and unmutes all. Muting never changes the
+stored gain, and a zero gain never stops device emulation.
 Preferences apply on load/reset and after machine-state restore. They are not
 saved as chip state. A setter clears the core's pending mixed samples on an
-actual mute change; samples already submitted to the host may still be heard
+actual mute/gain change; samples already submitted to the host may still be heard
 for the device's output latency. No click-free fade is claimed.
 
 ## Verification boundaries

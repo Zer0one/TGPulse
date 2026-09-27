@@ -145,7 +145,22 @@ fn build_model1(
     mut regions: std::collections::HashMap<String, Vec<u8>>,
     ioboard_config: Vec<u8>,
     ioboard_kind: crate::model1board::Kind,
-) -> Model1Roms {
+) -> Result<Model1Roms, String> {
+    let dsb = match (
+        regions.remove("dsbz80:mpegcpu"),
+        regions.remove("dsbz80:mpeg"),
+    ) {
+        (None, None) => None,
+        (Some(firmware), Some(mpeg)) => {
+            if firmware.len() != crate::dsbz80::FIRMWARE_SIZE
+                || !matches!(mpeg.len(), 0x400000 | 0x800000)
+            {
+                return Err("invalid Model 1 DSB ROM region sizes".into());
+            }
+            Some(DsbRoms { firmware, mpeg })
+        }
+        _ => return Err("incomplete Model 1 DSB ROM regions".into()),
+    };
     let take = |r: &mut std::collections::HashMap<String, Vec<u8>>, name: &str, size: usize| {
         r.remove(name).unwrap_or_else(|| vec![0u8; size])
     };
@@ -154,7 +169,8 @@ fn build_model1(
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect()
     };
-    Model1Roms {
+    Ok(Model1Roms {
+        dsb,
         ioboard_kind,
         maincpu: {
             let mut m = take(&mut regions, "maincpu", 0x2000000);
@@ -188,7 +204,7 @@ fn build_model1(
                 dumped
             }
         },
-    }
+    })
 }
 
 /// The reference: interleaves a 16-bit chip onto the even or odd
@@ -261,16 +277,17 @@ pub fn load_model1_zip(path: &str) -> Result<Model1Roms, String> {
     // Z80 firmware mirrors it into dpram so the game boots configured.
     let ioboard_config = read_chip(&mut archive, "vr_defaults.nv").unwrap_or_default();
     let regions = crate::roms_db::build_regions(def, &mut archive)?;
-    Ok(build_model1(
+    build_model1(
         regions,
         ioboard_config,
         crate::model1board::Kind::for_set(&def.name),
-    ))
+    )
 }
 
 /// Loads Star Wars Arcade, building the V60 memory image
 /// `ROM_START(swa)` lays it out.
 pub struct Model1Roms {
+    pub dsb: Option<DsbRoms>,
     /// Selected from the identified ROM set, not a file path or frontend setting.
     pub ioboard_kind: crate::model1board::Kind,
     /// Factory battery-backed RAM image (NetMerc). Saved user NVRAM wins.
@@ -300,6 +317,12 @@ pub struct Model1Roms {
     /// game boots with valid settings instead of the setup menu. One config
     /// byte per 16-bit word (low byte), starting with the "SEGA" magic.
     pub ioboard_config: Vec<u8>,
+}
+
+/// Owned DSB resources; region padding is preserved, no implicit file access.
+pub struct DsbRoms {
+    pub firmware: Vec<u8>,
+    pub mpeg: Vec<u8>,
 }
 
 /// Loads Virtua Racing, building the V60 memory image
@@ -341,6 +364,30 @@ mod model1_tests {
     use super::*;
 
     #[test]
+    fn dsb_regions_are_preserved_and_incomplete_resources_are_rejected() {
+        for size in [0x400000, 0x800000] {
+            let regions = [
+                ("dsbz80:mpegcpu".into(), vec![0x5a; 0x20000]),
+                ("dsbz80:mpeg".into(), vec![0xa5; size]),
+            ]
+            .into_iter()
+            .collect();
+            let r = build_model1(regions, vec![], crate::model1board::Kind::Original).unwrap();
+            let d = r.dsb.unwrap();
+            assert_eq!(d.firmware, vec![0x5a; 0x20000]);
+            assert_eq!(d.mpeg, vec![0xa5; size]);
+        }
+        for name in ["dsbz80:mpegcpu", "dsbz80:mpeg"] {
+            assert!(build_model1(
+                [(name.into(), vec![0; 0x20000])].into_iter().collect(),
+                vec![],
+                crate::model1board::Kind::Original
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
     fn unknown_tgp_program_is_never_patched() {
         for size in [0, 0x2000, 0x2001] {
             let mut program = vec![0xff; size];
@@ -361,7 +408,9 @@ mod model1_tests {
             .into_iter()
             .collect();
         assert_eq!(
-            build_model1(regions, vec![], crate::model1board::Kind::Original).nvram_default,
+            build_model1(regions, vec![], crate::model1board::Kind::Original)
+                .unwrap()
+                .nvram_default,
             factory
         );
     }

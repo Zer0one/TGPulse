@@ -309,7 +309,8 @@ pub fn identify(names: &[String]) -> Option<&'static GameDef> {
 
 /// Builds every ROM region for a game by applying its load and copy directives
 /// to the files in the archive. Missing files are warned about and skipped, so
-/// a split or incomplete set still produces as much as it can.
+/// a split or incomplete set still produces as much as it can. Model 1 DSB
+/// resources are required: a zero-filled replacement is not a working board.
 pub fn build_regions(
     def: &GameDef,
     archive: &mut ZipArchive<File>,
@@ -322,6 +323,9 @@ pub fn build_regions(
     for load in &def.loads {
         let data = match read_chip(archive, &load.file) {
             Ok(d) => d,
+            Err(e) if def.board.is_model1() && load.region.starts_with("dsbz80:") => {
+                return Err(format!("{}: required DSB ROM: {e}", def.name));
+            }
             Err(_) => {
                 missing += 1;
                 continue;
@@ -330,6 +334,9 @@ pub fn build_regions(
         let Some(dest) = regions.get_mut(&load.region) else {
             continue;
         };
+        if def.board.is_model1() && load.region.starts_with("dsbz80:") {
+            validate_dsb_size(load, &data)?;
+        }
         apply_load(dest, load, &data)?;
     }
     for c in &def.copies {
@@ -343,6 +350,18 @@ pub fn build_regions(
         log::info!(target: "loader", "warning: {missing} ROM file(s) missing from the set");
     }
     Ok(regions)
+}
+
+fn validate_dsb_size(load: &Load, data: &[u8]) -> Result<(), String> {
+    if data.len() != load.len {
+        return Err(format!(
+            "DSB ROM '{}': expected {} bytes, found {}",
+            load.file,
+            load.len,
+            data.len()
+        ));
+    }
+    Ok(())
 }
 
 fn apply_load(dest: &mut [u8], load: &Load, data: &[u8]) -> Result<(), String> {
@@ -365,6 +384,62 @@ fn apply_load(dest: &mut [u8], load: &Load, data: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dsb_chip_size_must_match_instead_of_filling_missing_audio_with_zeroes() {
+        let load = Load {
+            region: "dsbz80:mpeg".into(),
+            file: "synthetic.bin".into(),
+            off: 0,
+            len: 4,
+            kind: *b"p\0",
+        };
+        let mut dest = vec![0; 8];
+        for len in [0, 3, 5] {
+            assert!(validate_dsb_size(&load, &vec![1; len]).is_err());
+        }
+        assert_eq!(dest, vec![0; 8]);
+        validate_dsb_size(&load, &[1, 2, 3, 4]).unwrap();
+        apply_load(&mut dest, &load, &[1, 2, 3, 4]).unwrap();
+        assert_eq!(dest, vec![1, 2, 3, 4, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn missing_dsb_chip_is_a_loader_error() {
+        let path =
+            std::env::temp_dir().join(format!("tgpulse-dsb-empty-{}.zip", std::process::id()));
+        let file = File::options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        let file = zip::ZipWriter::new(file).finish().unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let def = GameDef {
+            name: "dsb-test".into(),
+            title: "".into(),
+            year: "".into(),
+            manufacturer: "".into(),
+            board: Board::Model1,
+            scheme: Scheme::Flight,
+            analog_roles: [AnalogRole::None; 8],
+            regions: vec![("dsbz80:mpegcpu".into(), 4, 0)],
+            loads: vec![Load {
+                region: "dsbz80:mpegcpu".into(),
+                file: "synthetic.bin".into(),
+                off: 0,
+                len: 4,
+                kind: *b"p\0",
+            }],
+            copies: vec![],
+        };
+        let error = build_regions(&def, &mut archive).unwrap_err();
+        assert!(error.contains("required DSB ROM"));
+        assert!(error.contains("synthetic.bin"));
+        drop(archive);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn advanced_board_selection_has_exact_firmware_regions() {

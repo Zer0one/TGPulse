@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tgpulse_core::config::{AudioMutes, Cabinet, Config, Widescreen};
+use tgpulse_core::config::{AudioGains, AudioMutes, Cabinet, Config, Widescreen};
 
 /// The adjustable subset of `Config` that is worth remembering between runs.
 ///
@@ -27,6 +27,7 @@ pub struct Settings {
     pub smooth_shadows: bool,
     pub volume: u32,
     pub audio_mutes: AudioMutes,
+    pub audio_gains: AudioGains,
     pub rumble: bool,
     pub cabinet: Cabinet,
     pub reverse_landscape: bool,
@@ -48,6 +49,7 @@ impl Settings {
             smooth_shadows: config.smooth_shadows,
             volume: config.volume,
             audio_mutes: config.audio_mutes,
+            audio_gains: config.audio_gains,
             rumble: config.rumble,
             cabinet: config.cabinet,
             reverse_landscape: config.reverse_landscape,
@@ -62,6 +64,7 @@ impl Settings {
         config.smooth_shadows = self.smooth_shadows;
         config.volume = self.volume;
         config.audio_mutes = self.audio_mutes;
+        config.audio_gains = self.audio_gains.clamped();
         config.rumble = self.rumble;
         config.cabinet = self.cabinet;
         config.reverse_landscape = self.reverse_landscape;
@@ -128,6 +131,21 @@ impl Settings {
                     }
                 },
                 "rumble" => settings.rumble = boolean(value).unwrap_or(settings.rumble),
+                "gain_multipcm1" | "gain_multipcm2" | "gain_ym3438" | "gain_dsb" | "gain_scsp" => {
+                    if let Some(gain) = value.parse::<u32>().ok().filter(|v| *v <= AudioGains::MAX)
+                    {
+                        let target = match name {
+                            "gain_multipcm1" => &mut settings.audio_gains.multipcm1,
+                            "gain_multipcm2" => &mut settings.audio_gains.multipcm2,
+                            "gain_ym3438" => &mut settings.audio_gains.ym3438,
+                            "gain_dsb" => &mut settings.audio_gains.dsb,
+                            _ => &mut settings.audio_gains.scsp,
+                        };
+                        *target = gain;
+                    } else {
+                        log::warn!(target: "settings", "{}:{}: bad {name} '{value}' (want 0..{})", path.display(), number + 1, AudioGains::MAX);
+                    }
+                }
                 "mute_multipcm1" => {
                     settings.audio_mutes.multipcm1 =
                         boolean(value).unwrap_or(settings.audio_mutes.multipcm1)
@@ -140,7 +158,11 @@ impl Settings {
                     settings.audio_mutes.scsp = boolean(value).unwrap_or(settings.audio_mutes.scsp)
                 }
                 "mute_ym3438" => {
-                    settings.audio_mutes.ym3438 = boolean(value).unwrap_or(settings.audio_mutes.ym3438)
+                    settings.audio_mutes.ym3438 =
+                        boolean(value).unwrap_or(settings.audio_mutes.ym3438)
+                }
+                "mute_dsb" => {
+                    settings.audio_mutes.dsb = boolean(value).unwrap_or(settings.audio_mutes.dsb)
                 }
                 "reverse_landscape" => {
                     settings.reverse_landscape =
@@ -183,10 +205,17 @@ impl Settings {
              widescreen_stretch_2d = {}\n\
              smooth_shadows = {}\n\
              volume = {}\n\
+             # Absolute route gain in percent (50 = 0.5), range 0..100.\n\
+             gain_multipcm1 = {}\n\
+             gain_multipcm2 = {}\n\
+             gain_ym3438 = {}\n\
+             gain_dsb = {}\n\
+             gain_scsp = {}\n\
              # Output mutes only; chip emulation continues.\n\
              mute_multipcm1 = {}\n\
              mute_multipcm2 = {}\n\
              mute_ym3438 = {}\n\
+             mute_dsb = {}\n\
              mute_scsp = {}\n\
              rumble = {}\n\
              cabinet = {}\n\
@@ -197,9 +226,15 @@ impl Settings {
             on_off(self.widescreen_stretch_2d),
             on_off(self.smooth_shadows),
             self.volume,
+            self.audio_gains.multipcm1,
+            self.audio_gains.multipcm2,
+            self.audio_gains.ym3438,
+            self.audio_gains.dsb,
+            self.audio_gains.scsp,
             on_off(self.audio_mutes.multipcm1),
             on_off(self.audio_mutes.multipcm2),
             on_off(self.audio_mutes.ym3438),
+            on_off(self.audio_mutes.dsb),
             on_off(self.audio_mutes.scsp),
             on_off(self.rumble),
             cabinet,
@@ -223,10 +258,18 @@ mod tests {
             widescreen: Widescreen::Auto,
             smooth_shadows: false,
             volume: 400,
+            audio_gains: AudioGains {
+                multipcm1: 80,
+                multipcm2: 0,
+                ym3438: 45,
+                dsb: 25,
+                scsp: 100,
+            },
             audio_mutes: AudioMutes {
                 multipcm1: true,
                 multipcm2: true,
                 ym3438: true,
+                dsb: true,
                 scsp: true,
             },
             cabinet: Cabinet::Twin,
@@ -255,7 +298,28 @@ mod tests {
         assert_eq!(settings.ssaa, Settings::default().ssaa);
         assert_eq!(settings.cabinet, Settings::default().cabinet);
         assert_eq!(settings.audio_mutes, AudioMutes::default());
+        assert_eq!(settings.audio_gains, AudioGains::REFERENCE);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invalid_gains_keep_reference_and_mute_does_not_reset_gain() {
+        let path = std::env::temp_dir().join(format!("tgpulse-gains-{}.conf", std::process::id()));
+        std::fs::write(&path, "gain_multipcm1 = -1\ngain_multipcm2 = 101\ngain_ym3438 = NaN\ngain_dsb = 25\nmute_dsb = on\ngain_scsp = 0\n").unwrap();
+        let settings = Settings::load(&path);
+        assert_eq!(
+            settings.audio_gains,
+            AudioGains {
+                dsb: 25,
+                scsp: 0,
+                ..AudioGains::REFERENCE
+            }
+        );
+        assert!(settings.audio_mutes.dsb);
+        let mut config = Config::default();
+        settings.apply_to(&mut config);
+        assert_eq!(Settings::from_config(&config), settings);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -267,6 +331,7 @@ mod tests {
                 multipcm1: true,
                 multipcm2: false,
                 ym3438: true,
+                dsb: true,
                 scsp: true,
             },
             ..Settings::default()
@@ -281,6 +346,7 @@ mod tests {
                     multipcm1: true,
                     multipcm2: false,
                     ym3438: true,
+                    dsb: true,
                     scsp: true
                 },
                 ..Settings::default()

@@ -185,7 +185,45 @@ pub struct AudioMutes {
     pub multipcm1: bool,
     pub multipcm2: bool,
     pub ym3438: bool,
+    pub dsb: bool,
     pub scsp: bool,
+}
+
+/// Absolute output-route gains in percent: 50 means gain 0.5, not half of
+/// the reference gain. Frontend preferences, not emulated chip state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AudioGains {
+    pub multipcm1: u32,
+    pub multipcm2: u32,
+    pub ym3438: u32,
+    pub dsb: u32,
+    pub scsp: u32,
+}
+
+impl AudioGains {
+    pub const MAX: u32 = 100;
+    pub const REFERENCE: Self = Self {
+        multipcm1: 50,
+        multipcm2: 50,
+        ym3438: 30,
+        dsb: 100,
+        scsp: 100,
+    };
+    pub fn clamped(self) -> Self {
+        Self {
+            multipcm1: self.multipcm1.min(Self::MAX),
+            multipcm2: self.multipcm2.min(Self::MAX),
+            ym3438: self.ym3438.min(Self::MAX),
+            dsb: self.dsb.min(Self::MAX),
+            scsp: self.scsp.min(Self::MAX),
+        }
+    }
+}
+
+impl Default for AudioGains {
+    fn default() -> Self {
+        Self::REFERENCE
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -232,6 +270,7 @@ pub struct Config {
     /// plain digital gain on the mixed output, clamped against clipping.
     pub volume: u32,
     pub audio_mutes: AudioMutes,
+    pub audio_gains: AudioGains,
 
     /// Off: legacy native framing. On: widen the 3D field of view.
     /// Auto: present the native image at the saved cabinet's 4:3/16:9 aspect.
@@ -279,6 +318,7 @@ impl Default for Config {
             smooth_shadows: true,
             volume: 100,
             audio_mutes: AudioMutes::default(),
+            audio_gains: AudioGains::default(),
             widescreen: Widescreen::Off,
             widescreen_stretch_2d: true,
             reverse_landscape: false,

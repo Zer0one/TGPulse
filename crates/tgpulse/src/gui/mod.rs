@@ -69,9 +69,11 @@ pub struct StartupPanels {
 #[cfg(test)]
 mod tests {
     use super::*;
+    pub(super) static IMGUI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn startup_panels_initialize_existing_windows() {
+        let _lock = IMGUI_TEST_LOCK.lock().unwrap();
         // Keep ImGui contexts sequential: only one can be active at a time.
         for show_stats in [false, true] {
             for show_debugger in [false, true] {
@@ -87,6 +89,140 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn audio_gain_rows_fit_and_do_not_modify_idle_preferences() {
+        let _lock = IMGUI_TEST_LOCK.lock().unwrap();
+        let mut context = imgui::Context::create();
+        context.set_ini_filename(None);
+        context.io_mut().display_size = [800.0, 600.0];
+        context.fonts().build_rgba32_texture();
+        let mut reset_held = false;
+        for _ in 0..2 {
+            let ui = context.frame();
+            ui.window("Audio rows").position([0.0,0.0], imgui::Condition::Always)
+                .size([420.0,300.0], imgui::Condition::Always).build(|| {
+                for (label, reference) in [("MultiPCM 1",50), ("MultiPCM 2",50), ("FM (YM3438)",30), ("DSB (MPEG)",100), ("SCSP",100)] {
+                    let mut gain = reference;
+                    let mut muted = false;
+                    assert!(!audio_gain_row(ui, label, &mut gain, &mut muted, reference, &mut reset_held));
+                    assert_eq!(gain, reference);
+                    assert!(!muted);
+                    assert!(ui.item_rect_max()[0] <= ui.window_pos()[0] + ui.window_size()[0]);
+                }
+            });
+            assert!(context.render().total_vtx_count > 0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod gain_interaction_tests {
+    use super::*;
+    #[test]
+    fn reference_is_below_translucent_grab_and_native_style_is_unchanged() {
+        let _lock = tests::IMGUI_TEST_LOCK.lock().unwrap();
+        let mut context = imgui::Context::create();
+        context.set_ini_filename(None);
+        context.io_mut().display_size = [800.0, 600.0];
+        context.fonts().build_rgba32_texture();
+        context.style_mut().colors[imgui::StyleColor::FrameBg as usize] = [0.2, 0.4, 0.8, 1.0];
+        context.style_mut().colors[imgui::StyleColor::SliderGrab as usize] = [0.4, 0.6, 1.0, 1.0];
+        let reference = imgui::ImColor32::from_rgba_f32s(0.2 * 0.55, 0.4 * 0.55, 0.8 * 0.55, 1.0).to_rgba();
+        let grab = imgui::ImColor32::from_rgba_f32s(0.4, 0.6, 1.0, 0.5).to_rgba();
+        let master_grab = imgui::ImColor32::from_rgba_f32s(0.4, 0.6, 1.0, 1.0).to_rgba();
+        let mut gain = 50;
+        let mut master = 100;
+        let mut mute = false;
+        let mut held = false;
+        for _ in 0..2 {
+            let ui = context.frame();
+            ui.window("Layers").position([0.0, 0.0], imgui::Condition::Always)
+                .size([420.0, 300.0], imgui::Condition::Always).build(|| {
+                let before = ui.clone_style();
+                audio_gain_row(ui, "MultiPCM 1", &mut gain, &mut mute, 50, &mut held);
+                assert_eq!(ui.clone_style().colors, before.colors);
+                ui.slider("Native slider", 0, 800, &mut master);
+            });
+            let data = context.render();
+            let colours: Vec<_> = data.draw_lists().flat_map(|list| {
+                list.idx_buffer().iter().map(|idx| list.vtx_buffer()[*idx as usize].col)
+            }).collect();
+            let marker_at = colours.iter().position(|c| *c == reference).expect("dark blue reference");
+            let grab_at = colours.iter().position(|c| *c == grab).expect("50% opaque grab");
+            let master_at = colours.iter().position(|c| *c == master_grab).expect("unmodified master grab");
+            assert!(marker_at < grab_at && grab_at < master_at);
+        }
+    }
+
+    #[test]
+    fn channel_double_click_resets_only_that_gain_and_survives_held_click() {
+        let _lock = tests::IMGUI_TEST_LOCK.lock().unwrap();
+        let mut context = imgui::Context::create();
+        context.set_ini_filename(None);
+        context.io_mut().display_size = [800.0, 600.0];
+        context.io_mut().delta_time = 1.0 / 60.0;
+        context.fonts().build_rgba32_texture();
+        let (mut gain, mut other, mut master) = (80, 25, 400);
+        let (mut muted, mut other_muted, mut reset_held) = (true, false, false);
+        let mut point = [0.0, 0.0];
+        for frame in 0..7 {
+            if frame >= 2 {
+                context.io_mut().add_mouse_pos_event(point);
+                context.io_mut().add_mouse_button_event(imgui::MouseButton::Left, matches!(frame, 2 | 4 | 5));
+            }
+            let ui = context.frame();
+            ui.window("Double click").position([0.0, 0.0], imgui::Condition::Always)
+                .size([420.0, 300.0], imgui::Condition::Always).build(|| {
+                let origin = ui.cursor_screen_pos();
+                point = [origin[0] + 25.0, origin[1] + 8.0];
+                let changed = audio_gain_row(ui, "MultiPCM 1", &mut gain, &mut muted, 50, &mut reset_held);
+                if frame == 4 { assert!(changed, "reset must be persisted"); }
+                audio_gain_row(ui, "Other", &mut other, &mut other_muted, 30, &mut reset_held);
+                master_volume_slider(ui, &mut master, &mut reset_held);
+            });
+            context.render();
+            if frame == 2 { assert!(gain < 50, "first click adjusts normally"); }
+            if frame >= 4 { assert_eq!(gain, 50, "frame {frame}"); }
+            assert_eq!(other, 25);
+            assert!(muted);
+            assert_eq!(master, 400);
+        }
+    }
+
+    #[test]
+    fn master_double_click_restores_100_without_changing_channels() {
+        let _lock = tests::IMGUI_TEST_LOCK.lock().unwrap();
+        let mut context = imgui::Context::create();
+        context.set_ini_filename(None);
+        context.io_mut().display_size = [800.0, 600.0];
+        context.io_mut().delta_time = 1.0 / 60.0;
+        context.fonts().build_rgba32_texture();
+        let (mut master, mut gain) = (800, 25);
+        let (mut muted, mut reset_held) = (true, false);
+        let mut point = [0.0, 0.0];
+        for frame in 0..7 {
+            if frame >= 2 {
+                context.io_mut().add_mouse_pos_event(point);
+                context.io_mut().add_mouse_button_event(imgui::MouseButton::Left, matches!(frame, 2 | 4 | 5));
+            }
+            let ui = context.frame();
+            ui.window("Master reset").position([0.0, 0.0], imgui::Condition::Always)
+                .size([420.0, 300.0], imgui::Condition::Always).build(|| {
+                let origin = ui.cursor_screen_pos();
+                point = [origin[0] + 150.0, origin[1] + 8.0];
+                let changed = master_volume_slider(ui, &mut master, &mut reset_held);
+                if frame == 4 { assert!(changed, "reset must be persisted"); }
+                audio_gain_row(ui, "MultiPCM 1", &mut gain, &mut muted, 50, &mut reset_held);
+            });
+            context.render();
+            if frame < 2 { assert_eq!(master, 800); }
+            if frame == 2 { assert!(master > 100 && master < 800, "normal adjustment preserves the master range"); }
+            if frame >= 4 { assert_eq!(master, 100, "frame {frame}"); }
+            assert_eq!(gain, 25);
+            assert!(muted);
+        }
+    }
 }
 
 pub struct Gui {
@@ -99,6 +235,7 @@ pub struct Gui {
     /// Set while something else should have the screen to itself.
     suppressed: bool,
     show_settings: bool,
+    audio_gain_reset_held: bool,
     show_input: bool,
     show_debugger: bool,
     show_stats: bool,
@@ -171,6 +308,7 @@ impl Gui {
             visible: true,
             suppressed: false,
             show_settings: false,
+            audio_gain_reset_held: false,
             show_input: false,
             awaiting: None,
             binding_editor: BindingEditor::default(),
@@ -382,6 +520,7 @@ impl Gui {
                 ui,
                 config,
                 self.audio_sources,
+                &mut self.audio_gain_reset_held,
                 &mut show_settings,
                 &mut actions,
             );
@@ -570,10 +709,117 @@ fn library_window(
         });
 }
 
+fn audio_gain_row(
+    ui: &imgui::Ui,
+    label: &str,
+    gain: &mut u32,
+    muted: &mut bool,
+    reference: u32,
+    reset_held: &mut bool,
+) -> bool {
+    let _id = ui.push_id(label);
+    let style = ui.clone_style();
+    // Reserve only the unlabelled checkbox, gaps and widest source name.
+    // Use all remaining width for the aligned channel sliders.
+    let label_width = ["MultiPCM 1", "MultiPCM 2", "FM (YM3438)", "DSB (MPEG)", "SCSP"]
+        .iter().map(|name| ui.calc_text_size(name)[0]).fold(0.0_f32, f32::max);
+    let trailing_width = ui.current_font_size() + 2.0 * style.frame_padding[1]
+        + 2.0 * style.item_spacing[0] + label_width;
+    ui.set_next_item_width((ui.content_region_avail()[0] - trailing_width).max(80.0));
+    let mut changed = audio_gain_slider(ui, gain, reference, tgpulse_core::config::AudioGains::MAX, reset_held);
+    ui.same_line();
+    changed |= ui.checkbox("##mute", muted);
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Mute");
+    }
+    ui.same_line();
+    ui.text(label);
+    changed
+}
+
+fn master_volume_slider(ui: &imgui::Ui, volume: &mut u32, reset_held: &mut bool) -> bool {
+    let _id = ui.push_id("master_volume");
+    let changed = audio_gain_slider(ui, volume, 100, 800, reset_held);
+    ui.same_line();
+    ui.text("Volume %");
+    changed
+}
+
+fn audio_gain_slider(
+    ui: &imgui::Ui,
+    gain: &mut u32,
+    reference: u32,
+    max: u32,
+    reset_held: &mut bool,
+) -> bool {
+    let mut value = (*gain).min(max) as i32;
+    if !ui.is_mouse_down(imgui::MouseButton::Left) {
+        *reset_held = false;
+    }
+    let style = ui.clone_style();
+    let mut changed = false;
+    {
+        let draw = ui.get_window_draw_list();
+        // Separate the frame/reference from ImGui's native grab and text.
+        // This keeps keyboard/numeric editing intact and puts the reference
+        // below the translucent grab, not on top of it.
+        draw.channels_split(2, |channels| {
+            channels.set_current(1);
+            {
+                let _frame = ui.push_style_color(imgui::StyleColor::FrameBg, [0.0; 4]);
+                let _hover = ui.push_style_color(imgui::StyleColor::FrameBgHovered, [0.0; 4]);
+                let _active = ui.push_style_color(imgui::StyleColor::FrameBgActive, [0.0; 4]);
+                let mut grab = style.colors[imgui::StyleColor::SliderGrab as usize];
+                let mut active = style.colors[imgui::StyleColor::SliderGrabActive as usize];
+                grab[3] = 0.5;
+                active[3] = 0.5;
+                let _grab = ui.push_style_color(imgui::StyleColor::SliderGrab, grab);
+                let _grab_active = ui.push_style_color(imgui::StyleColor::SliderGrabActive, active);
+                changed = ui.slider_config("##gain", 0, max as i32)
+                    .display_format("%d%%")
+                    .build(&mut value);
+            }
+            let min = ui.item_rect_min();
+            let end = ui.item_rect_max();
+            let background = style.colors[if ui.is_item_active() {
+                imgui::StyleColor::FrameBgActive
+            } else if ui.is_item_hovered() {
+                imgui::StyleColor::FrameBgHovered
+            } else {
+                imgui::StyleColor::FrameBg
+            } as usize];
+            channels.set_current(0);
+            draw.add_rect(min, end, background).filled(true)
+                .rounding(style.frame_rounding).build();
+            let usable = (end[0] - min[0] - 4.0).max(0.0);
+            let grab = (usable / (max + 1) as f32).max(style.grab_min_size).min(usable);
+            let x = min[0] + 2.0 + grab * 0.5 + (usable - grab) * reference as f32 / max as f32;
+            let reference_colour = [background[0] * 0.55, background[1] * 0.55, background[2] * 0.55, 1.0];
+            draw.add_line([x, min[1]], [x, end[1]], reference_colour).thickness(2.0).build();
+        });
+    }
+    let reset = ui.is_item_hovered() && ui.is_mouse_double_clicked(imgui::MouseButton::Left);
+    if reset {
+        *gain = reference;
+        *reset_held = true;
+        changed = true;
+    } else if *reset_held {
+        // Do not let the second click turn into a drag on following frames.
+        changed = false;
+    } else if changed {
+        *gain = value.clamp(0, max as i32) as u32;
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip_text(format!("Default: {reference}%. Double-click to reset; Ctrl-click to type a value."));
+    }
+    changed
+}
+
 fn settings_window(
     ui: &imgui::Ui,
     config: &mut Config,
     audio_sources: &[AudioSource],
+    audio_gain_reset_held: &mut bool,
     open: &mut bool,
     actions: &mut Vec<Action>,
 ) {
@@ -614,29 +860,27 @@ fn settings_window(
 
             ui.separator();
             ui.text_disabled("Audio");
-            let mut volume = config.volume as i32;
-            if ui.slider("Volume %", 0, 800, &mut volume) {
-                config.volume = volume as u32;
-                changed = true;
-            }
+            changed |= master_volume_slider(ui, &mut config.volume, audio_gain_reset_held);
+            ui.text_disabled("Double-click an audio slider to restore its default.");
             ui.text_disabled("SCSP titles mix quiet; try 400 for Sega Rally.");
             if audio_sources.is_empty() {
                 ui.text_disabled("Load a game to show its audio sources.");
             } else {
                 for source in audio_sources {
-                    let (label, muted) = match source {
+                    let reference = tgpulse_core::config::AudioGains::REFERENCE;
+                    let (label, muted, gain, default) = match source {
                         AudioSource::MultiPcm1 => {
-                            ("Mute MultiPCM 1", &mut config.audio_mutes.multipcm1)
+                            ("MultiPCM 1", &mut config.audio_mutes.multipcm1, &mut config.audio_gains.multipcm1, reference.multipcm1)
                         }
                         AudioSource::MultiPcm2 => {
-                            ("Mute MultiPCM 2", &mut config.audio_mutes.multipcm2)
+                            ("MultiPCM 2", &mut config.audio_mutes.multipcm2, &mut config.audio_gains.multipcm2, reference.multipcm2)
                         }
-                        AudioSource::Scsp => ("Mute SCSP", &mut config.audio_mutes.scsp),
-                        AudioSource::Ym3438 => ("Mute FM (YM3438)", &mut config.audio_mutes.ym3438),
+                        AudioSource::Scsp => ("SCSP", &mut config.audio_mutes.scsp, &mut config.audio_gains.scsp, reference.scsp),
+                        AudioSource::Ym3438 => ("FM (YM3438)", &mut config.audio_mutes.ym3438, &mut config.audio_gains.ym3438, reference.ym3438),
+                        AudioSource::Dsb => ("DSB (MPEG)", &mut config.audio_mutes.dsb, &mut config.audio_gains.dsb, reference.dsb),
                     };
-                    changed |= ui.checkbox(label, muted);
+                    changed |= audio_gain_row(ui, label, gain, muted, default, audio_gain_reset_held);
                 }
-                ui.text_disabled("Mute output only; sound hardware keeps running.");
             }
 
             ui.separator();
@@ -663,6 +907,7 @@ fn settings_window(
                 config.fullscreen = shipped.fullscreen;
                 config.volume = shipped.volume;
                 config.audio_mutes = shipped.audio_mutes;
+                config.audio_gains = shipped.audio_gains;
                 config.rumble = shipped.rumble;
                 config.cabinet = shipped.cabinet;
                 changed = true;

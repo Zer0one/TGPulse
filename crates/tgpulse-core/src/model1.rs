@@ -12,6 +12,31 @@ use crate::config::{Config, Inputs};
 use crate::loader::Model1Roms;
 use crate::sound::SoundSystem;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Error {
+    IoBoard(crate::model1io2::BusError),
+    Dsb(crate::dsbz80::Error),
+}
+impl From<crate::model1io2::BusError> for Error {
+    fn from(e: crate::model1io2::BusError) -> Self {
+        Self::IoBoard(e)
+    }
+}
+impl From<crate::dsbz80::Error> for Error {
+    fn from(e: crate::dsbz80::Error) -> Self {
+        Self::Dsb(e)
+    }
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IoBoard(e) => e.fmt(f),
+            Self::Dsb(e) => e.fmt(f),
+        }
+    }
+}
+impl std::error::Error for Error {}
+
 pub const CPU_HZ: u32 = 16_000_000;
 pub const CYCLES_PER_FRAME: i32 = 656 * 424;
 
@@ -129,14 +154,11 @@ impl Model1System {
         (self.nvram.len(), self.ioboard.eeprom().data.len() * 2)
     }
 
-    pub fn new(roms: &Model1Roms) -> Result<Self, crate::model1io2::BusError> {
+    pub fn new(roms: &Model1Roms) -> Result<Self, Error> {
         Self::with_config(roms, Config::default())
     }
 
-    pub fn with_config(
-        roms: &Model1Roms,
-        config: Config,
-    ) -> Result<Self, crate::model1io2::BusError> {
+    pub fn with_config(roms: &Model1Roms, config: Config) -> Result<Self, Error> {
         let mut video = crate::model1_video::Model1VideoState::new();
         video.smooth_shadows = config.smooth_shadows;
         // The 93C45 on the I/O board holds the operator settings. The romset
@@ -150,6 +172,18 @@ impl Model1System {
             }
         }
         let ioboard = crate::model1board::IoBoard::new(roms.ioboard_kind, &roms.iocpu, eeprom)?;
+        let mut sound = if let Some(dsb) = &roms.dsb {
+            SoundSystem::with_dsb_audio(
+                roms.sndcpu.clone(),
+                roms.mpcm1.clone(),
+                roms.mpcm2.clone(),
+                &dsb.firmware,
+                dsb.mpeg.clone(),
+            )?
+        } else {
+            SoundSystem::new(roms.sndcpu.clone(), roms.mpcm1.clone(), roms.mpcm2.clone())
+        };
+        sound.set_mutes(config.audio_mutes);
 
         // Battery-backed work RAM (RAMA). Use a shipped factory image when present
         // (NetMerc); otherwise retain our zero-filled boot state. Games initialise bytes
@@ -181,7 +215,7 @@ impl Model1System {
             v60_access_active: false,
             v60_wait_cycles: 0,
 
-            sound: SoundSystem::new(roms.sndcpu.clone(), roms.mpcm1.clone(), roms.mpcm2.clone()),
+            sound,
             inputs: Inputs::default(),
             drive_cmd: 0,
             config,
@@ -230,9 +264,12 @@ impl Model1System {
         })
     }
 
-    pub fn run_slice(&mut self, cycles: i32) -> Result<(), crate::model1io2::BusError> {
+    pub fn run_slice(&mut self, cycles: i32) -> Result<(), Error> {
         if let Some(error) = self.ioboard.fault() {
-            return Err(error);
+            return Err(error.into());
+        }
+        if let Some(error) = self.sound.dsb_fault() {
+            return Err(error.into());
         }
         const QUANTUM: i32 = 64;
 
@@ -273,6 +310,9 @@ impl Model1System {
 
             self.advance_timers(step as u32);
             self.sound.run(step, CPU_HZ);
+            if let Some(error) = self.sound.dsb_fault() {
+                return Err(error.into());
+            }
             // sound_ready_w: the M1 audio UART's ready lines
             // raise IRQ level 3 while unmasked -- vf's sound-queue pump lives
             // in that handler and the game hangs in its boot without it.
@@ -287,7 +327,7 @@ impl Model1System {
         Ok(())
     }
 
-    pub fn run_frame(&mut self) -> Result<(), crate::model1io2::BusError> {
+    pub fn run_frame(&mut self) -> Result<(), Error> {
         self.run_slice(CYCLES_PER_FRAME)?;
         self.trigger_vblank();
         Ok(())
@@ -882,6 +922,7 @@ mod persistence_tests {
 
     fn empty_roms() -> Model1Roms {
         Model1Roms {
+            dsb: None,
             ioboard_kind: crate::model1board::Kind::Original,
             nvram_default: vec![],
             maincpu: vec![],
@@ -895,6 +936,24 @@ mod persistence_tests {
             mpcm2: vec![],
             ioboard_config: vec![],
         }
+    }
+
+    #[test]
+    fn dsb_resources_select_board_and_fault_reaches_machine_caller() {
+        let mut roms = empty_roms();
+        assert!(Model1System::new(&roms).unwrap().sound.board.dsb.is_none());
+        roms.dsb = Some(crate::loader::DsbRoms {
+            firmware: vec![0; crate::dsbz80::FIRMWARE_SIZE],
+            mpeg: vec![0; 0x400000],
+        });
+        let mut sys = Model1System::new(&roms).unwrap();
+        let d = sys.sound.board.dsb.as_mut().unwrap();
+        d.sender_write(1);
+        d.sender_write(2);
+        assert_eq!(
+            sys.run_slice(0),
+            Err(Error::Dsb(crate::dsbz80::Error::TransmitFull))
+        );
     }
 
     #[test]

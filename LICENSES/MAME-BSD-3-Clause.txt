@@ -1,4 +1,9 @@
 MAME reference implementations adapted in:
+  crates/tgpulse-core/src/mpeg.rs and mpeg/tables.rs — copyright-holder
+    Olivier Galibert
+  crates/tgpulse-core/src/dsbz80.rs — copyright-holders R. Belmont,
+    Olivier Galibert
+  crates/tgpulse-core/src/dsbz80/uart.rs — copyright-holder smf
   crates/tgpulse-core/src/sega3155338.rs — copyright-holder Dirk Best
   crates/tgpulse-core/src/msm6253.rs — copyright-holder AJR
   crates/tgpulse-core/src/model1io2.rs — copyright-holder Dirk Best
@@ -10,7 +15,7 @@ MAME reference implementations adapted in:
   crates/tgpulse-core/src/z80sio.rs — copyright-holders Curt Coder,
     Joakim Larsson Edstrom
 
-Copyright holders: Dirk Best, AJR, hap, Juergen Buchmueller, Wilbert Pol,
+Copyright holders: R. Belmont, Olivier Galibert, smf, Dirk Best, AJR, hap, Juergen Buchmueller, Wilbert Pol,
 Tatsuyuki Satoh, Curt Coder, Joakim Larsson Edstrom
 (respective components above).
 

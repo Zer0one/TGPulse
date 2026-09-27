@@ -121,6 +121,7 @@ impl Session {
         };
         session.load_nvram();
         session.set_audio_mutes(config.audio_mutes);
+        session.set_audio_gains(config.audio_gains);
         log::info!(target: "app", "{} ({:?} controls)", session.title, session.scheme);
         Ok((session, config))
     }
@@ -147,7 +148,7 @@ impl Session {
 
     fn audio_sources(&self) -> &'static [tgpulse_core::sound::AudioSource] {
         match &self.machine {
-            Machine::Model1(_) => tgpulse_core::sound::MULTIPCM_SOURCES,
+            Machine::Model1(sys) => sys.sound.sources(),
             Machine::Model2(sys) => sys.sound.sources(),
         }
     }
@@ -156,6 +157,13 @@ impl Session {
         match &mut self.machine {
             Machine::Model1(sys) => sys.sound.set_mutes(mutes),
             Machine::Model2(sys) => sys.sound.set_mutes(mutes),
+        }
+    }
+
+    fn set_audio_gains(&mut self, gains: tgpulse_core::config::AudioGains) {
+        match &mut self.machine {
+            Machine::Model1(sys) => sys.sound.set_gains(gains),
+            Machine::Model2(sys) => sys.sound.set_gains(gains),
         }
     }
 
@@ -741,6 +749,7 @@ impl App {
         // Output preferences belong to the frontend, not to machine snapshots.
         if let Some(session) = &mut self.session {
             session.set_audio_mutes(self.config.audio_mutes);
+            session.set_audio_gains(self.config.audio_gains);
         }
     }
 
@@ -930,6 +939,7 @@ impl App {
                     if let Some(session) = &mut self.session {
                         session.audio.set_volume(self.config.volume);
                         session.set_audio_mutes(self.config.audio_mutes);
+                        session.set_audio_gains(self.config.audio_gains);
                         session.input.enable_rumble(self.config.rumble);
                     }
                     // Supersampling and the widescreen framing shape the
