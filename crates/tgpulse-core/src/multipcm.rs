@@ -179,20 +179,36 @@ impl MultiPcm {
     /// Restore without replaying register writes, retriggering voices or
     /// replacing immutable ROM/rate-derived lookup tables.
     pub fn restore(&mut self, state: &State) -> Result<(), &'static str> {
-        if state.rate.to_bits() != self.rate.to_bits() {
-            return Err("MultiPCM snapshot clock mismatch");
-        }
-        if state.bank > 3 || state.cur_slot >= VOICES || state.address > 7
-            || state.slots.iter().any(|s| s.pitch_lfo.scale_sel >= 8 || s.amplitude_lfo.scale_sel >= 8)
-        {
-            return Err("invalid MultiPCM snapshot selectors");
-        }
+        self.validate_state(state)?;
         self.bank = state.bank;
         self.slots = state.slots;
         self.cur_slot = state.cur_slot;
         self.address = state.address;
         self.writes = state.writes;
         self.key_ons = state.key_ons;
+        Ok(())
+    }
+
+    pub(crate) fn validate_state(&self, state: &State) -> Result<(), &'static str> {
+        if state.rate.to_bits() != self.rate.to_bits() {
+            return Err("MultiPCM snapshot clock mismatch");
+        }
+        if state.bank > 3
+            || state.cur_slot >= VOICES
+            || state.address > 7
+            || state.slots.iter().any(|s| {
+                s.pitch_lfo.scale_sel >= 8
+                    || s.amplitude_lfo.scale_sel >= 8
+                    || s.pitch >= 0x400
+                    || s.octave >= 16
+                    || s.pan >= 16
+                    || s.lfo_frequency >= 8
+                    || s.vibrato >= 8
+                    || s.tremolo >= 8
+            })
+        {
+            return Err("invalid MultiPCM snapshot selectors");
+        }
         Ok(())
     }
 
@@ -651,5 +667,105 @@ impl MultiPcm {
             self.slots[sl] = slot;
         }
         (smpl, smpr)
+    }
+}
+
+#[cfg(test)]
+mod state_tests {
+    use super::*;
+
+    fn reg(chip: &mut MultiPcm, address: u8, value: u8) {
+        chip.write(2, address);
+        chip.write(0, value);
+    }
+
+    fn fixture(packed: bool) -> MultiPcm {
+        let mut rom = vec![0; 0x300000];
+        // Instrument zero in banked ROM: 64-sample loop, immediate attack,
+        // sustained envelope, release enabled, pitch and amplitude LFOs.
+        rom[..12].copy_from_slice(&[
+            if packed { 0x50 } else { 0x10 }, 1, 0, 0, 0, 0xff, 0xc0,
+            0x2b, 0xf0, 0, 0xfe, 3,
+        ]);
+        for i in 0..96 {
+            rom[0x200100 + i] = (i as i16 * 7 - 96) as u8;
+        }
+        let mut chip = MultiPcm::new(rom, 10_000_000.0);
+        chip.set_bank(2);
+        for (r, v) in [(0, 0x20), (1, 0), (2, 0x54), (3, 0x10), (5, 1), (4, 0x80)] {
+            reg(&mut chip, r, v);
+        }
+        // Exercise in-flight total-level interpolation, not only fixed gain.
+        reg(&mut chip, 5, 40);
+        chip
+    }
+
+    fn bytes(chip: &MultiPcm) -> Vec<u8> {
+        bincode::serialize(&chip.snapshot()).unwrap()
+    }
+
+    #[test]
+    fn serialized_active_voice_restores_samples_lfos_loop_and_release() {
+        for packed in [false, true] {
+            let mut original = fixture(packed);
+            for _ in 0..137 { original.generate(); }
+            assert!(original.slots[0].playing);
+            assert_ne!(original.slots[0].offset, 0);
+            assert_ne!(original.slots[0].pitch_lfo.phase, 0);
+            assert_ne!(original.slots[0].amplitude_lfo.phase, 0);
+            let blob = bytes(&original);
+            assert!(blob.len() < 16384, "ROM and lookup tables must not be stored");
+            let state: State = bincode::deserialize(&blob).unwrap();
+            let mut restored = fixture(packed);
+            restored.set_bank(0);
+            reg(&mut restored, 4, 0);
+            restored.restore(&state).unwrap();
+            assert_eq!(bytes(&restored), blob, "restore must not replay writes/key-on");
+            let mut nonzero = false;
+            for index in 0..4096 {
+                if index == 1024 {
+                    reg(&mut original, 4, 0);
+                    reg(&mut restored, 4, 0);
+                    assert!(matches!(original.slots[0].envelope.state, EgState::Release));
+                    // Round-trip again while the envelope is releasing.
+                    let release: State = bincode::deserialize(&bytes(&original)).unwrap();
+                    restored.restore(&release).unwrap();
+                }
+                let expected = original.generate();
+                nonzero |= expected != (0, 0);
+                assert_eq!(restored.generate(), expected, "packed={packed} sample={index}");
+            }
+            assert!(nonzero);
+            assert_eq!(bytes(&original), bytes(&restored));
+        }
+    }
+
+    #[test]
+    fn invalid_snapshot_rejection_is_atomic() {
+        let mut chip = fixture(false);
+        for _ in 0..73 { chip.generate(); }
+        let before = bytes(&chip);
+        for field in 0..11 {
+            let mut bad = chip.snapshot();
+            match field {
+                0 => bad.rate = f32::NAN,
+                1 => bad.bank = 4,
+                2 => bad.cur_slot = VOICES,
+                3 => bad.address = 8,
+                4 => bad.slots[0].pitch_lfo.scale_sel = 8,
+                5 => bad.slots[0].amplitude_lfo.scale_sel = 8,
+                6 => bad.slots[0].pitch = 0x400,
+                7 => bad.slots[0].octave = 16,
+                8 => bad.slots[0].lfo_frequency = 8,
+                9 => bad.slots[0].vibrato = 8,
+                _ => bad.slots[0].tremolo = 8,
+            }
+            assert!(chip.restore(&bad).is_err());
+            assert_eq!(bytes(&chip), before, "rejected field {field} changed state");
+        }
+        let mut wrong_clock = MultiPcm::new(vec![], 8_000_000.0);
+        let before = bytes(&wrong_clock);
+        assert!(wrong_clock.restore(&chip.snapshot()).is_err());
+        assert_eq!(bytes(&wrong_clock), before);
     }
 }

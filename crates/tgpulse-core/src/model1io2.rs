@@ -45,7 +45,7 @@ impl std::fmt::Display for BusError {
             Self::UnimplementedPort(port) => {
                 write!(f, "TMPZ84C015 device at port {port:02X} is not implemented")
             }
-            Self::InvalidSnapshot => write!(f, "invalid I/O board 2 bus snapshot"),
+            Self::InvalidSnapshot => write!(f, "invalid Model 1 I/O board snapshot"),
             Self::MissingInterruptSource => {
                 write!(f, "interrupt acknowledged without a pending source")
             }
@@ -185,11 +185,16 @@ impl Bus {
     }
 
     pub fn restore(&mut self, state: &BusState) -> Result<(), BusError> {
+        self.validate_state(state)?;
+        self.state = state.clone();
+        Ok(())
+    }
+
+    pub(crate) fn validate_state(&self, state: &BusState) -> Result<(), BusError> {
         if !state.cpu_peripherals.valid_state() || state.r360.is_some() != self.state.r360.is_some()
         {
             return Err(BusError::InvalidSnapshot);
         }
-        self.state = state.clone();
         Ok(())
     }
 

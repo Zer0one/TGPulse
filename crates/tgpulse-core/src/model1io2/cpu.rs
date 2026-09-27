@@ -223,7 +223,7 @@ impl IoBoard {
             fault: self.cpu.io.fault.get(),
         }
     }
-    pub fn restore(&mut self, state: &BoardState) -> Result<(), BusError> {
+    pub(crate) fn validate_state(&self, state: &BoardState) -> Result<(), BusError> {
         // Validate every component before changing anything. Callbacks and
         // firmware are owned by this instance, not deserialized from the state.
         if !state.cpu.is_valid()
@@ -233,6 +233,10 @@ impl IoBoard {
         {
             return Err(BusError::InvalidSnapshot);
         }
+        self.cpu.io.bus.borrow().validate_state(&state.bus)
+    }
+    pub fn restore(&mut self, state: &BoardState) -> Result<(), BusError> {
+        self.validate_state(state)?;
         self.cpu.io.bus.borrow_mut().restore(&state.bus)?;
         assert!(self.cpu.restore(&state.cpu));
         self.cycle_debt = state.cycle_debt;

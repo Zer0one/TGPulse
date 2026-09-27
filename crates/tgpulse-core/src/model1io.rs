@@ -58,7 +58,76 @@ pub struct IoBoard {
     cycle_debt: i64,
 }
 
+/// Mutable board state captured between run calls. Firmware is supplied by the
+/// owner and must match on restore; this is not a versioned machine/file format.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct BoardState {
+    cpu: z80::CpuState,
+    #[serde(with = "serde_big_array::BigArray")]
+    ram: [u8; 0x2000],
+    dpram: Vec<u8>,
+    io: Chip5338,
+    adc: Adc,
+    inputs: Inputs,
+    eeprom: Eeprom93c46,
+    drive_cmd: u8,
+    outputs: u8,
+    secondary_controls: bool,
+    cycle_debt: i64,
+}
+
 impl IoBoard {
+    pub fn snapshot(&self) -> BoardState {
+        let bus = &self.cpu.io;
+        BoardState {
+            cpu: self.cpu.snapshot(),
+            ram: bus.ram,
+            dpram: bus.dpram.clone(),
+            io: bus.io.clone(),
+            adc: bus.adc.clone(),
+            inputs: bus.inputs,
+            eeprom: bus.eeprom.clone(),
+            drive_cmd: bus.drive_cmd,
+            outputs: bus.outputs,
+            secondary_controls: bus.secondary_controls,
+            cycle_debt: self.cycle_debt,
+        }
+    }
+
+    /// Reject malformed state before mutation. Copy latches directly: replaying
+    /// port writes could clock the EEPROM or start a new DPRAM transfer. EEPROM
+    /// contents/dirty state are restored in memory only; no persistence callback.
+    pub fn restore(&mut self, state: &BoardState) -> Result<(), &'static str> {
+        self.validate_state(state)?;
+        self.restore_validated(state);
+        Ok(())
+    }
+
+    pub(crate) fn validate_state(&self, state: &BoardState) -> Result<(), &'static str> {
+        if !state.cpu.is_valid()
+            || state.dpram.len() != DPRAM_SIZE
+            || !(-(u32::MAX as i64)..=0).contains(&state.cycle_debt)
+        {
+            return Err("invalid original Model 1 I/O board snapshot");
+        }
+        Ok(())
+    }
+
+    fn restore_validated(&mut self, state: &BoardState) {
+        assert!(self.cpu.restore(&state.cpu));
+        let bus = &mut self.cpu.io;
+        bus.ram = state.ram;
+        bus.dpram.clone_from(&state.dpram);
+        bus.io = state.io.clone();
+        bus.adc = state.adc.clone();
+        bus.inputs = state.inputs;
+        bus.eeprom = state.eeprom.clone();
+        bus.drive_cmd = state.drive_cmd;
+        bus.outputs = state.outputs;
+        bus.secondary_controls = state.secondary_controls;
+        self.cycle_debt = state.cycle_debt;
+    }
+
     /// Builds the board. Without firmware there is no board: the caller is
     /// expected to have loaded the romset's `iocpu` region.
     pub fn new(firmware: &[u8], eeprom: Eeprom93c46) -> Self {
@@ -158,6 +227,156 @@ impl Z80_io for Board {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn encoded(board: &IoBoard) -> Vec<u8> {
+        bincode::serialize(&board.snapshot()).unwrap()
+    }
+
+    fn restored(board: &IoBoard, firmware: &[u8]) -> IoBoard {
+        let saved = bincode::deserialize(&encoded(board)).unwrap();
+        let mut other = IoBoard::new(firmware, Eeprom93c46::new());
+        other.restore(&saved).unwrap();
+        assert_eq!(encoded(board), encoded(&other));
+        other
+    }
+
+    #[test]
+    fn snapshot_preserves_cpu_bus_and_instruction_debt_across_run_partitions() {
+        let program = [
+            0x21, 0, 0x40, // HL = RAM
+            0x34, // INC (HL)
+            0x3a, 1, 0x80, // IN0
+            0x32, 1, 0x40, // -> RAM
+            0x32, 4, 0x80, // -> drive
+            0xc3, 3, 0, // repeat
+        ];
+        let mut first = IoBoard::new(&program, Eeprom93c46::new());
+        first.set_inputs(Inputs {
+            in0: 0xa5,
+            ..Inputs::default()
+        });
+        first.cpu.io.write_byte(0x8008, 2);
+        first.dpram_mut()[0x21] = 0x92;
+        first.run(25);
+        assert!(first.cycle_debt < 0);
+        let mut second = restored(&first, &program);
+        first.run(10_003);
+        for _ in 0..10_003 {
+            second.run(1);
+        }
+        assert_eq!(encoded(&first), encoded(&second));
+        assert_eq!(second.cpu.io.ram[1], 0xa5);
+        assert_eq!(second.drive_cmd(), 0xa5);
+        assert_eq!(second.dpram()[0x21], 0x92);
+        // Restoring the device does not replace the owner's immutable firmware.
+        let mut different = IoBoard::new(&[0xc9], Eeprom93c46::new());
+        different.restore(&first.snapshot()).unwrap();
+        assert_eq!(different.cpu.io.read_byte(0), 0xc9);
+    }
+
+    #[test]
+    fn snapshot_resumes_adc_eeprom_and_pending_host_transfer_without_port_replay() {
+        let mut first = IoBoard::new(&[0x76], Eeprom93c46::new());
+        first.set_inputs(Inputs {
+            steer: 0xb6,
+            ..Inputs::default()
+        });
+        first.cpu.io.write_byte(0xc000, 0);
+        for expected in [1, 0, 1] {
+            assert_eq!(first.cpu.io.read_byte(0xc000), expected);
+        }
+        first.eeprom_mut().data[7] = 0xa635;
+        first.cpu.io.write_byte(0x8008, 0x40);
+        eeprom_bits(&mut first.cpu.io, 0x187, 9);
+        for _ in 0..5 {
+            eeprom_bits(&mut first.cpu.io, 0, 1);
+        }
+        // Stage a host address and data byte, but do not issue the transfer yet.
+        for (reg, value) in [(10, 0x23), (9, 0), (10, 0xf9), (9, 1), (10, 0x5e)] {
+            first.cpu.io.write_byte(0x8000 + reg, value);
+        }
+        first.dpram_mut()[0x123] = 0xa9;
+        first.run(1); // halted CPU with instruction overshoot
+        let mut second = restored(&first, &[0x76]);
+        for expected in [1, 0, 1, 1, 0, 0] {
+            assert_eq!(first.cpu.io.read_byte(0xc000), expected);
+            assert_eq!(second.cpu.io.read_byte(0xc000), expected);
+        }
+        for bit in (0..11).rev() {
+            for b in [&mut first, &mut second] {
+                eeprom_bits(&mut b.cpu.io, 0, 1);
+                assert_eq!(
+                    b.cpu.io.read_byte(0x8006) >> 7,
+                    ((0xa635u16 >> bit) & 1) as u8
+                );
+            }
+        }
+        for b in [&mut first, &mut second] {
+            assert!(!b.eeprom().dirty);
+            assert_eq!(b.dpram()[0x123], 0xa9);
+            b.cpu.io.write_byte(0x8009, 7);
+            assert_eq!(b.dpram()[0x123], 0x5e);
+            b.run(133);
+        }
+        assert_eq!(encoded(&first), encoded(&second));
+    }
+
+    #[test]
+    fn snapshot_resumes_partial_eeprom_command_and_write_in_memory() {
+        let mut first = IoBoard::new(&[0x76], Eeprom93c46::new());
+        eeprom_bits(&mut first.cpu.io, 0x130, 9); // unlock
+        first.cpu.io.write_byte(0x8000, 0);
+        eeprom_bits(&mut first.cpu.io, 0x147 >> 4, 5); // partial WRITE command
+        let mut second = restored(&first, &[0x76]);
+        for b in [&mut first, &mut second] {
+            eeprom_bits(&mut b.cpu.io, 0x147 & 0xf, 4);
+            eeprom_bits(&mut b.cpu.io, 0xa635 >> 9, 7); // partial data
+            assert_eq!(b.eeprom().data[7], 0xffff);
+            assert!(!b.eeprom().dirty);
+        }
+        assert_eq!(encoded(&first), encoded(&second));
+        let saved = first.snapshot();
+        second.run(100); // discard a different CPU timeline on restore
+        second.eeprom_mut().data[7] = 0;
+        second.eeprom_mut().dirty = true;
+        second.restore(&saved).unwrap();
+        assert_eq!(encoded(&first), encoded(&second));
+        for b in [&mut first, &mut second] {
+            eeprom_bits(&mut b.cpu.io, 0xa635 & 0x1ff, 9);
+            assert_eq!(b.eeprom().data[7], 0xa635);
+            assert!(b.eeprom().dirty);
+        }
+        assert_eq!(encoded(&first), encoded(&second));
+    }
+
+    #[test]
+    fn malformed_snapshots_do_not_change_cpu_bus_or_outputs() {
+        let mut board = IoBoard::new(&[0x76], Eeprom93c46::new());
+        board.run(1);
+        board.cpu.io.write_byte(0x8004, 0x12);
+        board.cpu.io.write_byte(0x8005, 0x34);
+        board.cpu.io.write_byte(0x8000, 1);
+        board.dpram_mut()[0x21] = 0x92;
+        let before = encoded(&board);
+        for case in 0..5 {
+            let mut saved = board.snapshot();
+            match case {
+                0 => saved.cpu.interrupt_mode = 3,
+                1 => {
+                    saved.dpram.pop();
+                }
+                2 => saved.dpram.push(0),
+                3 => saved.cycle_debt = 1,
+                _ => saved.cycle_debt = -(u32::MAX as i64) - 1,
+            }
+            assert!(board.restore(&saved).is_err());
+            assert_eq!(encoded(&board), before);
+        }
+        let second = restored(&board, &[0x76]);
+        assert_eq!(second.drive_cmd(), 0x12);
+        assert_eq!(second.cpu.io.outputs, 0x34);
+        assert!(second.cpu.io.secondary_controls);
+    }
 
     #[test]
     fn shared_z80_preserves_board_io_and_fractional_run_budget() {

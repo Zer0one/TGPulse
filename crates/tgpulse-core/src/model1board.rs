@@ -57,12 +57,19 @@ pub struct IoBoard {
     clock_remainder: u64,
 }
 
-/// Advanced-board state at the motherboard boundary, including the fractional
-/// V60-to-board clock conversion. Not a complete Model 1 machine save state.
+/// Board state at the motherboard boundary, including the fractional V60 clock
+/// conversion. Restore with the same firmware/cabinet. No host resources or ROM;
+/// this is not a versioned format or a complete Model 1 machine save state.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct AdvancedState {
-    board: model1io2::BoardState,
+pub struct BoardState {
+    board: DeviceState,
     clock_remainder: u64,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+enum DeviceState {
+    Original(model1io::BoardState),
+    Advanced(model1io2::BoardState),
 }
 
 impl IoBoard {
@@ -169,23 +176,38 @@ impl IoBoard {
             Device::Advanced(board) => board.eeprom_mut(),
         }
     }
-    pub fn advanced_snapshot(&self) -> Option<AdvancedState> {
-        match &self.device {
-            Device::Advanced(board) => Some(AdvancedState {
-                board: board.snapshot(),
-                clock_remainder: self.clock_remainder,
-            }),
-            Device::Original(_) => None,
+    pub fn snapshot(&self) -> BoardState {
+        BoardState {
+            board: match &self.device {
+                Device::Original(board) => DeviceState::Original(board.snapshot()),
+                Device::Advanced(board) => DeviceState::Advanced(board.snapshot()),
+            },
+            clock_remainder: self.clock_remainder,
         }
     }
-    pub fn restore_advanced(&mut self, state: &AdvancedState) -> Result<(), model1io2::BusError> {
+    pub(crate) fn validate_state(&self, state: &BoardState) -> Result<(), model1io2::BusError> {
         if state.clock_remainder >= u64::from(crate::model1::V60_HZ) {
             return Err(model1io2::BusError::InvalidSnapshot);
         }
-        let Device::Advanced(board) = &mut self.device else {
-            return Err(model1io2::BusError::InvalidSnapshot);
-        };
-        board.restore(&state.board)?;
+        match (&self.device, &state.board) {
+            (Device::Original(board), DeviceState::Original(saved)) => board
+                .validate_state(saved)
+                .map_err(|_| model1io2::BusError::InvalidSnapshot),
+            (Device::Advanced(board), DeviceState::Advanced(saved)) => board.validate_state(saved),
+            _ => Err(model1io2::BusError::InvalidSnapshot),
+        }
+    }
+    pub fn restore(&mut self, state: &BoardState) -> Result<(), model1io2::BusError> {
+        self.validate_state(state)?;
+        // Both board restores validate before mutation, including the advanced
+        // board's R360 variant. Never reconstruct/reset a board to restore it.
+        match (&mut self.device, &state.board) {
+            (Device::Original(board), DeviceState::Original(saved)) => board
+                .restore(saved)
+                .map_err(|_| model1io2::BusError::InvalidSnapshot)?,
+            (Device::Advanced(board), DeviceState::Advanced(saved)) => board.restore(saved)?,
+            _ => return Err(model1io2::BusError::InvalidSnapshot),
+        }
         self.clock_remainder = state.clock_remainder;
         Ok(())
     }
@@ -227,28 +249,61 @@ mod tests {
     }
     #[test]
     fn fractional_clocks_and_restore_preserve_equal_continuation() {
-        let program = [0x21, 0, 0xe0, 0x34, 0xc3, 3, 0]; // INC (E000), JP
-        let mut whole = advanced(&program);
-        let mut sliced = advanced(&program);
-        whole.run_main_cycles(20_001, Inputs::default()).unwrap();
-        for _ in 0..20_001 {
-            sliced.run_main_cycles(1, Inputs::default()).unwrap();
+        for kind in [Kind::Original, Kind::WingWar, Kind::WingWarR360] {
+            let ram_hi = if kind == Kind::Original { 0x40 } else { 0xe0 };
+            let program = [0x21, 0, ram_hi, 0x34, 0xc3, 3, 0]; // INC (RAM), JP
+            let mut firmware = vec![0; 0x10000];
+            firmware[..program.len()].copy_from_slice(&program);
+            let make = || IoBoard::new(kind, &firmware, Eeprom93c46::new()).unwrap();
+            let mut whole = make();
+            let mut sliced = make();
+            // Constructor boot seeds are not reapplied on restore.
+            whole.dpram_mut()[0x21] = 0x92;
+            sliced.dpram_mut()[0x21] = 0x92;
+            whole.run_main_cycles(20_001, Inputs::default()).unwrap();
+            for _ in 0..20_001 {
+                sliced.run_main_cycles(1, Inputs::default()).unwrap();
+            }
+            let encode = |b: &IoBoard| bincode::serialize(&b.snapshot()).unwrap();
+            assert_eq!(encode(&whole), encode(&sliced));
+            let state: BoardState = bincode::deserialize(&encode(&whole)).unwrap();
+            assert_ne!(state.clock_remainder, 0);
+            let mut restored = make();
+            restored.run_main_cycles(7, Inputs::default()).unwrap();
+            restored.restore(&state).unwrap();
+            assert_eq!(encode(&whole), encode(&restored));
+            assert_eq!(restored.dpram()[0x21], 0x92);
+            whole.run_main_cycles(31_337, Inputs::default()).unwrap();
+            for _ in 0..31_337 {
+                restored.run_main_cycles(1, Inputs::default()).unwrap();
+            }
+            assert_eq!(encode(&whole), encode(&restored));
+            let before = encode(&restored);
+            let mut invalid = state;
+            invalid.clock_remainder = u64::from(crate::model1::V60_HZ);
+            assert!(restored.restore(&invalid).is_err());
+            assert_eq!(encode(&restored), before);
         }
-        let encode = |b: &IoBoard| bincode::serialize(&b.advanced_snapshot().unwrap()).unwrap();
-        assert_eq!(encode(&whole), encode(&sliced));
-        let state = whole.advanced_snapshot().unwrap();
-        assert_ne!(state.clock_remainder, 0);
-        let mut restored = advanced(&program);
-        restored.restore_advanced(&state).unwrap();
-        for b in [&mut whole, &mut restored] {
-            b.run_main_cycles(31_337, Inputs::default()).unwrap();
+    }
+    #[test]
+    fn restore_rejects_other_board_revisions_without_mutation() {
+        let firmware = vec![0x76; 0x10000];
+        for kind in [Kind::Original, Kind::WingWar, Kind::WingWarR360] {
+            let mut board = IoBoard::new(kind, &firmware, Eeprom93c46::new()).unwrap();
+            board.run_main_cycles(1337, Inputs::default()).unwrap();
+            let before = bincode::serialize(&board.snapshot()).unwrap();
+            for other in [Kind::Original, Kind::WingWar, Kind::WingWarR360] {
+                if kind == other {
+                    continue;
+                }
+                let wrong = IoBoard::new(other, &firmware, Eeprom93c46::new()).unwrap();
+                assert_eq!(
+                    board.restore(&wrong.snapshot()),
+                    Err(model1io2::BusError::InvalidSnapshot)
+                );
+                assert_eq!(bincode::serialize(&board.snapshot()).unwrap(), before);
+            }
         }
-        assert_eq!(encode(&whole), encode(&restored));
-        let before = encode(&restored);
-        let mut invalid = state;
-        invalid.clock_remainder = u64::from(crate::model1::V60_HZ);
-        assert!(restored.restore_advanced(&invalid).is_err());
-        assert_eq!(encode(&restored), before);
     }
     #[test]
     fn panel_channels_reach_board_without_new_bindings() {
@@ -284,11 +339,8 @@ mod tests {
     fn board_fault_stops_later_clock_and_bus_effects() {
         let mut board = advanced(&[0x3e, 0x8f, 0xd3, 0x1d]); // unsupported PIO mode 2
         let error = board.run_main_cycles(1000, Inputs::default()).unwrap_err();
-        let before = bincode::serialize(&board.advanced_snapshot().unwrap()).unwrap();
+        let before = bincode::serialize(&board.snapshot()).unwrap();
         assert_eq!(board.run_main_cycles(1000, Inputs::default()), Err(error));
-        assert_eq!(
-            bincode::serialize(&board.advanced_snapshot().unwrap()).unwrap(),
-            before
-        );
+        assert_eq!(bincode::serialize(&board.snapshot()).unwrap(), before);
     }
 }

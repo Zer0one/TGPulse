@@ -7,6 +7,9 @@
 use crate::model1::Model1System;
 use crate::tilemap::{SCREEN_H, SCREEN_W};
 
+mod state;
+pub use state::VideoState;
+
 const TGP_RAM_BASE: u32 = 0x40000;
 const TGP_RAM_WORDS: usize = 0x100000 - TGP_RAM_BASE as usize;
 const POLY_RAM_WORDS: usize = 0x400000;
@@ -14,7 +17,7 @@ const MOIRE: u32 = 0x0100_0000;
 const FRAC_SHIFT: i32 = 16;
 const MAX_LIST_COMMANDS: usize = 20_000;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct LightParam {
     diffuse: f32,
     ambient: f32,

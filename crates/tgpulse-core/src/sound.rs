@@ -32,6 +32,8 @@ use m68000::M68000;
 mod dsb;
 mod fm;
 mod serial;
+mod state;
+pub use state::SoundState;
 pub use serial::SerialState;
 pub use crate::i8251::Error as SerialError;
 pub use dsb::DsbPathState;
@@ -168,7 +170,7 @@ mod mute_tests {
         }
     }
 
-    fn sounding_board(chip: usize) -> SoundSystem {
+    pub(super) fn sounding_board(chip: usize) -> SoundSystem {
         let mut program = vec![0; 16];
         program[..4].copy_from_slice(&0x00f0fff0u32.to_be_bytes());
         program[4..8].copy_from_slice(&8u32.to_be_bytes());

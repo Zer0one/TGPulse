@@ -12,6 +12,11 @@ use crate::config::{Config, Inputs};
 use crate::loader::Model1Roms;
 use crate::sound::SoundSystem;
 
+mod state;
+pub use state::MotherboardState;
+mod save;
+pub use save::MAX_STATE_BYTES;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     IoBoard(crate::model1io2::BusError),
@@ -54,10 +59,13 @@ pub const V60_HZ: u32 = 16_000_000;
 pub const COPRO_FIFO_DEPTH: usize = 16;
 
 pub struct Model1System {
+    /// Identity of immutable resources supplied at construction, not NVRAM.
+    /// Replacing ROMs/devices requires constructing a new machine.
+    resource_identity: [u8; 20],
     pub main_cpu: V60,
     pub tgp_cpu: Mb86233,
     /// Fractional 40/16 MHz clock phase (numerator over 2), including HALT time.
-    /// Future machine snapshots must retain this alongside tgp_cpu.icount debt.
+    /// Captured with tgp_cpu.icount debt by the motherboard snapshot.
     tgp_clock_remainder: u8,
 
     pub maincpu_rom: Vec<u8>,
@@ -212,6 +220,7 @@ impl Model1System {
         };
 
         Ok(Self {
+            resource_identity: save::resource_identity(roms),
             main_cpu: V60::new(),
             tgp_cpu: Mb86233::new(),
             tgp_clock_remainder: 0,
