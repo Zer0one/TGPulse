@@ -118,6 +118,19 @@ Coin/Start and shared Test/Service retain keyboard defaults. See
 | `F11` | fullscreen |
 | `Tab` | fast forward while held |
 
+**Model 1 save states.** Use Machine → Save/Load state or `F5`/`F7`, with
+slots 0–9 selected by `F4`/`F6`. States use `states/<set>.<slot>.state`
+in the emulator's runtime directory, like Model 2. A versioned, ROM-identified
+snapshot restores the standalone machine, including in-memory NVRAM/EEPROM,
+without immediately writing persistent NVRAM. Current audio/video preferences
+and pause mode remain unchanged. Success/errors appear briefly even in fullscreen.
+Model 1 save/load requires `cabinet = single`; a fitted COMM board is refused
+even before a peer connects. This does not snapshot a network session.
+The desktop integration has automated coverage and the user confirms basic
+save/load working in VR and SWA; other games and broader scenarios remain to validate.
+F4/F6 display the selected slot briefly, including in fullscreen.
+See the [checkpoint evidence](docs/MODEL1_ROADMAP.md#desktop-saveload-checkpoint--2026-09-27).
+
 **Files written.** Battery-backed RAM (high scores, rankings, test menu
 settings) to `nvram/<set>.nv` on close, reloaded on the next run. Save states to
 `states/`, options and bindings to `config/`. Nothing is written elsewhere.
@@ -167,7 +180,7 @@ For this fork's source-audited Model 1 gaps, ROM baseline and bounded fixes, see
 - **More games.** New sets tend to expose real bugs: Virtua Fighter 2's hair was an i960 burst-read bug, Wave Runner's failure to boot a missing EEPROM.
 - **Performance improvements.**  Could be achieved by moving the coprocessors to their own threads and a JIT/dynarec. Currently it can be slow on low powered devices.
 - **Multiplayer.** Link two instances over a socket, as MAME's `m2comm` does.
-- **Model 1 save states.** Snapshots cover Model 2 only; Model 1 games save NVRAM but not machine state.
+- **Model 1 save-state acceptance.** Core and desktop integration are implemented for standalone machines; broader in-game/manual frontend validation remains.
 - **Encrypted sets.** The 315-5881 implementation is in the tree but unused, so Dynamite Cop, Zero Gunner and the rest do not run.
 - **`model1io2`.** Not emulated, so Wing War and Sega NetMerc are left out of the database's I/O firmware wiring.
 

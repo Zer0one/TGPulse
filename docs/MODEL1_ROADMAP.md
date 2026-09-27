@@ -9,8 +9,9 @@ macos-emulation-toolkit and MAME projects.
 ### Consolidated verification — 2026-09-27
 
 - The complete pending integration passes `cargo test --offline --workspace`:
-  344 passed after the bounded timing corrections, FIFO retry completion,
-  timed main UART integration and vblank ordering checks. The offline development
+  463 passed after the bounded timing corrections, FIFO retry completion,
+  timed main UART integration, input updates, device/motherboard continuation
+  and versioned whole-machine/desktop state validation. The offline development
   release build also passes; the existing `block` future-compatibility warning
   remains. These checks are not a fresh manual gameplay validation.
 - Wing War gameplay and throttle direction were confirmed by the user;
@@ -352,9 +353,10 @@ manual gameplay confirmation; the clipping check above remains open.
   an in-memory API suitable for a future Model 1-only Libretro frontend.
   New integrations should inventory state and add serialization/continuation
   coverage where applicable now, without waiting for the full adapter. The
-  current shared I/O chips are covered; the complete Model 1 machine is not.
-  User priority: unify Z80 first, then resume this work. The unconnected
-  MultiPCM snapshot draft is paused and is not a tested machine save-state feature.
+  standalone machine now has a versioned, ROM-identified in-memory save/load
+  API with bounded decoding and atomic rejection. Desktop integration and
+  broader in-game acceptance remain; saves with COMM fitted are refused.
+  See [save-state restart](#save-state-restart--2026-09-27).
 - [x] **Cabinet link — closed by user decision.** The following records the
   actual automated evidence, not additional manual gameplay/LAN certification.
   First M1COMM HLE checkpoint implemented from MAME's active
@@ -404,6 +406,356 @@ manual gameplay confirmation; the clipping check above remains open.
   fallback. The current general loader matches names, not expected hashes.
 
 ## Phase 4 — consolidation
+
+### Save-state restart — 2026-09-27
+
+The preceding integrations were published separately by type on `origin/main`
+through `c0823dd`; this section describes the subsequent save-state work.
+Scope remains Model 1 and an in-memory core API first, not a new Libretro
+adapter, Model 2 snapshot redesign or host-file side effect.
+
+| Status | Component | Current boundary / next work |
+| --- | --- | --- |
+| 🟢 | MultiPCM device state | Mutable voices, register selectors, bank, cached sample metadata, envelopes, LFO phases, interpolation and counters captured; continuation tests below. |
+| 🟢 | Audio 68000 state | Same 0.2.3 implementation, now local with an explicit state API including STOP, current opcode and pending exceptions. No opcode/timing change. |
+| 🟢 | Model 1 audio-board state API | CPU, board RAM, both PCM chips, FM, timed serial, optional DSB and clock debt restore together; integrated into the machine envelope. |
+| 🟢 | I/O-board state API | Original Z80/bus/RAM/ADC/EEPROM/debt and advanced Wing War/R360 boards with fractional clocks and variant checks; integrated into the machine envelope. |
+| 🟢 | Video state API | Persistent polygon/color/light uploads, both display lists/control registers and 2D video RAM; integrated into the machine envelope. |
+| 🟢 | Motherboard / V60 / MB86233 state API | CPU state, RAM, FIFOs/latches, timers/IRQ, frame counter, TGP fractional phase and retry/debt state captured at stable execution boundaries; synthetic and bounded ROM continuation verified. |
+| 🟢 | Machine envelope / COMM boundary | Version 1, loaded-ROM identity, bounded decoding, all-or-nothing restore and core audio invalidation. Save/load explicitly refused whenever COMM is fitted. No implicit NVRAM disk writes. |
+| 🟢 | Desktop save/load integration | Existing menu/F5/F7/slots now dispatch Model 1; bounded reads, atomic slot writes, output invalidation and fullscreen feedback covered by automated tests. Model 2 snapshot path unchanged. |
+| 🟡 | Machine continuation acceptance | Machine API passes fresh-resource restore plus 30 equal frames/audio/state on seven sets; user confirms basic desktop save/load in VR and SWA. Other games and broader in-game scenarios remain. |
+
+Legend: 🟢 completed · 🟡 partial · ⚪ not started · 🔵 deferred.
+
+**Completed first checkpoint:** the previously paused MultiPCM draft is tested
+using synthetic ROM resources, without touching game ROMs or NVRAM. Both 8-bit
+and packed 12-bit banked samples are captured 137 samples into an active voice;
+bincode round-trip into a separately initialized chip produces 4,096 identical
+subsequent stereo samples and identical final state. The sequence includes
+looping, pitch/amplitude LFO phases, total-level interpolation and a second
+round-trip during envelope release. Restoring does not replay register writes
+or key-on, and the state excludes sample ROM and rate-derived lookup tables.
+Wrong-clock, invalid slot/address/bank and invalid voice selectors are rejected
+before mutation; rejection tests compare the entire pre/post encoded state.
+This is selector/clock validation, not a general hostile-input decoder guarantee.
+The enclosing machine format must enforce resource identity and decode limits.
+
+Verification: 347 workspace tests pass, including the two new MultiPCM tests.
+The development release builds offline. No new manual gameplay/save-load proof
+is claimed; the desktop still has no complete Model 1 save-state integration.
+
+**Next checkpoint:** extend real-window save/load acceptance beyond the user's
+successful VR/SWA tests, paused and running,
+plus broader in-game scenarios/audio continuity across the supported Model 1
+board variants. Do not conflate startup or headless checks with manual gameplay.
+Publication of these checkpoints is separate
+from the already completed publication above.
+
+### Audio CPU / board save-state checkpoint — 2026-09-27
+
+`crates/m68000` is a local copy of the same crates.io 0.2.3 implementation,
+not another emulation core. Origin, checksum, upstream revision and MPL-2.0
+notice are in its README. `src/lib.rs` only adds the new `state` module;
+the other original CPU source files are byte-identical to the dependency cache.
+The new state includes registers, STOP, current opcode and pending exception
+vectors, reconstructed with the original priority-set insertion semantics.
+Restore does not call reset, touch the bus or queue new interrupts. Tests
+cover pending masked IRQ/STOP, opcode-dependent exception frames, continuation,
+and rejection without mutation. CPU model/version checks belong to the outer
+machine envelope; the board API always instantiates Mc68000.
+
+`SoundSystem::snapshot_model1/restore_model1` now assemble that CPU state with
+sound RAM, both MultiPCM states, FM/converter, timed serial endpoints, optional
+DSB/converter, main-clock fraction, instruction debt and diagnostic counters.
+The API is Model 1-only, memory-owned and captures between run calls. ROMs,
+host callbacks, audio output queue, mutes and gains are excluded; restore keeps
+current frontend preferences and clears stale output only on success. All
+fallible checks run before committing live state; DSB restore is itself atomic
+and is the last fallible step. Full machine restore still needs an enclosing
+transaction, resource identity and bounded decoding. No NVRAM file writes.
+
+New board tests restore into a separately initialized board after advancing
+another timeline, midway through serial transmission with live PCM/FM and
+nonzero fractional clock debt, with/without the DSB board. Subsequent stereo
+samples and serialized board state match; stopped-CPU continuation also matches
+across different run partitions. Rejection tests cover CPU, buffer dimensions,
+PCM clock, variant and DSB conversion inconsistencies without changing state or
+pending host audio. The combined fixture exercises DSB serial/CPU state, not
+MPEG playback; MPEG mid-operation continuity remains covered by the existing
+device-level DSB tests, not claimed as a new whole-board music acceptance run.
+
+The upstream stable-compatible assembler, memory and status-register tests are
+enabled. Its `operators.rs` uses the obsolete nightly `bigint_helper_methods`
+feature, is retained unchanged as reference, and is not registered as a stable
+test target. No nightly installation or ignored-test success claim. Existing
+upstream lifetime/function-pointer test warnings are not new emulation errors.
+
+This checkpoint still does **not** implement Model 1 GUI save/load, complete
+machine snapshots, deterministic network restore, Libretro or run-ahead.
+
+Verification: 441 workspace tests pass (including 88 upstream CPU tests/doc
+examples newly registered in this workspace, three new CPU state tests and
+three new board state tests). Offline release build passes. Seven Model 1 sets
+(`vr`, `vformula`, `vf`, `swa`, `swaj`, `wingwar`, `wingwar360`) and the nine
+declared-working Model 2 sets listed below reach 600 frames with identical
+before/after debugger state, sampled bus memory and PPM images, without logged
+runtime errors. This is bounded no-regression evidence, not new gameplay,
+listening, full 3D Model 2 capture or actual-game save/load acceptance. Evidence
+directory: `/tmp/tgpulse-soundstate.j5JgPX` (temporary, not a build dependency).
+The separate toolkit and installed current/my builds were not changed.
+
+### I/O-board save-state checkpoint — 2026-09-27
+
+The original 837-8950-01 board now exposes `model1io::IoBoard::snapshot/restore`:
+Z80 registers/internal latches, RAM, DPRAM, the existing 315-5338A and ADC state,
+cabinet input latch, EEPROM contents/protocol/dirty flag, drive/lamp outputs,
+panel bank selection and instruction overshoot debt. It reuses the shared chip
+serialization; no new chip implementation, bus/timing behavior or disk writes.
+Restore copies latches directly without reset, port-write replay, new ADC
+conversion, EEPROM edges or DPRAM transfers. Firmware remains owned by the
+destination board and must match; resource identity belongs to the future
+machine envelope. Invalid CPU selectors, DPRAM dimensions and instruction debt
+are rejected before changing the destination. This is not a hardened decoder
+for arbitrary external data; bounded decoding and enclosing validation remain
+machine-format work.
+
+`model1board::IoBoard::snapshot/restore` replaces the advanced-only API with one
+tagged `BoardState` for both revisions, retaining the V60-to-board fractional
+clock remainder. Original/advanced and Wing War/R360 mismatches are rejected
+without changing any state. Restore does not reapply constructor boot-status
+seeds. The advanced board continues to use its existing device-state path;
+there is no second implementation of it.
+
+Verification: 446 workspace tests pass; offline release build passes. Four new
+original-board tests exercise CPU continuation with different run partitions,
+partially shifted ADC, partially read EEPROM, partial EEPROM command/data write,
+staged DPRAM transfer, HALT/debt, output and input latches, resource ownership
+and atomic rejection. The motherboard continuation test now covers all three
+variants through a bincode round-trip into a fresh board; a fifth new test
+rejects all six cross-variant restore combinations. EEPROM rollback/dirty state
+is checked in memory, without persisting anything.
+
+VR, Wing War and Wing War R360 also reach 600 debugger frames with identical
+state lines, sampled 64 KiB + 4 KiB bus memory and PPM images compared with the
+preceding audio-board build evidence. This checks ordinary execution without
+using restore; it is not an actual-game save/load or gameplay certification.
+Temporary evidence: `/tmp/tgpulse-iostate.SBtEXo`; suite/build logs:
+`/tmp/tgpulse-iostate-workspace.log`, `/tmp/tgpulse-iostate-build.log`.
+
+Complete Model 1 GUI save/load, machine continuation, network restore and
+Libretro support are still pending. These device APIs are only captured between
+run calls. No commit/push or deployment to toolkit/current/my in this checkpoint.
+
+### Video save-state checkpoint — 2026-09-27
+
+`Model1System::snapshot_video/restore_video` collects persistent polygon RAM,
+TGP colour upload RAM, lighting parameters, both display-list buffers and their
+control registers, tile/character RAM, palette and colour-translation RAM.
+The existing scanner and renderer remain unchanged. Restore copies this state
+directly: it does not replay uploads, rasterize a frame, switch lists, trigger
+vblank/IRQs or write NVRAM. All dimensions and byte-derived lighting coefficient
+ranges are checked before mutation. Version/resource identity and bounded
+deserialization remain the responsibility of the future machine envelope.
+
+The API captures between bus/run/render calls. Upload commands and list walking
+are synchronous in this implementation; there is no suspended walker cursor to
+serialize. A partially written next-frame list is retained verbatim. `frame_num`
+is deliberately not duplicated in video state: it drives palette cycling and
+automatic buffer selection but also the motherboard schedule, so the enclosing
+machine snapshot must capture and restore it once, alongside timing state.
+
+Polygon ROMs, frontend preferences (including smooth shadows), derived views,
+sorted quads, CPU framebuffers and GPU objects are excluded. Source inspection
+of the desktop GPU path confirms it rebuilds quad/tile/bin buffers on each
+render; the frontend still must regenerate its output after whole-machine
+restore, rather than present a stale frame. No GPU/desktop dependencies were
+added to the core, and no Model 2 state format was changed.
+
+Three new tests cover a bincode round-trip into a fresh machine after one-time
+colour/light/polygon uploads have disappeared from the display list, identical
+nonempty CPU 2D/3D pixels and GPU-input quad streams over subsequent vblanks,
+and retained preferences. Another sequence resumes a partial inactive-list
+write via the V60 bus and the automatic list switch without prematurely applying
+its upload. Rejection checks cover every buffer dimension and invalid lighting
+coefficients without changing existing state. The synthetic tests explicitly
+supply the same frame counter; they do not claim full machine continuation or
+actual GPU execution/save-load gameplay.
+
+Verification: 449 workspace tests pass and the offline release builds. VR,
+Wing War and R360 reach 600 debugger frames with state lines, sampled bus RAM
+and PPM output identical to the preceding I/O-state build, and empty error logs.
+This is ordinary-execution non-regression evidence, not actual-game restore or
+new gameplay validation. Temporary evidence: `/tmp/tgpulse-videostate.ygTSzw`;
+suite/build logs: `/tmp/tgpulse-videostate-workspace.log` and
+`/tmp/tgpulse-videostate-build.log`. No commit/push or toolkit/current/my
+deployment in this checkpoint.
+
+### Motherboard save-state checkpoint — 2026-09-27
+
+`Model1System::snapshot_motherboard/restore_motherboard` reuses the existing
+V60/MB86233 serialization with main work RAM and battery-backed RAM (in memory
+only), TGP data/coprocessor RAM, FIFO contents and halfword latches, pending
+retry signals, math-unit/address latches, ROM-bank register and mapping latch,
+timer period/count/last-read state, GLUE IRQ state, input/drive latches, frame
+counter and fractional TGP clocks. Both CPUs' instruction budgets are retained.
+ROM resources and the separately snapshotted video/I/O/audio/COMM devices are
+not duplicated. Config, host handles and filesystem operations are excluded.
+
+Important implementation choices, verified against the current execution paths:
+
+- A positive TGP `icount` after a FIFO retry/HALT is abandoned quantum time,
+  not invalid state or debt. Preserve it; the unchanged scheduler carries only
+  negative instruction overshoot. The half-clock remainder is independent.
+- Accept all 17 FIFO entries at the producer-HALT boundary, not only 16. Never
+  discard the overflow word or replay a pending transfer on restore.
+- `bank_base` cannot always be derived from `bank_reg`: a write whose low nibble
+  is not 1 changes the register but intentionally retains the previous mapping.
+- Restore IRQ lines/latches as captured, without calling `sync_irq`, reset or
+  register handlers. The next normal scheduling boundary performs its usual work.
+- Reject capture/restore while V60 bus execution or access-wait accounting is
+  active. At a stable boundary these two transient fields are false/zero; CPU
+  retry and instruction debt remain in the snapshot. No sub-instruction capture.
+- Preserve the destination debugger's trace settings but clear stale trace and
+  CPU coverage on successful restore. Direct and bincode snapshots have the
+  same diagnostic policy. The bounded FIFO event ring is retained for diagnosis.
+
+All fallible dimension/timing/selector checks precede mutation. Validation is
+not a hardened untrusted-file decoder; outer allocation limits, ROM identity,
+cross-device consistency and all-or-nothing machine restoration remain pending.
+The currently exposed method restores this board only, not the complete machine.
+
+Five new tests cover V60 IN retry without a duplicate pop/destination write;
+TGP empty-FIFO retry, full-output HALT and fractional instruction debt; partial
+RAM/FIFO transfers and auto-incrementing addresses; latched bank/NVRAM/frame
+state; timer expiry with HALT/IRQ acknowledgement; malformed states and unsafe
+capture boundaries rejected without mutation. The test harness aligns I/O and
+audio via their existing APIs when comparing subsequent scheduler runs.
+
+Verification: 454 workspace tests pass; offline release build passes. A temporary
+ROM probe composes the existing device APIs (not a production machine format):
+`vr`, `vformula`, `vf`, `swa`, `swaj`, `wingwar`, `wingwar360` run 600 frames,
+serialize/deserialize each component into a newly initialized machine with the
+same resources, then produce 30 identical frames under fixed default inputs.
+Motherboard/I/O/audio state, audio samples and software-composited pixels match
+each frame; final video state also matches. It uses ROM-supplied defaults only,
+does not load/save personal NVRAM, and runs with COMM absent/no TCP. This is
+bounded continuation evidence, not manual gameplay, GPU output, networking,
+long-running determinism or full production save/load acceptance. R360/NetMerc
+compatibility statuses are not promoted by it.
+
+Temporary reproducible probe source/binary/log:
+`/tmp/tgpulse-motherboard.vSGpIU/{check.rs,check,continuation.log}`. Suite/build
+logs: `/tmp/tgpulse-motherboard-workspace.log`,
+`/tmp/tgpulse-motherboard-build.log`. No new permanent runner, dependencies,
+commit/push or toolkit/current/my deployment in this checkpoint.
+
+### Whole-machine envelope checkpoint — 2026-09-27
+
+`Model1System::save_state() -> Result<Vec<u8>, String>` and
+`load_state(&mut self, bytes: &[u8]) -> Result<(), String>` assemble the
+motherboard, I/O, video and audio APIs. The caller owns the bytes; the core
+does not open files, write NVRAM, access host transports or reset devices.
+
+- Format 1 uses `TGP1STAT`, explicit little-endian version/length, a resource
+  identity and a payload checksum, followed by fixed-integer little-endian
+  bincode. Incompatible future layouts must change the version; the existing
+  Model 2 format is separate and unchanged.
+- Identity hashes the normalized loaded ROM contents, optional DSB resources,
+  I/O-board kind and COMM capability, not ZIP names or operator NVRAM/EEPROM
+  defaults. It is cached at construction: ROM resources must remain immutable;
+  recreate the machine if replacing them. SHA-1 reuses the loader dependency
+  for identification/corruption detection, not authenticity/security claims.
+- `MAX_STATE_BYTES` is 64 MiB. The core checks header, size, version, identity,
+  exact payload length and checksum before bounded deserialization, which
+  rejects trailing bytes. Frontends must enforce the same limit before file
+  allocation. This is not exhaustive fuzzing or a hardened hostile-file claim.
+- Read-only motherboard/video/I/O validation precedes atomic audio restore,
+  the final fallible device step. Successful validation then commits the other
+  devices without replaying register writes. Returned errors leave the live
+  machine, NVRAM and pending audio unchanged. Normal allocation/panic failures
+  are not a rollback guarantee.
+- Successful restore preserves frontend settings/gains/mutes and debugger
+  trace policy, clears stale core audio and diagnostics as documented by the
+  component APIs. The frontend must flush its own output queues and redraw;
+  that wiring is the next checkpoint.
+- Capture/load require a stable execution boundary without a latched I/O,
+  serial or DSB fault. Both are refused whenever `comm.is_some()`, including
+  before link establishment: use `cabinet = single`. No independent rewind of
+  a linked cabinet or restoration of TCP/peer state is implied. Coordinated
+  network snapshots require a separate scope decision.
+
+Five new tests cover the original/Wing War/R360 boards and optional DSB;
+same-resource continuation without replacing preferences; malformed headers,
+lengths, checksums, oversized/trailing payloads and forged vector lengths;
+ROM identity across all resources; late audio and I/O variant rejection with
+unchanged machine/audio; and COMM refusal before connection.
+
+Verification: 459 workspace tests pass and the offline development release
+build passes. A temporary probe uses the actual machine byte API (not manual
+component assembly) on `vr`, `vformula`, `vf`, `swa`, `swaj`, `wingwar` and
+`wingwar360`: save at frame 600, load into fresh same-resource machines, then
+compare 30 frames of motherboard/I/O/audio state, samples and software pixels,
+plus the complete encoded state immediately and after continuation. All match.
+States are about 19.6 MB uncompressed. These runs use fixed default inputs and
+ROM-supplied defaults, no personal NVRAM or TCP. They do not certify manual
+gameplay, GPU/frontend behavior, arbitrary save points or networking, and do
+not change the deferred R360 compatibility status.
+
+Temporary evidence: `/tmp/tgpulse-envelope.3ycXBp/{check.rs,check,continuation.log}`;
+suite/build logs: `/tmp/tgpulse-envelope-workspace.log` and
+`/tmp/tgpulse-envelope-release.log`. No new dependency, permanent runner,
+commit/push, personal settings/save change or toolkit deployment. Development
+binary remains `target/release/tgpulse`; desktop Model 1 save/load is not yet wired.
+
+### Desktop save/load checkpoint — 2026-09-27
+
+- Existing Machine menu, keyboard bindings and touch actions now dispatch
+  both machine types. Model 1 uses the new in-memory API from `app/state.rs`;
+  Model 2 keeps the existing `savestate::save_to_file/load_from_file` path and
+  format. No hardware-core filesystem dependency or Libretro adapter added.
+- Existing slot convention remains `states/<set>.<slot>.state` relative to the
+  emulator runtime directory, slots 0–9 (`F5` save, `F7` load, `F4/F6` select).
+  Model 1 reads check regular-file size first and limit bytes actually read to
+  64 MiB + a one-byte oversize sentinel, handling growth after metadata too.
+- Capture/COMM/resource validation occurs before touching a slot. Writes use
+  an exclusively created sibling, flush/sync, then rename over the destination;
+  ordinary write/rename failure preserves the prior slot and removes only the
+  owned temporary file. This is not a directory-fsync/power-loss durability claim.
+- Only successful Model 1 loads discard the host audio ring and reset callback
+  interpolation/DC-filter history at its next invocation. Audio already handed
+  to the OS/in-flight callback cannot be recalled. Gains/volume stay unchanged.
+  CPU image buffers are cleared, then regenerated with fresh GPU quads by the
+  existing redraw path, also while paused; live widescreen detection still runs.
+- Reset the wall-clock catch-up anchor after a successful Model 1 load, without
+  changing pause/fullscreen preferences. Reset the periodic NVRAM countdown,
+  avoiding an immediate flush; normal later periodic/session-close persistence
+  still applies to the restored in-memory NVRAM. Load itself never writes it.
+- Success (3 s) and error (10 s) notices render even with hidden menus or
+  fullscreen, without taking input focus; detailed errors remain in the log.
+  Expired notices are removed from captured UI draw data. COMM is refused by
+  the core with a visible `cabinet = single` explanation, not silently ignored.
+
+Four new automated tests cover Model 1 file replacement/reload, malformed,
+missing and oversized files, rename failure cleanup; session output invalidation
+only on success and unchanged persistent NVRAM; callback history reset with
+unchanged gain; and ImGui feedback draw data with menus hidden/suppressed.
+`cargo test --offline --workspace`: 463 passed; offline release build passes.
+No new warnings beyond the existing m68000 lifetime / `block` compatibility notes.
+
+An isolated VR desktop startup succeeded (temporary settings, volume zero and
+ROMs read-only), but Computer Use could not identify the unbundled executable
+as an app. No F5/F7 or visual GPU save/load acceptance is claimed; this remains
+the next checkpoint/manual test. The owned test process was stopped; no user
+configuration/NVRAM, toolkit or installed `current`/`my` binary was changed.
+Logs: `/tmp/tgpulse-state-frontend-workspace.log`,
+`/tmp/tgpulse-state-frontend-build.log`, `/tmp/tgpulse-state-ui.2kjUfP/run.log`.
+Development binary: `target/release/tgpulse` (`tgpulse.dev`); no commit/push.
+
+User follow-up: basic VR and SWA save/load work. F4/F6 changed slots but only logged
+the selection; they now also use the existing three-second state notice,
+visible with menus hidden/fullscreen. No slot numbering or bindings changed.
+This user evidence does not certify other games or every paused/audio scenario.
 
 Updated user priority: bring Z80 unification forward before full Model 1 save
 states. Keep the general timing audit after feature implementations; the CPU
