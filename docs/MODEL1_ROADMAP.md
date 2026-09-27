@@ -86,9 +86,41 @@ replacement for a user's persistent gameplay NVRAM.
    [Register/wiring contract and checkpoints](MODEL1_IOBOARD2.md): shared
    315-5338A/ADC extraction and board-1 regression tests are complete; the
    TMPZ84C015, advanced memory map and firmware integration are still pending.
-2. **YM3438 synthesis:** currently only timers/status are implemented. Add FM
-   generation and correct routing beside the existing MultiPCM output; verify
-   timing, levels and sound tests per title.
+2. **YM3438 synthesis:** Rust FM/DAC synthesis is implemented and connected to
+   the production MultiPCM board. Per-title listening and level acceptance remain
+   pending; do not equate synthetic reference tests with verified game audio.
+   **Current checkpoint:** [audio integration contract](MODEL1_AUDIO.md).
+   Output-only mute controls for MultiPCM/SCSP and now FM are available; DSB is
+   not generated. The user confirmed the earlier PCM/SCSP mutes, not yet FM.
+   The YMFM subset inventory and isolated
+   C++ reference smoke/state-continuation probe are complete; see the contract
+   for exclusions and evidence limits. Recommendation remains a specialized
+   Rust port, with a native wrapper only as an explicitly agreed fallback.
+   The isolated Rust register/timer/Busy/state boundary now passes nine tests,
+   including a pinned YMFM trace with 16,384 seeded operations and serialized
+   mid-timer continuation. Clock/state
+   APIs are frontend-independent; no native production dependency was added.
+   Isolated operators/envelopes, eight algorithms, feedback, LFO/SSG-EG,
+   special frequencies/CSM and DAC now match the pinned YMFM audio oracle for
+   1,668,200 stereo frames across bounded synthetic scenarios. Mid-note serialized
+   continuation also passes; 14 YM3438 tests in total. Seven new bridge/board
+   tests cover fractional scheduling, conversion-state continuation, real 68000
+   bus programming of a tone, mix gains/clipping and output-only FM mute.
+   The timer stub is removed. Native FM is converted with a causal box filter,
+   not MAME's resampler; bus timing remains instruction-granular. A 600-frame
+   smoke for VR/VF/Wing War has no audio-CPU exceptions, but isolated FM is silent
+   in those initial sequences; actual game listening acceptance is still open.
+   New chip/converter state is serializable now; adapting the existing sound
+   CPU/PCM/UART/scheduler belongs to the later complete-machine-state phase.
+   **Follow-up audit:** a 1..254 sound-command sweep finds timer-only activity
+   after initialization in VF/Wing War/Daytona, but **VR generates real FM**:
+   eight commands reproduce it independently from a fresh sound board. The user
+   subsequently confirmed FM sounds during actual VR gameplay. Exact command-to-
+   event names remain unassigned, but FM is not merely unused/diagnostic code.
+   The experimental timers-only option has been removed; synthesis always runs
+   and only output muting remains. See the
+   [audit method and limits](MODEL1_AUDIO.md#driver-use-audit--2026-09-27).
+   Next: validate per-game audio manually. DSB remains the next separate board.
 3. **Star Wars DSB:** implement the Z80/MPEG board and its filtered serial command
    path. Test music independently from the existing Model 1 sound board.
 4. **NetMerc initialization:** with verified ROMs and I/O, validate factory NVRAM,

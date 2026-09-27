@@ -50,6 +50,15 @@ the saved monitor/cabinet setting for VR, Indy 500 and Sega Touring Car;
 unknown games use 4:3. CLI: `--widescreen auto`. See
 [native aspect detection and supported sets](docs/WIDESCREEN.md).
 
+**Audio sources.** While a game is loaded, Settings → Audio can mute each
+implemented output: MultiPCM 1/2 and FM (YM3438), or SCSP, according to the running sound board.
+Only the output is silenced; chip/CPU/timer emulation continues. Preferences
+are remembered in `config/settings.conf` (`mute_ym3438 = off` by default).
+DSB/MPEG remains pending and has no mute switch yet.
+YM3438 synthesis always runs: FM sounds in Virtua Racing have also been
+confirmed in-game by the user. Muting FM silences only its output.
+See [audio integration and limits](docs/MODEL1_AUDIO.md).
+
 | Key | |
 | --- | --- |
 | `F1` | show or hide the interface over a running game |
@@ -201,6 +210,10 @@ Neither is affiliated with this project. Any inaccuracy is this program's own.
 
 MIT, in [LICENSE](LICENSE). ROM images are copyrighted by their publishers and
 none are included here.
+
+The YM3438 register/timer and synthesis adaptation retains Aaron Giles' YMFM
+[BSD-3-Clause notice](LICENSES/YMFM-BSD-3-Clause.txt). Its current scope and
+reference checks are documented in [Model 1 audio](docs/MODEL1_AUDIO.md).
 
 ## Logging
 
