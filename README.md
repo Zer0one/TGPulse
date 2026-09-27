@@ -64,11 +64,24 @@ the saved monitor/cabinet setting for VR, Indy 500 and Sega Touring Car;
 unknown games use 4:3. CLI: `--widescreen auto`. See
 [native aspect detection and supported sets](docs/WIDESCREEN.md).
 
-**Audio sources.** While a game is loaded, Settings → Audio can mute each
-implemented output: MultiPCM 1/2 and FM (YM3438), or SCSP, according to the running sound board.
-Only the output is silenced; chip/CPU/timer emulation continues. Preferences
-are remembered in `config/settings.conf` (`mute_ym3438 = off` by default).
-DSB/MPEG remains pending and has no mute switch yet.
+**Colours.** Settings → **sRGB correction** enables correct display-RGB sampling
+for the game framebuffer (Model 1 and Model 2), without changing GUI colours.
+It takes effect immediately and persists as `srgb = on` in
+`config/settings.conf`; default `off` retains the previous presentation.
+Non-sRGB output surfaces already preserve RGB bytes and need no conversion.
+Separately, Model 1's 2D palette intensity bit is always emulated: bit 15 clear
+halves RGB after expansion, matching MAME. This hardware correction is not
+controlled by the sRGB option and does not alter Model 2 palette behaviour.
+
+**Audio sources.** While a game is loaded, Settings → Audio shows a gain slider,
+Mute checkbox and name for each output: MultiPCM 1/2 and FM (YM3438), or SCSP;
+SWA/SWAJ also show DSB (MPEG). Sliders set absolute gains (50% = 0.5), with a
+full-height dark-blue reference marker: MultiPCM 50%, FM 30%, DSB/SCSP 100%.
+The channel slider's grab is 50% opaque and drawn above the reference marker.
+Channel range 0–100%; double-click a channel slider to restore its default.
+Master volume remains separate (0–800%), with the same marker style and a
+100% reference restored by double-click. Gains and mutes persist in `config/settings.conf`.
+Mute keeps the selected gain; chip/CPU/timer emulation continues even at zero.
 YM3438 synthesis always runs: FM sounds in Virtua Racing have also been
 confirmed in-game by the user. Muting FM silences only its output.
 See [audio integration and limits](docs/MODEL1_AUDIO.md).

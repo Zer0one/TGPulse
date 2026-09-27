@@ -9,7 +9,7 @@ macos-emulation-toolkit and MAME projects.
 ### Consolidated verification — 2026-09-27
 
 - The complete pending integration passes `cargo test --offline --workspace`:
-  219 passed, one optional ROM-dependent test ignored. The offline development
+  276 passed. The offline development
   release build also passes; the existing `block` future-compatibility warning
   remains. These checks are not a fresh manual gameplay validation.
 - Wing War gameplay and throttle direction were confirmed by the user;
@@ -20,6 +20,14 @@ macos-emulation-toolkit and MAME projects.
   Manual UI/gamepad validation of the new library-exit path remains pending.
 - No ROM, NVRAM or personal configuration is included in publication; toolkit
   and installed `current` releases are unchanged.
+- DSB/MPEG is integrated for SWA/SWAJ; the user reports basic SWA playback
+  working. Shared flight throttle, SWA view routing, optional sRGB correction,
+  Model 1 2D palette intensity and persistent source gains are implemented.
+  Master volume now also has a 100% reference and double-click reset.
+- Next bounded fidelity checkpoint: investigate the reported MultiPCM1
+  distortion in SWA. Equivalent-frame colour comparison, extended audio/input
+  acceptance and Player 2 remain open; Z80 unification and the timing audit
+  remain final post-implementation work.
 
 Apply the preflight/checkpoint/recap agreement in [AGENTS.md](../AGENTS.md).
 The table is an initial engineering estimate, not a measured cost or completion
@@ -122,8 +130,8 @@ replacement for a user's persistent gameplay NVRAM.
    the production MultiPCM board. Per-title listening and level acceptance remain
    pending; do not equate synthetic reference tests with verified game audio.
    **Current checkpoint:** [audio integration contract](MODEL1_AUDIO.md).
-   Output-only mute controls for MultiPCM/SCSP and now FM are available; DSB is
-   not generated. The user confirmed the earlier PCM/SCSP mutes, not yet FM.
+   Output-only mute controls for MultiPCM/SCSP, FM and the integrated DSB are
+   available. The user confirmed mute operation and FM sounds in VR gameplay.
    The YMFM subset inventory and isolated
    C++ reference smoke/state-continuation probe are complete; see the contract
    for exclusions and evidence limits. Recommendation remains a specialized
@@ -152,9 +160,35 @@ replacement for a user's persistent gameplay NVRAM.
    The experimental timers-only option has been removed; synthesis always runs
    and only output muting remains. See the
    [audit method and limits](MODEL1_AUDIO.md#driver-use-audit--2026-09-27).
-   Next: validate per-game audio manually. DSB remains the next separate board.
+   Next: extend per-game listening acceptance; DSB integration is recorded below.
 3. **Star Wars DSB:** implement the Z80/MPEG board and its filtered serial command
    path. Test music independently from the existing Model 1 sound board.
+   [Source audit and integration contract](MODEL1_DSB.md) complete: use the local
+   `tgpulse-z80`; receive the 68000 sound firmware's output, not raw V60 commands.
+   Isolated bus/i8251/CPU boundary implemented with twelve synthetic tests,
+   including mid-transfer state continuation. Isolated Layer II decoder passes synthetic and
+   local SWA-data comparisons against MAME, plus history restore/truncation tests;
+   joint stereo is explicitly unsupported (reference anomaly documented).
+   Real firmware now runs with an opt-in clocked 68000-output serial link:
+   15 controlled commands transmitted/consumed, with playback/loop/pan register
+   programming and seven additional synthetic integration tests. Buffered 32 kHz playback/loop handling and
+   mid-buffer restore now work in the isolated board: six SWA firmware commands
+   produced PCM for 60-second probes; two looping runs reproduced their next
+   32,000 stereo frames exactly after restore. Nine new synthetic tests cover
+   playback, clock slicing, segment transitions and snapshot/error boundaries.
+   Loader resources, error propagation, causal rate conversion/mixing and DSB mute
+   are now integrated: normal SWA/SWAJ constructors enable the board. Settings
+   persist `mute_dsb`; missing/wrong-size DSB chips fail explicitly. The filtered
+   68000 -> DSB -> mixed signal path passes for both sets. Basic SWA playback
+   is user-confirmed. Next: extended SWA/SWAJ listening/gameplay acceptance,
+   including transitions and balance; no full-machine
+   save-state or MAME-resampler-equivalence claim.
+   Verification: 260 workspace tests and 36 release DSB tests passed; normal SWA/SWAJ
+   boot probes completed 1,800 release frames each. Six musical commands produced
+   nonzero isolated DSB mix for both sets; five Model 1 titles pass 120-frame CLI smoke.
+   Separately investigate the existing
+   V60 string-operation multiplication overflow encountered in the debug probe
+   (`ops.rs`, register-28 update); do not mask it with global overflow settings.
 4. **NetMerc initialization — deferred, separate milestone:** after Wing War,
    with verified ROMs and I/O, validate factory NVRAM,
    startup and gameplay. MAME itself still marks NetMerc not working, so it is
@@ -173,12 +207,87 @@ to the shared I/O board and cannot be treated as a proven complete reference.
 
 ## Phase 3 — fidelity and remaining features
 
+- [x] **Per-source output gains and mute:** GUI rows expose an absolute gain
+  slider, independent Mute checkbox and source name, with a fixed reference
+  tick (PCM 50%, FM 30%, DSB/SCSP 100%). Persist gains in settings and reapply
+  on load/reset/state restore. This is frontend-controlled output mixing,
+  not chip state or a replacement for the clipping investigation below.
+  Channel sliders are limited to 0–100%, with full-height dark-blue markers
+  drawn below the 50%-opaque native grab (idle and active);
+  double-click resets just that gain, including while the second click is
+  held. Master retains its 0–800% range, with the same marker style at 100%
+  and double-click reset to 100%.
+  Verification: 276 workspace tests passed, including absolute gain/default
+  rounding, mute/gain independence, PCM/DSB/SCSP continuation, settings
+  persistence/validation, headless ImGui row layout and double-click/held-click
+  reset isolation for channels and master, draw-order/opacity and no style leakage
+  into other widgets. Development release
+  rebuilt; real-game listening and manual slider interaction remain pending.
+
+- [ ] **MultiPCM1 distortion during SWA acceleration/deceleration:** user
+  reports apparent clipping attributed to this source (2026-09-27). Capture
+  reproducible pre/post-mix peaks and clipped samples, compare the MultiPCM
+  voice accumulation, sample conversion and output with MAME, and distinguish
+  source distortion from final mixer saturation. Existing nominal board gains
+  match MAME; do not lower them speculatively. Basic SWA playback is now
+  user-confirmed, not a certification of audio fidelity or all sequences.
+- [ ] **Model 1 colour fidelity versus MAME: gameplay comparison pending.**
+  Two bounded corrections are implemented (2026-09-27):
+  - Optional **sRGB correction**, persisted as `srgb = on/off` (default off),
+    updates immediately. The frontend samples display RGB through an sRGB
+    texture only when the output surface also encodes sRGB. The non-sRGB
+    fallback stays byte-preserving; core/compute pixels and GUI are unchanged.
+    Applies to both Model 1 and Model 2; no host conversion is baked into the
+    reusable core. Apple M4 Metal offscreen readback verifies all 256 grey
+    levels with correction off/on/off and both surface
+    formats (tolerance one byte). Without correction, 128 becomes about 188
+    on an sRGB surface. The GPU test reports when no adapter is available;
+    it was explicitly rerun outside the sandbox and exercised Metal here.
+  - Model 1 tile pens now always halve RGB8 channels when palette bit 15 is
+    clear, matching `model1_paletteram_w`. A board-specific trait hook keeps
+    Model 2 unchanged; this affects selected 2D pens, not every polygon.
+    Reference: [MAME Model 1 video source](https://github.com/mamedev/mame/blob/master/src/mame/sega/model1_v.cpp).
+  Compare equivalent game frames (including SWA's dim grey backdrop) next;
+  synthetic colour checks do not certify complete in-game visual fidelity.
+  Verification: 267 workspace tests passed; the GPU case was also explicitly
+  exercised on Metal. Exhaustive RGB555/intensity tests cover Model 1 and
+  unchanged Model 2 palette expansion; settings round-trips include sRGB.
+  Offline release build passed. No game screenshots or manual GUI test yet.
+
+SWA input follow-up (2026-09-27): `swa`/`swaj` hardware button 3 now routes to
+`View / Select 1` (default D-pad Down / Z), matching Sega Rally's view binding,
+not to `Action 3`. SWA and Wing War now share `Throttle Up` / `Throttle Down`,
+with both game families listed below the GUI entries, independent of the
+driving Accelerator/Brake bindings. Up is R2 OR right stick up (W/Up keys);
+Down is L2 OR right stick down (S/Down keys). Both use lower ADC for more power
+and rest at 128, retaining SWA's 28..228 and Wing War's 1..255 ADC ranges.
+Verification: 263 workspace tests passed, including SWA/SWAJ default-view,
+shared throttle polarity/partial-travel/pedal-isolation and binding migration
+tests plus the all-set digital crosstalk audit.
+Offline development release build passed. The new view binding still needs
+manual gameplay confirmation; colour and clipping checks above remain open.
+
 - Compare rendering and timing per title: clipping, moire, palette translation,
   HUD ordering, gamma and monitor modes. In particular, the Model 1 tile source
   still returns `false` for `colorxlat_written()` and identity monitor gamma;
   do not change this merely by analogy without tracing actual game writes.
 - Validate VR/Virtua Formula, VF, SWA and the Wing War variants in-game; the
   README's tested-title list is not a complete compatibility matrix.
+- [ ] **Player 2 controls — Model 1 first, SWA as initial checkpoint.**
+  Coin 2 / Start 2 alone do not establish two-player support: the frontend
+  currently selects one gamepad and SWA's second stick stays centred.
+  Reuse the shared signal catalogue with independent per-player bindings
+  exposed in the GUI and persisted in configuration; avoid a divergent P2
+  catalogue. Assign controllers explicitly to players, including disconnect /
+  reconnect handling, without changing existing P1 assignments.
+  Route each player's digital and analog signals to the actual per-game I/O,
+  validating SWA/SWAJ's second stick, buttons and start/coin wiring against
+  the reference. Keep frontend-owned player input independent of host device
+  APIs for a future Libretro port. Test simultaneous inputs, no P1/P2
+  crosstalk, persistence and controller reconnection, then confirm real
+  two-player gameplay. Inventory other applicable games separately; Model 2
+  follow-up must use the tested SM2 Libretro reference. This is local
+  same-cabinet multiplayer, not cabinet-link emulation. Not implemented yet.
 - Add Model 1 machine save states (separate from persistent NVRAM), preserving
   an in-memory API suitable for a future Model 1-only Libretro frontend.
   New integrations should inventory state and add serialization/continuation
@@ -207,8 +316,9 @@ not implemented; separate review/checkpoint from new-board implementation.
   execution before/after migration, separately from manual audio/gameplay.
 - Move consumers to one implementation only after compatibility checks pass;
   then remove the redundant dependency and reconcile the lockfile.
-- Prefer the original dependency if a suitable release supplies the required
-  hooks/state API; otherwise retain one documented, auditable local adaptation.
+- User decision: converge existing consumers onto the local `tgpulse-z80`
+  adaptation, also selected for the new DSB. Keep its origin and delta auditable;
+  do not migrate the old consumers before the final consolidation checks.
 - CPU hook/state tests and Wing War firmware validation remain prerequisites;
   NetMerc support is not. Do not migrate solely to eliminate duplication.
 
