@@ -223,7 +223,7 @@ impl V60 {
         let a = self.modadd;
         let m2 = bus.read_u8(a + 1);
         self.modval2 = m2;
-        let idx = self.reg_n(self.modval) * self.scale();
+        let idx = self.reg_n(self.modval).wrapping_mul(self.scale());
         let base2 = self.reg_n(m2);
         self.amflag = false;
         match (m2 >> 5) & 7 {
@@ -991,5 +991,31 @@ impl V60 {
             } // DirectAddressDeferredIndexed
             _ => return None, // Error5
         })
+    }
+}
+
+#[cfg(test)]
+mod indexed_tests {
+    use super::*;
+    struct Operand;
+    impl Bus for Operand {
+        fn read_u8(&mut self, addr: u32) -> u8 {
+            [0xc1, 0x62].get(addr as usize).copied().unwrap_or(0)
+        }
+        fn write_u8(&mut self, _: u32, _: u8) {}
+    }
+    #[test]
+    fn scaled_negative_index_wraps_at_32_bits_in_all_build_profiles() {
+        for dimension in 0..4 {
+            let mut cpu = V60::new();
+            cpu.reg[1] = (-2i32) as u32;
+            cpu.reg[2] = 0x200;
+            cpu.modadd = 0;
+            cpu.modm = true;
+            cpu.moddim = dimension;
+            assert_eq!(cpu.read_am_address(&mut Operand), 2);
+            assert_eq!(cpu.amout, 0x200 - (2 << dimension));
+            assert!(!cpu.amflag);
+        }
     }
 }

@@ -223,6 +223,9 @@ impl V60 {
                     return;
                 }
             }
+            self.icount = self
+                .icount
+                .saturating_sub(bus.take_wait_cycles().min(i32::MAX as u32) as i32);
 
             // The reference generic FIFO asserts HALT through a zero-time
             // synchronization after accepting the overflow word. Complete

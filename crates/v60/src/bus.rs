@@ -7,6 +7,12 @@ pub trait Bus {
     fn read_u8(&mut self, addr: u32) -> u8;
     fn write_u8(&mut self, addr: u32, val: u8);
 
+    /// Extra cycles incurred by completed bus accesses. Drained after each
+    /// instruction, in addition to its base cost; simple buses have no waits.
+    fn take_wait_cycles(&mut self) -> u32 {
+        0
+    }
+
     /// Live state of the maskable IRQ line straight from the interrupt
     /// controller. The CPU latches its line via `assert_irq`, but a handler
     /// that acknowledges the controller *mid-instruction* (Model 1's ISR writes

@@ -101,3 +101,37 @@ fn external_fifo_halt_stops_after_current_instruction() {
     assert_eq!(cpu.pc(), 0x0102);
     assert_eq!(cpu.op_count[0xcd], 2);
 }
+
+struct WaitBus(u32);
+impl Bus for WaitBus {
+    fn read_u8(&mut self, _: u32) -> u8 {
+        self.0 += 1;
+        0xcd // NOP
+    }
+    fn write_u8(&mut self, _: u32, _: u8) {}
+    fn take_wait_cycles(&mut self) -> u32 {
+        std::mem::take(&mut self.0)
+    }
+}
+
+#[test]
+fn memory_waits_are_charged_once_and_preserve_slice_debt() {
+    let mut whole = V60::new();
+    whole.reg[PC] = 0x100;
+    let mut sliced = whole.clone();
+    let mut a = WaitBus(0);
+    let mut b = WaitBus(0);
+    whole.run(&mut a, 90);
+    for _ in 0..90 {
+        sliced.run(&mut b, 1);
+    }
+    assert_eq!(whole.pc(), 0x10a);
+    assert_eq!(sliced.pc(), whole.pc());
+    assert_eq!(whole.icount, 0);
+    assert_eq!(sliced.icount, whole.icount);
+    assert_eq!((a.0, b.0), (0, 0));
+    whole.run(&mut a, 8);
+    assert_eq!(whole.icount, -1);
+    whole.run(&mut a, 1);
+    assert_eq!(whole.pc(), 0x10b);
+}
