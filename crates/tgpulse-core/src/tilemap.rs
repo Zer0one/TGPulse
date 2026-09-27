@@ -21,6 +21,10 @@ pub trait TileSource {
     fn colorxlat_u16(&self, idx: usize) -> u16;
     fn colorxlat_written(&self) -> bool;
     fn monitor_gamma(&self, v: u32) -> u32;
+    /// Model 1 uses palette bit 15 as full/half intensity. Model 2 does not.
+    fn palette_dimmed(&self, _colour: u16) -> bool {
+        false
+    }
 }
 
 impl TileSource for Model2System {
@@ -47,6 +51,44 @@ impl TileSource for Model2System {
 pub const SCREEN_W: usize = 496;
 pub const SCREEN_H: usize = 384;
 
+#[cfg(test)]
+mod palette_tests {
+    use super::*;
+
+    #[test]
+    fn model2_palette_bit15_does_not_dim_colours() {
+        let roms = crate::loader::Roms {
+            maincpu: vec![],
+            main_data: vec![],
+            copro_data: vec![],
+            copro_tables: vec![],
+            polygons: vec![],
+            textures: vec![],
+            eeprom: vec![],
+            sndcpu: vec![],
+            mpcm1: vec![],
+            mpcm2: vec![],
+            sound_scsp: false,
+            coprocessor: crate::roms_db::Board::Model2o,
+            airwalkers_matrix: false,
+        };
+        let mut sys = Model2System::new(&roms);
+        // Explicit identity monitor, independent of cabinet gamma defaults.
+        for (i, value) in sys.monitor.iter_mut().enumerate() {
+            *value = i as u8;
+        }
+        for colour in 0..=0x7fffu32 {
+            sys.palette_ram[0] = colour | ((colour | 0x8000) << 16);
+            let channel = |shift: u32| {
+                let v = (colour >> shift) & 31;
+                (v << 3) | (v >> 2)
+            };
+            let expected = 0xff00_0000 | channel(0) << 16 | channel(5) << 8 | channel(10);
+            assert_eq!(pen_color(&sys, 0), expected);
+            assert_eq!(pen_color(&sys, 1), expected);
+        }
+    }
+}
 /// Tilemaps are 64x64 tiles of 8x8 pixels and wrap at 512.
 const MAP_MASK: u32 = 511;
 
@@ -66,8 +108,8 @@ fn u16_at(mem: &[u32], idx: usize) -> u16 {
 
 /// Resolves one of the 4096 tile pens to a packed 0xAARRGGBB colour.
 ///
-/// The palette is xBBBBBGGGGGRRRRR; each 5-bit component is expanded through
-/// the colour-translation RAM into 8 bits.
+/// Each RGB5 component is expanded into 8 bits. Model 1 additionally uses
+/// bit 15 as full/half intensity; Model 2 retains its colour translation.
 pub fn pen_color<S: TileSource>(sys: &S, pen: u16) -> u32 {
     let palcolor = sys.palette_u16(pen as usize);
     let r5 = (palcolor & 0x1f) as usize;
@@ -87,6 +129,11 @@ pub fn pen_color<S: TileSource>(sys: &S, pen: u16) -> u32 {
         (e(r5), e(g5), e(b5))
     };
 
+    let (r, g, b) = if sys.palette_dimmed(palcolor) {
+        (r >> 1, g >> 1, b >> 1)
+    } else {
+        (r, g, b)
+    };
     let (r, g, b) = (
         sys.monitor_gamma(r),
         sys.monitor_gamma(g),

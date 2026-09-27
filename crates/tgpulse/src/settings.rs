@@ -22,6 +22,7 @@ use tgpulse_core::config::{AudioGains, AudioMutes, Cabinet, Config, Widescreen};
 pub struct Settings {
     pub ssaa: u32,
     pub fullscreen: bool,
+    pub srgb: bool,
     pub widescreen: Widescreen,
     pub widescreen_stretch_2d: bool,
     pub smooth_shadows: bool,
@@ -44,6 +45,7 @@ impl Settings {
         Self {
             ssaa: config.ssaa,
             fullscreen: config.fullscreen,
+            srgb: config.srgb,
             widescreen: config.widescreen,
             widescreen_stretch_2d: config.widescreen_stretch_2d,
             smooth_shadows: config.smooth_shadows,
@@ -59,6 +61,7 @@ impl Settings {
     pub fn apply_to(&self, config: &mut Config) {
         config.ssaa = self.ssaa;
         config.fullscreen = self.fullscreen;
+        config.srgb = self.srgb;
         config.widescreen = self.widescreen;
         config.widescreen_stretch_2d = self.widescreen_stretch_2d;
         config.smooth_shadows = self.smooth_shadows;
@@ -124,6 +127,7 @@ impl Settings {
                     settings.smooth_shadows = boolean(value).unwrap_or(settings.smooth_shadows)
                 }
                 "fullscreen" => settings.fullscreen = boolean(value).unwrap_or(settings.fullscreen),
+                "srgb" => settings.srgb = boolean(value).unwrap_or(settings.srgb),
                 "volume" => match value.parse::<u32>() {
                     Ok(n) => settings.volume = n,
                     Err(_) => {
@@ -201,6 +205,8 @@ impl Settings {
              \n\
              ssaa = {}\n\
              fullscreen = {}\n\
+             # Correct framebuffer sRGB presentation; off preserves the legacy look.\n\
+             srgb = {}\n\
              widescreen = {}\n\
              widescreen_stretch_2d = {}\n\
              smooth_shadows = {}\n\
@@ -222,6 +228,7 @@ impl Settings {
              reverse_landscape = {}\n",
             self.ssaa,
             on_off(self.fullscreen),
+            on_off(self.srgb),
             self.widescreen.as_str(),
             on_off(self.widescreen_stretch_2d),
             on_off(self.smooth_shadows),
@@ -255,6 +262,7 @@ mod tests {
         let settings = Settings {
             ssaa: 4,
             fullscreen: true,
+            srgb: true,
             widescreen: Widescreen::Auto,
             smooth_shadows: false,
             volume: 400,
@@ -327,6 +335,7 @@ mod tests {
         let mut config = Config::default();
         Settings {
             volume: 300,
+            srgb: true,
             audio_mutes: AudioMutes {
                 multipcm1: true,
                 multipcm2: false,
@@ -342,6 +351,7 @@ mod tests {
             Settings::from_config(&config),
             Settings {
                 volume: 300,
+                srgb: true,
                 audio_mutes: AudioMutes {
                     multipcm1: true,
                     multipcm2: false,

@@ -233,6 +233,9 @@ pub struct Config {
     pub rom_dir: std::path::PathBuf,
     /// Start with the window filling the screen.
     pub fullscreen: bool,
+    /// Frontend-only correction of display RGB sampling into an sRGB surface.
+    /// Off preserves the previous presentation; never changes emulated pixels.
+    pub srgb: bool,
     pub system: System,
     pub cabinet: Cabinet,
     /// Supersampling factor for the 3D rasterizer.
@@ -306,6 +309,7 @@ impl Default for Config {
             rom_path: String::new(),
             rom_dir: std::path::PathBuf::from(crate::library::DEFAULT_DIR),
             fullscreen: false,
+            srgb: false,
             system: System::Model2,
             // A standalone cabinet is what anyone running one machine wants,
             // and it is the only setting that reaches the game without a link

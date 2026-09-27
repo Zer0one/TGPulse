@@ -467,6 +467,7 @@ impl App {
             }
         });
         video.set_cabinet_aspect(settings.cabinet_wide);
+        video.set_srgb(self.config.srgb);
         let ui = self
             .gui
             .build_renderer(video.device(), video.queue(), video.surface_format());
@@ -934,6 +935,9 @@ impl App {
                 Action::LoadState(slot) => self.load_state(slot),
                 Action::Debug(line) => self.run_debug_command(&line),
                 Action::SettingsChanged => {
+                    if let Some(presenter) = &mut self.presenter {
+                        presenter.video.set_srgb(self.config.srgb);
+                    }
                     #[cfg(target_os = "android")]
                     crate::storage::set_reverse_landscape(self.config.reverse_landscape);
                     if let Some(session) = &mut self.session {

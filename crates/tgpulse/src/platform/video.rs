@@ -13,6 +13,18 @@ use tgpulse_core::model1_video::GpuQuad;
 use tgpulse_core::tilemap::{SCREEN_H, SCREEN_W};
 use winit::window::Window;
 
+fn framebuffer_format(correct_srgb: bool, surface: wgpu::TextureFormat) -> wgpu::TextureFormat {
+    if correct_srgb && surface.is_srgb() {
+        wgpu::TextureFormat::Bgra8UnormSrgb
+    } else {
+        // Non-sRGB surfaces already preserve the display-encoded bytes.
+        wgpu::TextureFormat::Bgra8Unorm
+    }
+}
+
+#[cfg(test)]
+mod colour_tests;
+
 pub struct Model2Video {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -21,6 +33,7 @@ pub struct Model2Video {
     pub size: winit::dpi::PhysicalSize<u32>,
 
     pipeline: wgpu::RenderPipeline,
+    srgb: bool,
     texture: wgpu::Texture,
     bind_group: wgpu::BindGroup,
     exact: ExactCompute,
@@ -40,6 +53,24 @@ pub struct Model2Video {
 }
 
 impl Model2Video {
+    /// Decode display RGB when sampling only if the surface will encode it
+    /// again. The UI, core pixels, and compute output remain unchanged.
+    pub fn set_srgb(&mut self, enabled: bool) {
+        if self.srgb == enabled {
+            return;
+        }
+        self.srgb = enabled;
+        let (texture, bind_group) = Self::make_fb_texture(
+            &self.device,
+            &self.bgl,
+            &self.sampler,
+            self.tex_w,
+            self.tex_h,
+            framebuffer_format(enabled, self.config.format),
+        );
+        self.texture = texture;
+        self.bind_group = bind_group;
+    }
     /// Native cabinet aspect: no additional FOV expansion on an anamorphic image.
     pub fn set_cabinet_aspect(&mut self, wide: Option<bool>) {
         self.cabinet_wide = wide;
@@ -87,8 +118,14 @@ impl Model2Video {
         if (tw, th) == (self.tex_w, self.tex_h) {
             return;
         }
-        let (texture, bind_group) =
-            Self::make_fb_texture(&self.device, &self.bgl, &self.sampler, tw, th);
+        let (texture, bind_group) = Self::make_fb_texture(
+            &self.device,
+            &self.bgl,
+            &self.sampler,
+            tw,
+            th,
+            framebuffer_format(self.srgb, self.config.format),
+        );
         self.texture = texture;
         self.bind_group = bind_group;
         self.tex_w = tw;
@@ -101,6 +138,7 @@ impl Model2Video {
         sampler: &wgpu::Sampler,
         width: u32,
         height: u32,
+        format: wgpu::TextureFormat,
     ) -> (wgpu::Texture, wgpu::BindGroup) {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Framebuffer"),
@@ -112,7 +150,7 @@ impl Model2Video {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8Unorm,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -300,7 +338,14 @@ impl Model2Video {
                 },
             ],
         });
-        let (texture, bind_group) = Self::make_fb_texture(&device, &bgl, &sampler, tex_w, tex_h);
+        let (texture, bind_group) = Self::make_fb_texture(
+            &device,
+            &bgl,
+            &sampler,
+            tex_w,
+            tex_h,
+            framebuffer_format(false, format),
+        );
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blit"),
@@ -337,6 +382,7 @@ impl Model2Video {
             config,
             size,
             pipeline,
+            srgb: false,
             texture,
             bind_group,
             exact,

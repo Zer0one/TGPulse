@@ -857,6 +857,8 @@ fn settings_window(
             changed |= ui.checkbox("Smooth shadows", &mut config.smooth_shadows);
             ui.text_disabled("Blends the hardware's stipple instead of reproducing it.");
             changed |= ui.checkbox("Fullscreen during games", &mut config.fullscreen);
+            changed |= ui.checkbox("sRGB correction", &mut config.srgb);
+            ui.text_disabled("Preserves framebuffer colours on sRGB displays; off keeps the legacy look.");
 
             ui.separator();
             ui.text_disabled("Audio");
@@ -905,6 +907,7 @@ fn settings_window(
                 config.widescreen_stretch_2d = shipped.widescreen_stretch_2d;
                 config.smooth_shadows = shipped.smooth_shadows;
                 config.fullscreen = shipped.fullscreen;
+                config.srgb = shipped.srgb;
                 config.volume = shipped.volume;
                 config.audio_mutes = shipped.audio_mutes;
                 config.audio_gains = shipped.audio_gains;

@@ -914,6 +914,10 @@ impl crate::tilemap::TileSource for Model1System {
     fn monitor_gamma(&self, v: u32) -> u32 {
         v & 0xff
     }
+    fn palette_dimmed(&self, colour: u16) -> bool {
+        // MAME model1_paletteram_w: expand to 8 bits, then halve each channel.
+        colour & 0x8000 == 0
+    }
 }
 
 #[cfg(test)]
@@ -935,6 +939,25 @@ mod persistence_tests {
             mpcm1: vec![],
             mpcm2: vec![],
             ioboard_config: vec![],
+        }
+    }
+
+    #[test]
+    fn tile_palette_intensity_matches_mame_for_every_colour() {
+        let mut sys = Model1System::new(&empty_roms()).unwrap();
+        for colour in 0..=u16::MAX {
+            sys.palette_ram[..2].copy_from_slice(&colour.to_le_bytes());
+            let channel = |shift: u32| {
+                let v = (u32::from(colour) >> shift) & 31u32;
+                let expanded = (v << 3) | (v >> 2);
+                if colour & 0x8000 == 0 {
+                    expanded >> 1
+                } else {
+                    expanded
+                }
+            };
+            let expected = 0xff00_0000 | channel(0) << 16 | channel(5) << 8 | channel(10);
+            assert_eq!(crate::tilemap::pen_color(&sys, 0), expected, "{colour:04x}");
         }
     }
 
