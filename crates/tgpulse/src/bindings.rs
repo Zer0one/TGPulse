@@ -682,7 +682,7 @@ mod tests {
         assert_eq!(b.binding(Signal::Gear1).text, Signal::Gear1.default_text());
     }
     #[test]
-    fn existing_signals_file_inherits_wingwar_throttle_defaults() {
+    fn existing_signals_file_inherits_shared_throttle_defaults() {
         let path = std::env::temp_dir().join(format!(
             "tgpulse-wingwar-bindings-{}.conf",
             std::process::id()
@@ -694,14 +694,44 @@ mod tests {
         assert_eq!(loaded.binding(Signal::Accelerator).text, "KeyU");
         assert_eq!(loaded.binding(Signal::Brake).text, "KeyO");
         assert_eq!(
-            loaded.binding(Signal::WingWarThrottleUp).text,
+            loaded.binding(Signal::ThrottleUp).text,
             "KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+"
         );
         assert_eq!(
-            loaded.binding(Signal::WingWarThrottleDown).text,
+            loaded.binding(Signal::ThrottleDown).text,
             "KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-"
         );
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn wingwar_throttle_bindings_load_and_save_as_shared_signals() {
+        let path = std::env::temp_dir().join(format!(
+            "tgpulse-throttle-rename-{}.conf",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "format = signals-v1\nwingwar_throttle_up = F11\nwingwar_throttle_down = F12\n",
+        )
+        .unwrap();
+        let loaded = Bindings::load(&path);
+        assert_eq!(loaded.binding(Signal::ThrottleUp).text, "F11");
+        assert_eq!(loaded.binding(Signal::ThrottleDown).text, "F12");
+        loaded.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("\nthrottle_up = F11\n"));
+        assert!(saved.contains("\nthrottle_down = F12\n"));
+        assert!(!saved.contains("wingwar_throttle"));
+        let reloaded = Bindings::load(&path);
+        assert_eq!(
+            reloaded.binding(Signal::ThrottleUp),
+            loaded.binding(Signal::ThrottleUp)
+        );
+        assert_eq!(
+            reloaded.binding(Signal::ThrottleDown),
+            loaded.binding(Signal::ThrottleDown)
+        );
         std::fs::remove_file(path).unwrap();
     }
     #[test]

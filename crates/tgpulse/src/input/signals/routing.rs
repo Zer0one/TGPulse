@@ -117,6 +117,8 @@ impl InputState {
             C::Button3 if self.game == "vf" || self.game.starts_with("doa") => S::Action2,
             C::Button2 if self.game.starts_with("vstriker") => S::Action3,
             C::Button3 if self.game.starts_with("vstriker") => S::Action2,
+            // SWA's third hardware button changes view, rather than firing.
+            C::Button3 if matches!(self.game.as_str(), "swa" | "swaj") => S::View1,
             C::Button1
                 if self.game.starts_with("dynabb")
                     || matches!(self.game.as_str(), "hpyagu98" | "rascot2" | "airwlkrs") =>
@@ -137,6 +139,18 @@ impl InputState {
             C::ViewBlue => S::View2,
             C::ViewYellow => S::View3,
             C::ViewGreen => S::View4,
+            C::Throttle
+                if matches!(self.game.as_str(), "swa" | "swaj")
+                    || self.game.starts_with("wingwar") =>
+            {
+                S::ThrottleUp
+            }
+            C::Brake
+                if matches!(self.game.as_str(), "swa" | "swaj")
+                    || self.game.starts_with("wingwar") =>
+            {
+                S::ThrottleDown
+            }
             C::Throttle => S::Accelerator,
             C::Brake => S::Brake,
             C::GearUp => S::Action2,
@@ -224,23 +238,15 @@ impl InputState {
                     )
                 }
                 A::Stick2X | A::Stick2Y if swa => return 127, // no second player binding
-                A::Throttle if swa => {
-                    return centered(
-                        self.amount(C::Brake) - self.amount(C::Throttle),
-                        128,
-                        28,
-                        228,
-                    )
-                }
-                A::Throttle if self.game.starts_with("wingwar") => {
+                A::Throttle if swa || self.game.starts_with("wingwar") => {
                     // Two assignable half-axes drive one cabinet ADC. Centre
                     // at release is a gamepad adaptation, not MAME's idle value.
                     // In-game testing confirms lower ADC means more throttle.
                     return centered(
-                        self.signal(S::WingWarThrottleDown) - self.signal(S::WingWarThrottleUp),
+                        self.signal(S::ThrottleDown) - self.signal(S::ThrottleUp),
                         128,
-                        1,
-                        255,
+                        if swa { 28 } else { 1 },
+                        if swa { 228 } else { 255 },
                     );
                 }
                 _ => {}

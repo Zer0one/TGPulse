@@ -249,7 +249,7 @@ fn cabinets() -> Vec<Cabinet> {
         0x10,
         true,
         true,
-        &[(Action1, 1, 1), (Action2, 1, 2), (Action3, 1, 0x10)],
+        &[(Action1, 1, 1), (Action2, 1, 2), (View1, 1, 0x10)],
     );
     add(
         "wingwar wingwarj wingwaru",
@@ -809,12 +809,55 @@ fn gun_stick_moves_and_holds_the_same_cursor_that_is_drawn() {
 }
 
 #[test]
-fn wave_runner_and_flight_throttles_use_their_own_rest_and_range() {
-    for (game, scheme, channel, rest, max) in [
-        ("waverunr", Scheme::Jetski, 2, 128, 0),
-        ("swa", Scheme::Flight, 2, 128, 28),
-        ("swaj", Scheme::Flight, 2, 128, 28),
-    ] {
+fn swa_view_uses_view1_defaults_not_action3() {
+    for game in ["swa", "swaj"] {
+        let mut input = state(game, Scheme::Flight);
+        let mut out = Inputs::default();
+        for (button, expected) in [
+            (gilrs::Button::DPadDown, [255, 0xef, 255]),
+            (gilrs::Button::West, [255; 3]),
+        ] {
+            input.set_pad_button(button, true);
+            input.poll(&mut out);
+            assert_eq!(ports(&out), expected, "{game} {button:?}");
+            input.set_pad_button(button, false);
+            input.poll(&mut out);
+            assert_eq!(ports(&out), [255; 3]);
+        }
+        for (key, expected) in [(KeyCode::KeyZ, [255, 0xef, 255]), (KeyCode::KeyL, [255; 3])] {
+            input.on_key(key, true);
+            input.poll(&mut out);
+            assert_eq!(ports(&out), expected, "{game} {key:?}");
+            input.on_key(key, false);
+            input.poll(&mut out);
+            assert_eq!(ports(&out), [255; 3]);
+        }
+    }
+}
+
+#[test]
+fn swa_throttle_default_keys_cover_both_directions_and_cancel() {
+    for game in ["swa", "swaj"] {
+        let mut input = state(game, Scheme::Flight);
+        input.set_analog_roles(db_roles(game));
+        let mut out = Inputs::default();
+        for (accelerator, brake, expected) in [
+            (false, false, 128),
+            (true, false, 28),
+            (false, true, 228),
+            (true, true, 128),
+        ] {
+            input.on_key(KeyCode::KeyW, accelerator);
+            input.on_key(KeyCode::KeyS, brake);
+            input.poll(&mut out);
+            assert_eq!(out.analog[2], expected, "{game} throttle");
+        }
+    }
+}
+
+#[test]
+fn wave_runner_throttle_keeps_its_own_rest_and_range() {
+    for (game, scheme, channel, rest, max) in [("waverunr", Scheme::Jetski, 2, 128, 0)] {
         let mut input = state(game, scheme);
         input.set_analog_roles(db_roles(game));
         input
@@ -831,15 +874,22 @@ fn wave_runner_and_flight_throttles_use_their_own_rest_and_range() {
 }
 
 #[test]
-fn wingwar_throttle_half_axes_are_independent_and_cancel() {
-    for game in ["wingwar", "wingwaru", "wingwarj", "wingwar360"] {
+fn flight_throttle_half_axes_are_independent_of_pedals_and_cancel() {
+    for (game, min, max, half_up, half_down) in [
+        ("swa", 28, 228, 78, 178),
+        ("swaj", 28, 228, 78, 178),
+        ("wingwar", 1, 255, 65, 192),
+        ("wingwaru", 1, 255, 65, 192),
+        ("wingwarj", 1, 255, 65, 192),
+        ("wingwar360", 1, 255, 65, 192),
+    ] {
         let mut input = state(game, Scheme::Flight);
         input.set_analog_roles(db_roles(game));
         let mut out = Inputs::default();
         for (up, down, expected) in [
             (false, false, 128),
-            (true, false, 1),
-            (false, true, 255),
+            (true, false, min),
+            (false, true, max),
             (true, true, 128),
         ] {
             input.on_key(KeyCode::KeyW, up);
@@ -866,18 +916,18 @@ fn wingwar_throttle_half_axes_are_independent_and_cancel() {
         // depending on a connected controller or its native trigger mapping.
         input
             .bindings
-            .set_expression(S::WingWarThrottleUp, "pad:LeftStickX+")
+            .set_expression(S::ThrottleUp, "pad:LeftStickX+")
             .unwrap();
         input
             .bindings
-            .set_expression(S::WingWarThrottleDown, "pad:LeftStickY+")
+            .set_expression(S::ThrottleDown, "pad:LeftStickY+")
             .unwrap();
         for (up, down, expected) in [
             (0.0, 0.0, 128),
-            (1.0, 0.0, 1),
-            (0.0, 1.0, 255),
-            (0.5, 0.0, 65),
-            (0.0, 0.5, 192),
+            (1.0, 0.0, min),
+            (0.0, 1.0, max),
+            (0.5, 0.0, half_up),
+            (0.0, 0.5, half_down),
             (0.5, 0.5, 128),
             (1.0, 1.0, 128),
         ] {

@@ -77,24 +77,28 @@ functions, with both sticks kept independent.
 Axis defaults use left X for steering/bank/handle/curving/swing; left X/Y for
 gun aim and analog flight; right X for roll/inclining; and right Y
 (downward half) for Bat Swing. Accelerator and Brake use R2/L2.
-Wing War has two separate assignable entries, `Wing War: Throttle: Up`
-(`wingwar_throttle_up = KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+`) and
-`Wing War: Throttle: Down`
-(`wingwar_throttle_down = KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-`).
+Star Wars Arcade and Wing War share two assignable entries, `Throttle Up`
+(`throttle_up = KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+`) and
+`Throttle Down`
+(`throttle_down = KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-`).
 R2 OR right stick up increases throttle; L2 OR right stick down decreases it.
 Both triggers read positive travel; gilrs right-stick Y is positive up.
 The translator subtracts Up from Down on the single throttle ADC, since
 in-game testing confirms lower ADC means more power. Released/equal inputs
-give 0x80, full Up gives 0x01, full Down gives 0xFF. Alternatives use the
+give 0x80. Full Up/Down give 0x01/0xFF for Wing War and 28/228 for SWA,
+preserving each cabinet's ADC range with the same polarity. Alternatives use the
 stronger input, not a sum; opposite directions compensate.
 This centred rest is a gamepad adaptation, not MAME's minimum idle value.
-It applies to the Wing War family only, independently of Accelerator/Brake.
+It applies to both families, independently of Accelerator/Brake.
 Existing binding files inherit these defaults for absent entries; GUI edits
 save them normally, without requiring a reset of existing bindings.
+Previously customized `wingwar_throttle_up/down` entries are accepted on load
+and saved as `throttle_up/down`; there are no duplicate signals in the GUI.
 Slide is split into Water Ski: Slide (left X, arrows/A/D) and Top Skater:
 Slide (right X, U/O), matching their respective SM2-Emu defaults.
 The GUI shows game-family names in parentheses below Analog Joystick X/Y
-and Extra Action. For Extra Action, each game also includes its function:
+and Extra Action; below each Throttle entry it shows `(Star Wars Arcade, Wing War)`.
+For Extra Action, each game also includes its function:
 Sega Rally: Handbrake; Virtual On: Right Dash / Turbo; Ski Super G: Select 2.
 Power Sled uses Extra Action for Cancel Error. This is explanatory text, not a game filter.
 Driving signals are ordered Steering / Bank, Accelerator, Brake, then all

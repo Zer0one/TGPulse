@@ -15,7 +15,16 @@ macro_rules! signals {
             pub fn key(self) -> &'static str { match self { $( Self::$id => $key, )* } }
             pub fn signed(self) -> bool { match self { $( Self::$id => $axis, )* } }
             pub fn default_text(self) -> &'static str { match self { $( Self::$id => $default, )* } }
-            pub fn from_key(key: &str) -> Option<Self> { Self::ALL.iter().copied().find(|s| s.key()==key) }
+            pub fn from_key(key: &str) -> Option<Self> {
+                // Preserve existing customized Wing War bindings on load;
+                // the GUI and saved files expose only the shared signals.
+                let key = match key {
+                    "wingwar_throttle_up" => "throttle_up",
+                    "wingwar_throttle_down" => "throttle_down",
+                    other => other,
+                };
+                Self::ALL.iter().copied().find(|s| s.key()==key)
+            }
         }
     }
 }
@@ -48,8 +57,8 @@ signals! {
     Neutral, "H-Gate: Neutral", "neutral", false, "Digit0, pad:West";
     SkyX, "Analog Joystick X", "analog_x", true, "keys:ArrowLeft/ArrowRight, keys:KeyA/KeyD, pad:LeftStickX";
     SkyY, "Analog Joystick Y", "analog_y", true, "keys:KeyG/KeyT, pad:LeftStickY";
-    WingWarThrottleUp, "Wing War: Throttle: Up", "wingwar_throttle_up", false, "KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+";
-    WingWarThrottleDown, "Wing War: Throttle: Down", "wingwar_throttle_down", false, "KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-";
+    ThrottleUp, "Throttle Up", "throttle_up", false, "KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+";
+    ThrottleDown, "Throttle Down", "throttle_down", false, "KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-";
     Handle, "Wave Runner: Handle", "handle", true, "keys:ArrowLeft/ArrowRight, keys:KeyA/KeyD, pad:LeftStickX";
     GunYaw, "Gun Yaw", "gun_yaw", true, "keys:ArrowLeft/ArrowRight, keys:KeyA/KeyD, pad:LeftStickX";
     GunPitch, "Gun Pitch", "gun_pitch", true, "keys:ArrowDown/ArrowUp, keys:KeyS/KeyW, pad:LeftStickY";
@@ -84,6 +93,7 @@ impl Signal {
     pub fn usage(self) -> Option<&'static str> {
         match self {
             Self::SkyX | Self::SkyY => Some("(Sky Target, Star Wars Arcade, Wing War, NetMerc)"),
+            Self::ThrottleUp | Self::ThrottleDown => Some("(Star Wars Arcade, Wing War)"),
             Self::Action4 => Some(
                 "(Sega Rally: Handbrake; Virtual On: Right Dash / Turbo; Ski Super G: Select 2; Power Sled: Cancel Error)",
             ),
