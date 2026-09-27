@@ -36,6 +36,11 @@
 - Treat user-named references as authoritative at the requested layer: inspect
   their current implementation, not only prior summaries. For Model 2 controls,
   the tested SM2 Libretro reference and its workbook remain authoritative.
+- For hardware/timing discrepancies, MAME is an implementation reference, not
+  an automatic correctness oracle. Decide which observable result is more
+  plausibly correct using hardware documentation, device logic and experiments.
+  Record the rationale, confidence and limits; preserve valid alternatives and
+  label unresolved assumptions rather than forcing alignment with MAME.
 
 ## Future Libretro core — Model 1 first
 

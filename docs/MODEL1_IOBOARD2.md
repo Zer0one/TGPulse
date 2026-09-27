@@ -107,11 +107,13 @@ and continue under the assumption that the missing peripheral worked.
 
 ### Third checkpoint — isolated CPU adaptation
 
-`crates/z80` contains a separately named `tgpulse-z80` adaptation of the already
-installed MIT-licensed `z80` 1.0.2, preserving its authors and source formatting.
+At this checkpoint `crates/z80` was a separately named `tgpulse-z80` adaptation
+of the installed MIT-licensed `z80` 1.0.2, preserving authors and source formatting.
 See its [provenance and patch scope](../crates/z80/README.md). The registry copy
-and `model1io.rs` consumer remain unchanged; this is not a new CPU implementation
-or a global Cargo-cache patch. No software was downloaded or installed.
+and `model1io.rs` consumer were initially unchanged. Subsequent consolidation
+migrated that consumer, removed the registry dependency and renamed the local
+package to `z80`. This is not a new CPU implementation or a global Cargo-cache
+patch. No software was downloaded or installed.
 
 1. Optional live IRQ and acknowledge hooks select the daisy-chain vector
    **when the CPU accepts the interrupt**, not when INT rises. DI/EI, HALT,
@@ -288,7 +290,9 @@ reply and displays `I/O BOARD ERROR`. The V60 bus now has a default-zero
 read waits. Debugger reads, writes and unconnected high-byte reads do not charge
 them. **Board-1 wait timing is intentionally unchanged** for this checkpoint;
 auditing it is a separate follow-up, not a claim that its present timing matches
-all MAME accesses. No arbitrary boot delay or game-ROM patch was added.
+all MAME accesses. The later [DPRAM audit](MODEL1_ROADMAP.md#dpram-checkpoint--2026-09-27)
+extends the same wait to board 1 after reference and regression checks.
+No arbitrary boot delay or game-ROM patch was added.
 
 The debugger/system run API propagates a board fault and stops advancement;
 the desktop frontend pauses and reports the error instead of continuing through

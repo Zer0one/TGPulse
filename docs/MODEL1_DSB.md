@@ -28,9 +28,10 @@ Olivier Galibert for DSB, Olivier Galibert for MPEG, smf for i8251 as applicable
 
 ## Existing components and decisions
 
-- Use **`tgpulse-z80`**, the local adaptation in `crates/z80`, as requested.
-  It is also the destination of the later Z80 consolidation. Do not migrate
-  the existing original I/O-board consumer during DSB implementation.
+- Use **`z80`**, the local adaptation in `crates/z80`, as requested (formerly
+  `tgpulse-z80`; renamed after consolidation, not replaced with crates.io).
+  It was selected as the destination of later Z80 consolidation; the original
+  I/O-board consumer was migrated separately, after DSB implementation.
 - Reuse its `Z80_io` live IRQ, acknowledge, emulated-clock and `CpuState` APIs.
   `model1io2/cpu.rs` provides an ownership/snapshot pattern, not a DSB bus:
   do not bring that board's CTC/PIO/SIO or daisy chain into this design.
@@ -271,6 +272,13 @@ the next bounded integration work.
 
 ## Firmware and filtered serial checkpoint — 2026-09-27
 
+Historical checkpoint: superseded for the Model 1 production sender by the
+[consolidated timing closure](MODEL1_ROADMAP.md#consolidated-timing-closure--2026-09-27).
+The 68000 endpoint now lives in `sound::SerialState` and its one TX pin feeds
+both main and DSB receivers. `i8251.rs` is shared rather than duplicated. The
+DSB-owned transmitter described below is retained for isolated fixtures; a
+production snapshot must now include the external serial state as well as DSB.
+
 `SoundSystem::with_dsb` supplies ROM resources in memory and connects the wire
 before the constructor's first 68000 instruction. Normal game constructors still
 use `SoundSystem::new`, with no DSB attached. No loader/settings/GUI changes were
@@ -298,7 +306,7 @@ propagation is required before enabling this path in games**.
 ### Firmware evidence
 
 Local user-owned `epr-16471.2`, SHA-1
-`f12b214e6f195b0e5f49ba9f41d8e54bfcea9acc`, runs unmodified on `tgpulse-z80`.
+`f12b214e6f195b0e5f49ba9f41d8e54bfcea9acc`, runs unmodified on the local `z80`.
 After its startup delay it enters the UART polling loop, with IM1 configured
 but maskable interrupts disabled, and initializes the volume to 59/128.
 The isolated probe ran ten emulated seconds without a device fault.

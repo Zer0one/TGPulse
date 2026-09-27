@@ -7,10 +7,18 @@ board, with deterministic clock conversion, mixing and a persistent output-only
 FM mute. Device reference comparison and synthetic board tests pass; per-game
 listening acceptance is still pending. The user-tested PCM/SCSP mutes predate
 this new FM path.
-Timing audit/Z80 consolidation remain final implementation cleanup. No native
+Timing audit/Z80 consolidation are now completed as bounded milestones (see
+the consolidated closure linked below). No native
 production dependency or software installation was introduced. Model 2 is not
 being redesigned: original Model 2 shares this MultiPCM/FM board and therefore
 receives the same integration; the SCSP board is unchanged.
+
+The [consolidated timing closure](MODEL1_ROADMAP.md#consolidated-timing-closure--2026-09-27)
+replaces Model 1's instantaneous V60/68000 UART path with two clocked endpoints,
+sharing `i8251.rs` with DSB. Arithmetic and serial-frame tests justify keeping
+the existing chip clocks/converters. Model 2 retains its existing HLE link.
+The 4 MHz DSB CPU clock
+remains explicitly an estimate inherited from MAME, not a hardware measurement.
 
 ## Existing paths and reference
 

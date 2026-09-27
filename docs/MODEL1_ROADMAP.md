@@ -9,12 +9,14 @@ macos-emulation-toolkit and MAME projects.
 ### Consolidated verification — 2026-09-27
 
 - The complete pending integration passes `cargo test --offline --workspace`:
-  293 passed. The offline development
+  344 passed after the bounded timing corrections, FIFO retry completion,
+  timed main UART integration and vblank ordering checks. The offline development
   release build also passes; the existing `block` future-compatibility warning
   remains. These checks are not a fresh manual gameplay validation.
 - Wing War gameplay and throttle direction were confirmed by the user;
-  general Model 1 timing audit and Z80-copy consolidation remain final,
-  post-implementation activities. NetMerc/R360 are not promoted by this result.
+  the bounded Model 1 timing audit is now complete (limits recorded below).
+  Z80 consolidation was explicitly brought forward before complete save states.
+  NetMerc/R360 are not promoted by this result.
 - The frontend's Return to game menu / quit also operates in the library,
   retaining the CLI/fullscreen exception and held-chord state across game close.
   Manual UI/gamepad validation of the new library-exit path remains pending.
@@ -25,11 +27,11 @@ macos-emulation-toolkit and MAME projects.
   Model 1 2D palette intensity and persistent source gains are implemented.
   Master volume now also has a 100% reference and double-click reset.
 - User confirms the washed-out colour issue resolved with sRGB correction.
-  Player 2 is implemented for applicable Model 1 and Model 2 local seats
-  (details below); physical two-gamepad acceptance and extended audio/input
-  testing remain open.
-  MultiPCM1 distortion remains to investigate; Z80 unification and the timing
-  audit remain final post-implementation work.
+  Player 2 and the Model 1 networking milestone are closed by user decision
+  (details and evidence limits below). Wing War R360 follow-up is deferred.
+  MultiPCM1 distortion and extended per-title audio testing remain open;
+  the timing audit is closed as a bounded implementation milestone, not a
+  hardware-cycle-accuracy or fresh gameplay certification.
 
 Apply the preflight/checkpoint/recap agreement in [AGENTS.md](../AGENTS.md).
 The table is an initial engineering estimate, not a measured cost or completion
@@ -61,6 +63,32 @@ to Model 1: execution/lifecycle, input, audio/video, resources, portability and
 save states, not serialization alone. Apply the concrete guidance in
 [AGENTS.md](../AGENTS.md) where relevant, keeping changes minimal and avoiding
 an unsolicited adapter or broad rewrite. This is not a claim of Libretro support.
+
+### Deferred milestone — rumble and force feedback during Libretro development
+
+User decision (2026-09-27): address this during development of the Model 1
+Libretro core, not as a prerequisite for the current standalone milestones.
+
+- [ ] Audit Model 1 drive/output protocols per game against MAME and verified
+  board references. The current shared rumble decoder comes from Daytona's
+  `epr-16488a` drive firmware; forwarding Model 1 output bytes through it does
+  not establish correct VR/Wing War effects.
+- [ ] Expose verified output state/events through a frontend-independent core
+  interface. Keep host devices and callbacks outside serialized device state;
+  define reset/unload behavior so effects cannot remain active after a session.
+- [ ] Map suitable effects to the Libretro rumble interface, with capability
+  checks and explicit player routing. Preserve the distinction between a
+  gamepad intensity approximation and directional wheel force feedback;
+  do not claim that rumble implements the latter.
+- [ ] Validate command decoding separately from real frontend/controller output,
+  including no-effect/stop, reset, unload and supported games. Decide dedicated
+  wheel force-feedback scope separately; R360 cabinet motion is not pad rumble.
+
+Current standalone limit: only P1 receives the shared rumble approximation.
+The locked `gilrs-core` 0.5.15 macOS backend reports no force-feedback support
+and its motor-output function is empty, even with `rumble = on`. A future
+Libretro frontend owns host rumble delivery; no separate macOS backend rewrite
+or physical motion implementation is authorized by this roadmap entry.
 
 ## Phase 1 — bounded compatibility fixes
 
@@ -130,15 +158,15 @@ replacement for a user's persistent gameplay NVRAM.
    at 1,800 frames instead of I/O BOARD ERROR. Manual controls/gameplay/audio,
    R360 networking and mechanical motion remain unvalidated; this is not a full
    motion-system simulation. See the R360 checkpoint in MODEL1_IOBOARD2.md.
-   Timing audit and Z80 consolidation are now final post-implementation tasks,
-   not gates before YM3438 work, unless a concrete defect makes one necessary.
+   **R360 follow-up is deferred by user decision**, including the EEPROM/link
+   diagnosis; it does not keep the main networking milestone open.
+   The bounded timing audit and Z80 consolidation are now complete; full
+   machine save states remain the next implementation phase.
 
-   **Separate timing follow-up:** audit the one-cycle DPRAM read wait for the
-   original I/O-board games. It is now implemented on the advanced-board path
-   to prevent Wing War's premature I/O timeout; original-board timing was kept
-   unchanged and its existing five-game regression baseline still matches.
-   This is part of the [systematic Model 1 timing audit](#model-1-timing-audit-against-mame)
-   below, not a completed system-wide alignment.
+   **DPRAM timing follow-up completed:** the one-cycle V60 read wait now also
+   applies to the original I/O-board games, matching MAME's common memory map.
+   See the bounded [timing checkpoint](#dpram-checkpoint--2026-09-27) below;
+   this is not a completed system-wide alignment.
 2. **YM3438 synthesis:** Rust FM/DAC synthesis is implemented and connected to
    the production MultiPCM board. Per-title listening and level acceptance remain
    pending; do not equate synthetic reference tests with verified game audio.
@@ -177,7 +205,7 @@ replacement for a user's persistent gameplay NVRAM.
 3. **Star Wars DSB:** implement the Z80/MPEG board and its filtered serial command
    path. Test music independently from the existing Model 1 sound board.
    [Source audit and integration contract](MODEL1_DSB.md) complete: use the local
-   `tgpulse-z80`; receive the 68000 sound firmware's output, not raw V60 commands.
+   `z80` in `crates/z80`; receive the 68000 sound firmware's output, not raw V60 commands.
    Isolated bus/i8251/CPU boundary implemented with twelve synthetic tests,
    including mid-transfer state continuation. Isolated Layer II decoder passes synthetic and
    local SWA-data comparisons against MAME, plus history restore/truncation tests;
@@ -273,9 +301,11 @@ SWA input follow-up (2026-09-27): `swa`/`swaj` hardware button 3 now routes to
 `View / Select 1` (default D-pad Down / Z), matching Sega Rally's view binding,
 not to `Action 3`. SWA and Wing War now share `Throttle Up` / `Throttle Down`,
 with both game families listed below the GUI entries, independent of the
-driving Accelerator/Brake bindings. Up is R2 OR right stick up (W/Up keys);
-Down is L2 OR right stick down (S/Down keys). Both use lower ADC for more power
-and rest at 128, retaining SWA's 28..228 and Wing War's 1..255 ADC ranges.
+driving Accelerator/Brake bindings. Up is L2 OR right stick up (W/Up keys);
+Down is R2 OR right stick down (S/Down keys). The triggers were subsequently
+swapped by user request, and the signal polarity inverted independently, leaving
+labels and RS-Y/keyboard bindings unchanged. Up now raises the ADC and Down
+lowers it; both rest at 128, retaining SWA's 28..228 and Wing War's 1..255 ranges.
 Verification: 263 workspace tests passed, including SWA/SWAJ default-view,
 shared throttle polarity/partial-travel/pedal-isolation and binding migration
 tests plus the all-set digital crosstalk audit.
@@ -288,7 +318,7 @@ manual gameplay confirmation; the clipping check above remains open.
   do not change this merely by analogy without tracing actual game writes.
 - Validate VR/Virtua Formula, VF, SWA and the Wing War variants in-game; the
   README's tested-title list is not a complete compatibility matrix.
-- [ ] **Player 2 controls — implemented for Model 1 and Model 2; physical acceptance pending.**
+- [x] **Player 2 controls — Model 1 and Model 2, closed by user decision.**
   Cabinet P1/P2 share one unfiltered signal catalogue with independent bindings;
   unsupported P2 rows are grey/non-editable. Coin 2 / Start 2 move to P2;
   deliberately duplicated Test/Service bindings OR into shared machine lines.
@@ -313,9 +343,9 @@ manual gameplay confirmation; the clipping check above remains open.
   independent gun transports and mid-mux save/restore; offline release build
   and `tgpulse.dev --list` pass (100 sets). No new physical-controller or
   gameplay validation is claimed.
-  Next: real two-controller SWA/VF and Model 2 input tests/gameplay (including
-  HOTD revisions' differing reference trigger ports), disconnect/reconnect and restart
-  confirmation. Identical controllers may need re-selection after a restart
+  The user subsequently closed this milestone; this status change does not
+  invent new two-controller, reconnect or gameplay test evidence.
+  Identical controllers may need re-selection after a restart
   if the OS changes their enumeration order. This is local same-cabinet play,
   not cabinet-link emulation; no host dependencies are added to the core.
 - Add Model 1 machine save states (separate from persistent NVRAM), preserving
@@ -323,7 +353,11 @@ manual gameplay confirmation; the clipping check above remains open.
   New integrations should inventory state and add serialization/continuation
   coverage where applicable now, without waiting for the full adapter. The
   current shared I/O chips are covered; the complete Model 1 machine is not.
-- Cabinet link: first M1COMM HLE checkpoint implemented from MAME's active
+  User priority: unify Z80 first, then resume this work. The unconnected
+  MultiPCM snapshot draft is paused and is not a tested machine save-state feature.
+- [x] **Cabinet link — closed by user decision.** The following records the
+  actual automated evidence, not additional manual gameplay/LAN certification.
+  First M1COMM HLE checkpoint implemented from MAME's active
   simulation path, with 4 KiB V60 mapping, VINT scheduling, ring protocol and
   serializable board state. Nine new tests cover board/bus behavior; 302 workspace
   tests pass and the offline release build passes. VR standalone completes 1,800
@@ -356,27 +390,62 @@ manual gameplay confirmation; the clipping check above remains open.
   also starts TCP; the redundant Network toggle/config key is removed.
   Operator NVRAM roles are not overridden. Regression coverage
   checks both cabinet values with supported/unsupported sets and NVRAM retention.
-  **Next:** synchronized race and LIVE spectator validation in separate desktop
-  instances, then physical LAN and MAME interoperability. The earlier scripted
+  Separate desktop synchronized gameplay, physical LAN and MAME interoperability
+  were not established by these probes; the user accepts closure with these
+  evidence limits. R360 EEPROM/link diagnosis is a separate deferred follow-up.
+  The earlier scripted
   menu preparation failure is superseded by user-configured fixtures;
   no synchronized gameplay result is claimed. No automatic fake loopback,
   invented protocol, Z80 COMM firmware claim or full-machine save-state claim.
   Drive/motion-board fidelity remains separate from cabinet link and the existing
-  controller rumble approximation.
+  controller rumble approximation. Rumble/force-feedback work is deferred to the
+  Libretro-development milestone above, not the next standalone networking task.
 - Consider checksum-aware ROM diagnostics beyond the narrowly guarded TGP
   fallback. The current general loader matches names, not expected hashes.
 
-## Phase 4 — final post-implementation consolidation
+## Phase 4 — consolidation
 
-User priority: keep the following work until after the feature implementations.
-Bring forward only a bounded fix required by a demonstrated blocking defect;
-do not start a general audit or CPU migration just because Wing War now works.
+Updated user priority: bring Z80 unification forward before full Model 1 save
+states. Keep the general timing audit after feature implementations; the CPU
+migration does not authorize a wider opcode or timing rewrite.
 
 ### Consolidate the Z80 implementations
 
-The local `tgpulse-z80` adaptation and registry `z80` dependency are a temporary
-isolation boundary, not the intended permanent architecture. Status: planned,
-not implemented; separate review/checkpoint from new-board implementation.
+**Implemented:** the original Model 1 I/O board now uses the local `z80`,
+as I/O board 2 and Star Wars DSB already did. The registry `z80` dependency and
+lockfile entry are removed. The former `tgpulse-z80` package now takes the name
+`z80`, with an explicit local path dependency. Existing bus wiring, scheduler debt and the local
+CPU implementation are unchanged. No full-machine save-state claim.
+
+Model 2 does not execute either Z80 implementation: its I/O/drive handling is
+high-level, and its sound CPUs are 68000. Nevertheless all nine README-declared
+tested Model 2 sets were checked before/after migration at 600 frames:
+
+| Board | Regression sets |
+| --- | --- |
+| Model 2 | `daytona`, `daytonase`, `vcop` |
+| Model 2A | `srallyc`, `vf2` |
+| Model 2B | `vstriker`, `schamp` |
+| Model 2C | `hotd`, `waverunr` |
+
+All debugger state/memory output and captured images match byte-for-byte.
+The Model 2 debugger capture is its existing tilemap output, not a full 3D
+renderer comparison. Model 1 has the same 600-frame comparison for `vr`,
+`vformula`, `vf`, `swa`, `swaj`, `wingwar`, `wingwaru`, `wingwarj`, `wingwar360`.
+All nine Model 1 sets also match at 1,800 frames after the same scripted coin
+and analog-input sequence. Compared observations are the debugger's `state`,
+64 KiB at `0x400000`, 4 KiB at `0xc00000`, and its PPM image; this is not a
+complete-machine-state or audio-waveform comparison. The same address ranges
+on Model 2 are sampled bus reads, not a claim that its memory map matches Model 1.
+Checks use isolated temporary directories and no personal NVRAM. These are
+bounded regressions, not fresh playability, listening or physical-input tests.
+
+The workspace passes 316 tests, including the 18 existing CPU interrupt/state
+tests and two new original-board execution tests (I/O and cycle slicing; HALT
+without repeated side effects). Offline release build passes. The pre-existing
+MultiPCM save-state draft is separate, unchanged and not certified by this suite.
+
+Consolidation criteria retained for future CPU changes:
 
 - Inventory existing Z80 consumers and preserve their I/O contracts. Optional
   interrupt/clock hooks must retain compatible default behavior.
@@ -384,17 +453,19 @@ not implemented; separate review/checkpoint from new-board implementation.
   execution before/after migration, separately from manual audio/gameplay.
 - Move consumers to one implementation only after compatibility checks pass;
   then remove the redundant dependency and reconcile the lockfile.
-- User decision: converge existing consumers onto the local `tgpulse-z80`
+- User decision: converge existing consumers onto the local `z80`
   adaptation, also selected for the new DSB. Keep its origin and delta auditable;
-  do not migrate the old consumers before the final consolidation checks.
+  keep existing consumers covered by regression checks.
 - CPU hook/state tests and Wing War firmware validation remain prerequisites;
   NetMerc support is not. Do not migrate solely to eliminate duplication.
 
 ### Model 1 timing audit against MAME
 
-**Status: planned, not started; deferred to final consolidation by the user.**
-This is not the next activity after Wing War testing. Do not change timing
-merely because this audit is on the roadmap.
+**Status: completed as a bounded phase on explicit user request.** DPRAM,
+FIFO/retry, V60/TGP clock, timers/IRQ, audio clocks, timed main UART and vblank
+ordering have been assessed and the justified corrections implemented. See
+the consolidated closure below for evidence and deliberately retained limits.
+This does not establish full hardware accuracy.
 
 - Inventory access waits across the Model 1 memory/device map: DPRAM, other
   mapped devices and coprocessor accesses. Distinguish explicit extra cycles
@@ -403,10 +474,9 @@ merely because this audit is on the roadmap.
   including interrupt and instruction-boundary interactions.
 - Compare device clock ratios, fractional cycle debt, timers, interrupt delivery
   and serial scheduling between the main CPU, I/O board, TGP and sound devices.
-- Start with the known DPRAM discrepancy: Wing War's advanced-board path now
-  charges MAME's one-cycle read wait; the original-board games still retain
-  their previous timing. Validate any extension separately across VR/Virtua
-  Formula, VF and SWA rather than applying it without regression evidence.
+- The DPRAM discrepancy is corrected for both board revisions, with per-title
+  original-board regression checks recorded below. Preserve that bounded
+  evidence separately from future FIFO and scheduler investigations.
 - Record reference revisions and approximation boundaries. MAME's V60 uses an
   eight-cycle average per instruction, so agreement with MAME is not proof of
   cycle-exact hardware timing. Do not invent delays where the reference is
@@ -415,9 +485,332 @@ merely because this audit is on the roadmap.
 Deliver an evidence-backed discrepancy list before fixes. Apply confirmed
 corrections in small, independently reviewable changes, with bounded traces,
 slice-size/continuation tests where applicable and per-title regression checks.
+MAME is not an automatic hardware-correctness oracle: choose the more plausible
+observable result using device logic, independent invariants and available
+hardware evidence. Keep valid implementation alternatives; identify assumptions
+and confidence explicitly. The retrospective review below applies this criterion
+to the already pending corrections.
 Preserve frontend-independent emulated time and snapshot-relevant scheduling
 state for a future Model 1 Libretro core. Keep automated timing/boot evidence
 separate from manual controls, audio and gameplay validation.
+
+### DPRAM checkpoint — 2026-09-27
+
+Reference: local MAME commit `bd7e0b815842ec461e8ad2538d127f3332f5c96c`;
+inspected files are unmodified.
+`src/mame/sega/model1.cpp` maps `0xc00000..0xc00fff` through `dpram_r` with
+`umask16(0x00ff)` for both I/O-board revisions. `dpram_r` subtracts one V60
+cycle unless side effects are disabled. Writes call `mb8421::right_w` directly.
+The Z80-side callbacks do not introduce this V60 wait. MB8421's BUSY outputs
+are explicitly not emulated by MAME; no speculative contention model is added.
+
+| Access | MAME reference | TGPulse after correction |
+| --- | --- | --- |
+| V60 read on connected low-byte lane | 1 extra cycle | 1 extra cycle, both board revisions |
+| Unconnected high-byte-only read | No DPRAM handler | No extra cycle |
+| Write | No explicit extra wait | No extra cycle |
+| Debugger/renderer inspection | Side effects disabled | No extra cycle |
+
+The change removes only the board-kind restriction in `model1.rs`; the shared
+V60 core and Model 2 are unchanged. Expanded tests cover all three board kinds,
+byte/word/dword accesses, unaligned and end-of-window reads, writes and host
+inspection. A V60 instruction-fetch test verifies 8 base cycles plus one wait,
+once only, with the extra cycle carried into the next slice.
+
+Verification: 317 workspace tests pass; offline release build passes. Isolated
+before/after runs reach 1,800 frames for `vr`, `vformula`, `vf`, `swa`, `swaj`,
+`wingwar` and `wingwar360`. Captured images and the 4 KiB I/O window match for
+all seven. Wing War/R360 debugger state and sampled memory remain identical.
+Original-board PCs differ with the new budget; sampled 64 KiB RAM differs in
+0/1/85/1/1 bytes respectively for VR/Virtua Formula/VF/SWA/SWAJ. These differences
+are recorded, not asserted to be a complete-machine equivalence or a proven
+gameplay defect. No personal NVRAM was loaded/saved by these boot probes.
+
+The real-ROM VR MASTER/SLAVE/LIVE loopback test also passes 2,400 frames with
+the last 600 online, using user fixtures read-only. It is an extra regression,
+not a new LAN/manual-play certification. This checkpoint compares implementation
+semantics against MAME source, not a fresh synchronized MAME execution trace;
+manual audio/controls/extended play remain outside its evidence.
+
+### FIFO checkpoint — 2026-09-27
+
+Reference: the same local MAME revision as the DPRAM checkpoint, unmodified
+`model1_m.cpp`, `gen_fifo.h/.cpp`, and V60 `op12.hxx` (`opINB/H/W`).
+
+| Boundary | Finding / implementation |
+| --- | --- |
+| FIFO capacity / overflow | Both queues have 16 nominal words. MAME preserves the overflow word and halts its producer; existing TGPulse `len > 16` matches this boundary. No change to capacity or data ordering. |
+| V60 low/high halfwords | Low write latches, high write pushes; low read pops, high read returns the latch. Existing ordering retained. |
+| Empty result FIFO | Previously pumped TGP up to 2,000 extra 64-cycle runs, then committed a zero if still empty. Removed: V60 IN now yields before writing its destination, keeps its PC, and resumes when normal TGP execution produces a word. |
+| Empty command FIFO | Existing TGP instruction retry retained and tested: PC, destination registers and address post-increment remain unchanged until a real word is available. |
+| Debugger inspection | Peeks without popping, pumping the TGP or setting CPU wait requests. The low-half read still updates the halfword latch, like the reference driver. |
+
+The V60 bus gains a default-false `take_io_stall` hook. Only IN.B/H/W consumes
+that request, matching the reference; this is not a generic rollback mechanism
+for arbitrary memory instructions. Model 1 owns separate pending-read and
+retry-request flags; these must be included in its future machine snapshot.
+There is no host-clock wait, ROM patch or manufactured successful FIFO transfer.
+The core TGP implementation and Model 2 code are unchanged; Model 2 does not use
+the V60. No new Model 2 runtime certification is implied by this checkpoint.
+
+Five new tests cover IN widths and delayed completion, ordered overflow/drain,
+both real CPU producers stopping after the overflow instruction and resuming,
+TGP empty-read retry with address increment, and debugger/halfword behavior.
+Workspace: 322 tests pass; development release builds offline.
+Seven isolated Model 1 sets (`vr`, `vformula`, `vf`, `swa`, `swaj`, `wingwar`,
+`wingwar360`) reach 1,800 frames with identical images and sampled DPRAM before/
+after. CPU PCs and some sampled RAM bytes differ with corrected scheduling;
+this is not full state equality or a manual gameplay/audio acceptance test.
+The additional real-ROM loopback regressions pass for VR MASTER/SLAVE/LIVE
+and Wing War MASTER/SLAVE (2,400 frames each, last 600 online). NVRAM fixtures
+are read-only; these do not reopen or expand the closed networking milestone.
+
+Remaining approximation: producer/consumer interleave uses 64-V60-cycle slices,
+not MAME's event scheduler. Do not claim exact sync latency or whole-machine
+slice-size invariance. This checkpoint identified half-clock loss in `(step * 5) / 2`
+for odd-sized V60 slices and left instruction-budget handling to the separate
+clock checkpoint below. General IRQ/audio timing remains open.
+
+### V60/TGP clock checkpoint — 2026-09-27
+
+Reference: the same local MAME commit `bd7e0b815842ec461e8ad2538d127f3332f5c96c`;
+`model1.cpp` configures the V60 at 32 MHz / 2 and MB86233 at 40 MHz.
+`mb86233.cpp::alu_post_2` charges one additional clock for floating-point ALU
+operations (explicitly an assumed two-cycle cost in MAME). `schedule.cpp` uses
+the final instruction counter to advance CPU-local time, including overshoot;
+unused time while suspended is not a future execution credit.
+
+| Boundary | Finding / correction |
+| --- | --- |
+| Fractional clock ratio | `(step * 5) / 2` discarded half a clock on each odd V60 slice. Retain a 0/1 numerator remainder across calls; 257 V60 clocks now provide 642 TGP clocks plus a half-clock phase, independent of partition. |
+| Instruction overshoot | The TGP already charges two clocks for the corresponding ALU operations, but its next `execute` call replaces the budget. The Model 1 scheduler now deducts negative `icount` from the next allocation, retaining the completed instruction's extra clock. |
+| FIFO stall / external HALT | Positive unused budgets are discarded, not banked. Fractional phase and existing negative debt advance during output-FIFO HALT, without executing instructions or creating a catch-up burst on release. |
+
+Only `model1.rs` changes. The shared MB86233 core API and Model 2 scheduler are
+unchanged; this is not a Model 2 clock audit or new Model 2 runtime validation.
+No new opcode costs, wall-clock timing, busy waits or ROM patches are introduced.
+The fractional phase is explicit machine-owned state; future full-machine
+snapshots must include it together with the already serializable TGP `icount`.
+This does not implement or certify complete machine save states.
+
+Four synthetic tests cover one-cycle instructions under nine partitions,
+all 13 two-cycle ALU operations under six partitions (CPU serialization matches
+the unsplit run), zero/negative time requests, odd-clock HALT/debt retirement,
+and empty-FIFO recovery without banking unused time. The equality claim concerns
+an isolated TGP workload, not arbitrary CPU/device interleavings across the machine.
+
+Verification: 326 workspace tests pass; offline release build passes. Seven
+isolated before/after probes (`vr`, `vformula`, `vf`, `swa`, `swaj`, `wingwar`,
+`wingwar360`) reach 1,800 frames with identical debugger state, 64 KiB sampled
+backup RAM, 4 KiB I/O window and PPM images. Normal 64-cycle V60 slices already
+have an integral 160-clock TGP allocation; the small-slice tests exercise the
+fractional boundary directly. VR MASTER/SLAVE/LIVE and Wing War MASTER/SLAVE
+loopback regressions also pass 2,400 frames, last 600 online, with NVRAM fixtures
+read-only. No manual gameplay/audio or fresh synchronized MAME trace is claimed.
+
+The following checkpoint covers Model 1 timer expiry/reload and IRQ delivery.
+The 64-cycle interleave remains an approximation; do not interpret correct clock
+totals as exact bus latency.
+
+### Timer / IRQ checkpoint — 2026-09-27
+
+Reference: local MAME commit `bd7e0b815842ec461e8ad2538d127f3332f5c96c`, unmodified
+`src/mame/sega/model1.cpp` (timer and GLUE handlers) and
+`src/devices/cpu/v60/v60.cpp` (IRQ acceptance / vector callback).
+
+| Boundary | Finding / correction |
+| --- | --- |
+| Timer clock and registers | Existing period is `value * 0x800` V60 clocks. Zero stops the timer; period writes restart it; count writes do nothing. `timer_mode` is stored but has no modeled effect in MAME. Retained. |
+| Timer expiry / reload | Previously reloaded a full period at the end of a slice, losing its overshoot. Now retains the residual phase, including multiple expiries in one advance. IRQ0 is a pending bit, not an event counter. |
+| Mask semantics | Active-low masks prevent new timer/vblank raises; they do not clear previously pending levels. Masked timers continue counting/reloading; unmasking does not replay old expiries. Retained and tested. |
+| Timer inspection | CPU reads update the stopped-count latch. Debugger reads now return the current count without changing that latch, matching MAME's side-effect-disabled access. |
+| IRQ acceptance | Previously `sync_irq` overwrote `last_irq` even with CPU interrupts disabled, and the CPU reused a stale vector. A default-optional V60 bus callback now selects/latches the lowest pending level only when the CPU actually accepts it. |
+| IRQ control / RETI | `0x20` clears the last accepted level, `0x10` clears all. Pending levels can select a new vector immediately after RETI within the same CPU slice. |
+| UART IRQ mask write | Re-evaluates TxRDY/RxRDY immediately, like MAME `irq_mask_w`. V60 samples both edges of the live controller line at instruction boundaries, including an IRQ newly raised by MMIO during the current slice. |
+
+The V60 bus callback defaults to the existing latched-vector behavior for simple
+buses. Model 2 does not use the V60 and is unchanged. No new host resources,
+global state or wall-clock dependency is introduced. Timer remainder, latch,
+IRQ status/mask/last-accepted vector and CPU state remain explicit existing
+fields to include in future complete machine snapshots; this work does not
+complete or certify those snapshots.
+
+Six new tests cover expiry boundaries and multi-period partition invariance,
+mask/stop/restart and byte/aligned-word register accesses, debugger latch isolation,
+IE-disabled acceptance and IRQ clear semantics, two real ISR/RETI sequences in
+one slice, and UART unmask/interrupt entry immediately after a real OUT instruction.
+Existing V60 tests retain coverage of the default bus callback and HALT wakeup.
+
+Verification: 332 workspace tests pass, with an offline development release
+build. Seven isolated before/after probes (`vr`, `vformula`, `vf`, `swa`, `swaj`,
+`wingwar`, `wingwar360`) reach 1,800 frames; debugger state, sampled 64 KiB
+backup RAM / 4 KiB I/O window and PPM images match byte-for-byte. VR
+MASTER/SLAVE/LIVE and Wing War MASTER/SLAVE loopback regressions pass 2,400 frames,
+last 600 online, with personal NVRAM fixtures read-only. These are bounded
+regressions, not full-state equivalence, listening/gameplay validation or a new
+synchronized MAME execution trace. Installed releases and other projects are
+untouched.
+
+Remaining boundaries: timer writes/reads and IRQ expiry delivery are still
+quantized by the 64-V60-cycle scheduler; retaining the reload phase is not a
+cycle-exact bus-time model. MAME raises vblank IRQ1 at scanline 384 of 424;
+TGPulse currently couples it to `trigger_vblank` at the frame-step boundary.
+Absolute vblank phase, renderer upload timing and COMM tick ordering need a
+separate bounded follow-up, not a speculative change within this patch.
+UART ready remains the existing high-level model polled after sound slices;
+serial edge timing belongs to the next sound/serial audit.
+
+### Retrospective decisions / FIFO retry completion — 2026-09-27
+
+- **Keep clock fractions, instruction debt and periodic timer phase (high
+  confidence in accounting):** elapsed emulated time must not depend on caller
+  slice partition. This does not independently validate MAME's assumed TGP ALU
+  instruction costs or make the coarse scheduler cycle-exact.
+- **Keep FIFO wait instead of unbudgeted TGP pumping (high confidence in the
+  transfer contract):** an empty read must not fabricate a completed zero-word
+  transfer or grant extra CPU time. The previous absolute-address tests missed
+  register side effects during source address decoding.
+- **Complete IN retry:** IN.B/H/W now restores pre-decode architectural registers
+  on a stalled transfer. Source auto-increment/decrement therefore happens only
+  once on completion; the destination is still not decoded/written until then.
+  This is a local rollback of CPU registers, not a generic rollback of MMIO
+  side effects. Decoder scratch is rebuilt; no host state or new snapshot fields.
+  The local MAME IN path decodes before checking its stall flag too; matching
+  that ordering alone was not sufficient evidence of correct retry semantics.
+- **Keep IRQ acknowledgement and side-effect-free timer inspection (high
+  confidence in the existing controller contract):** clearing a different,
+  merely pending interrupt is not equivalent to clearing the accepted one;
+  debugger inspection must not change the stopped timer latch.
+- **DPRAM +1 V60 clock remains provisional (limited independent evidence):**
+  MAME and the already implemented advanced-board path support consistency, but
+  no measured original-board bus trace establishes that one clock is better
+  than zero. The Fujitsu MB8421 datasheet describes access timing/arbitration,
+  not the motherboard's selected V60 wait count. Do not present this as a
+  hardware-proven delay or revert it without better evidence.
+- **Keep immediate UART-ready evaluation on unmask, qualified:** coherent for
+  the present level/ready model, but TxRDY is currently always true. This is not
+  evidence of accurate serial transmission timing (assessment below).
+
+Two new V60 regression tests exercise repeated stalls across all three transfer
+widths, source auto +/- including SP, destination auto-increment, and a genuine
+zero result. The independent reproducer now retains R1=`D80000` during the stall,
+retries `D80000`, and finishes at `D80004`, rather than reading `D80004` and
+finishing at `D80008`. No affected in-game sequence has been established.
+
+### Audio / serial clock assessment — 2026-09-27
+
+Reference: local MAME `bd7e0b815842ec461e8ad2538d127f3332f5c96c`, unmodified
+`src/mame/shared/segam1audio.cpp`, `src/mame/sega/dsbz80.cpp`, and `model1.cpp`.
+The decision criteria include arithmetic clock conservation and 8N1 framing,
+not only matching another emulator's output.
+
+| Path | Evidence and decision |
+| --- | --- |
+| V60 16 MHz -> audio 68000 10 MHz | Existing conversion retains the 5/8 remainder and instruction overshoot. MAME labels the 68000 clock verified on hardware. Keep; no new timing constant. |
+| MultiPCM / FM | Existing PCM period is 224 sound clocks; MAME records DAC WORDCLK = 10 MHz / 224. FM conversion retains its 4/5 ratio and native 144-chip-clock phase. Keep the causal integration filter: differing from MAME's resampler is not itself a timing bug. |
+| Sound CPU STOP | Chips and DSB must continue while the CPU is stopped. New tests independently check sample count against floor(sound clocks / 224), nonzero audio, equal continuation under 1/3/64/4097-main-clock partitions, and DSB elapsed-time conversion. Existing production behavior passes; no correction justified. |
+| 68000 -> DSB | Existing clocked UART preserves framing, backpressure, fractional time and in-flight snapshot continuation. New framing test verifies exactly ten 16-tick bits for 8N1: 160 ticks at 500 kHz = 320 us. Keep. |
+| DSB Z80 4 MHz | MAME explicitly calls this an estimated clock. Keep provisionally, not relabeled as a measured hardware frequency by passing arithmetic tests. |
+| V60 <-> sound 68000 | Missing timed link, not merely a different scheduler: `send` delivers a byte immediately, receive storage queues up to eight bytes, TxRDY is always true, and IRQ2 is injected per consumed byte. Functional HLE, not equivalent serial timing. No arbitrary per-byte delay added. |
+
+No production audio clock, gain, chip core or serial behavior changes in this
+checkpoint. The three new audio/serial tests supplement existing FM/DSB
+partition, waveform and in-flight restore tests. Model 2 production code is
+unchanged; the shared audio board receives tests only.
+
+Verification of this checkpoint plus the retry correction: 337 workspace tests
+pass; the development release builds offline. Seven isolated Model 1 sets
+(`vr`, `vformula`, `vf`, `swa`, `swaj`, `wingwar`, `wingwar360`) reach 1,800 frames
+with identical before/after debugger state, sampled 64 KiB backup RAM / 4 KiB
+I/O window and PPM images. VR MASTER/SLAVE/LIVE and Wing War MASTER/SLAVE
+loopback regressions pass 2,400 frames, last 600 online, using NVRAM read-only.
+This is not a fresh listening/gameplay acceptance test or hardware timing trace.
+
+**Plan at that checkpoint (now completed below):** inventory the actual mode/command
+sequences used by Model 1's two main-link UARTs and reuse/adapt the existing DSB
+i8251 subset where compatible. Then introduce a frontend-independent timed
+V60/68000 link with explicit shift/holding state, ready/IRQ semantics and
+mid-character continuation tests. Change both ends coherently; a delay on the
+existing queue alone would not model transmitter backpressure. Keep the shared
+Model 2 board's existing path separate unless specifically extending the scope.
+Vblank was included in the consolidated closure; full machine save states
+remain separate pending work.
+
+### Consolidated timing closure — 2026-09-27
+
+User request: combine the remaining checkpoints into one completion phase.
+
+| Status | Checkpoint | Decision / evidence |
+| --- | --- | --- |
+| 🟢 | Access waits, FIFO/retry, clock debt and timers/IRQ | Earlier checkpoints and retrospective decisions above remain applicable; no new speculative wait constants. |
+| 🟢 | Audio clock conservation | Keep the measured/reference ratios and existing converters; independent STOP/partition/sample-count tests pass. |
+| 🟢 | V60 ↔ 68000 UART | Replace the Model 1 immediate queue/reply slot with two clocked i8251 endpoints; shared implementation with DSB, 500 kHz / 8N1 x16. |
+| 🟢 | Vblank / uploads / COMM | Scan the completed display list before automatic next-buffer selection. Retain one COMM tick followed by IRQ1 per frontend-driven frame. |
+| 🟢 | Consolidated regressions | 344 workspace tests, offline release, seven Model 1 and nine Model 2 ROM probes; VR/Wing War loopback regressions. |
+
+Legend: 🟢 completed. Closure covers the bounded audit, not every possible
+hardware timing question or manual gameplay acceptance.
+
+**UART rationale and implementation.** Firmware traces from VR, VF, SWA and
+Wing War variants use the supported `00 00 00 40 4e 37` reset/8N1 initialization
+where observed; no unsupported mode/command was encountered in the seven-set
+1,800-frame regression. A real shift register takes time to transmit a byte,
+has a bounded holding register, and can overrun its one-byte receiver. Those
+properties independently justify replacing instantaneous queued delivery; the
+baud clock reference is MAME's Model 1 wiring, not inferred from matching PCs.
+`i8251.rs` now owns the single UART implementation used by both the main link
+and DSB. The existing Model 2 HLE path is deliberately unchanged.
+
+The 68000 TX pin fans out to the main receiver and optional DSB receiver; the
+Model 1 production path no longer runs a second DSB-owned copy of that sender.
+The DSB-owned sender remains available to isolated existing board fixtures.
+STOP continues advancing the serial/chip clocks. IRQ2 is injected only when
+RXRDY is live and the 68000 can accept it, avoiding stale queued interrupts
+after a masked polling read. Main TX-ready is no longer forced true.
+Unsupported framing/commands and writes to a full holding register surface as
+machine errors, not silent fallback to HLE. RX overrun remains a status bit.
+
+New tests cover duplex delay/backpressure, receiver overrun, serialized
+mid-character continuation, STOP with masked polling/no phantom interrupt,
+actual IRQ2 wake/receive, and 68000-pin fanout to both main and DSB under
+different run partitions. `SerialState` contains only emulated endpoints,
+phase and fault; the in-memory snapshot/restore API is not a complete board
+snapshot. Full restoration must also restore the CPU, run/conversion debt,
+DSB and audio devices together. No host resources or filesystem writes added.
+
+**Vblank rationale.** MAME performs `tgp_scan` before `end_frame`. Independently,
+consuming the completed buffer before changing its selector prevents reading
+an unfinished following list. A two-buffer synthetic upload test establishes
+that ordering; automatic alternation still occurs every other frame. The
+frontend continues to define a frame boundary at vblank, with 656 × 424 V60
+clocks between edges. MAME labels its edge scanline 384 of 424; TGPulse exposes
+no beam-position counter here. Relabeling the frame origin alone would not
+establish better timing, so no unsupported scanline phase shift was introduced.
+COMM and IRQ1 remain ordered at that edge; IRQ masking does not stop COMM.
+
+**Verification.** `cargo test --offline --workspace`: 344 passed. Offline
+development release builds. Seven isolated sets (`vr`, `vformula`, `vf`,
+`swa`, `swaj`, `wingwar`, `wingwar360`) reach 1,800 frames with no logged errors;
+their debugger state, sampled 64 KiB backup RAM / 4 KiB I/O window and PPM
+images match the pre-UART baseline. All nine Model 2 sets listed in the Z80
+matrix above match the same bounded observations at 600 frames before/after.
+Model 2 captures are the debugger's tilemap output, not full 3D comparisons.
+VR MASTER/SLAVE/LIVE and Wing War MASTER/SLAVE pass 2,400-frame loopback probes,
+last 600 online. Personal NVRAM fixtures are read-only. No new synchronized
+gameplay, listening or hardware trace result is claimed. Temporary evidence:
+`/tmp/tgpulse-timing-final.PLXCTB` (not a permanent repository dependency).
+
+**Retained limits.** V60 devices/IRQ observation remain on the 64-clock scheduler
+grid; 68000 MMIO is instruction-boundary, not microcycle accurate. DSB pin
+sampling retains Z80 instruction overshoot; chunking at serial-clock edges
+limits producer batching but does not prove hardware-edge equivalence. The
+4 MHz DSB CPU clock and DPRAM's extra cycle retain their previously documented
+confidence limits. The existing constructor's reset/first-instruction timing
+is unchanged. No sub-instruction raster/beam model, full-machine save state,
+NetMerc/R360 playability, or complete audio fidelity claim follows from closure.
+Fresh listening and extended gameplay remain user acceptance work; the
+MultiPCM distortion investigation stays separate. The next implementation
+phase is complete Model 1 machine save states, under a separate go-ahead.
 
 ## Verification
 
@@ -538,7 +931,7 @@ Publication and toolkit/current release replacement require separate requests.
 
 ### I/O board 2 isolated Z80 checkpoint — 2026-09-27
 
-- Added local `tgpulse-z80`, based on the already installed MIT-licensed Z80
+- Added local `tgpulse-z80` (now named `z80` after consolidation), based on the already installed MIT-licensed Z80
   1.0.2 source. Original authors, source hash, minimal code delta and limitations
   are documented in [the component README](../crates/z80/README.md).
 - Added live interrupt acknowledgement, canonical RETI notification/IFF
