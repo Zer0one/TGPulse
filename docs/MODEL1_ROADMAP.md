@@ -6,6 +6,21 @@ macos-emulation-toolkit and MAME projects.
 
 ## Effort and consumption planning
 
+### Consolidated verification — 2026-09-27
+
+- The complete pending integration passes `cargo test --offline --workspace`:
+  219 passed, one optional ROM-dependent test ignored. The offline development
+  release build also passes; the existing `block` future-compatibility warning
+  remains. These checks are not a fresh manual gameplay validation.
+- Wing War gameplay and throttle direction were confirmed by the user;
+  general Model 1 timing audit and Z80-copy consolidation remain final,
+  post-implementation activities. NetMerc/R360 are not promoted by this result.
+- The frontend's Return to game menu / quit also operates in the library,
+  retaining the CLI/fullscreen exception and held-chord state across game close.
+  Manual UI/gamepad validation of the new library-exit path remains pending.
+- No ROM, NVRAM or personal configuration is included in publication; toolkit
+  and installed `current` releases are unchanged.
+
 Apply the preflight/checkpoint/recap agreement in [AGENTS.md](../AGENTS.md).
 The table is an initial engineering estimate, not a measured cost or completion
 promise. Recommend the actual available model by name at the start of each
@@ -79,13 +94,30 @@ replacement for a user's persistent gameplay NVRAM.
 
 ## Phase 2 — missing hardware (separate implementation tasks)
 
-1. **Model 1 I/O board 2:** implement the actual board/firmware interface used by
-   Wing War and NetMerc. Validate boot handshake, digital and analog controls,
-   EEPROM persistence and per-game variants against the reference. The current
+1. **Model 1 I/O board 2 — Wing War first:** implement the shared board with
+   `wingwar`, `wingwaru` and `wingwarj` as the initial acceptance targets.
+   Validate boot handshake, digital and analog controls, EEPROM persistence
+   and regional variants against the reference. R360 cabinet-specific behavior
+   is a separate follow-up; NetMerc is not an acceptance gate. The current
    frontend signal mapping is not a substitute for this board.
    [Register/wiring contract and checkpoints](MODEL1_IOBOARD2.md): shared
-   315-5338A/ADC extraction and board-1 regression tests are complete; the
-   TMPZ84C015, advanced memory map and firmware integration are still pending.
+   315-5338A/ADC extraction, advanced bus map, CTC, internal watchdog and IRQ
+   arbitration, CPU-to-bus wiring, PIO and a bounded asynchronous SIO subset
+   are tested. Base Wing War now selects the advanced board and passes startup,
+   a MAME DPRAM trace replay, physical input delivery and EEPROM reload checks.
+   World/Japan attract-mode 3D frames were inspected. The user subsequently
+   reported successful Wing War play/control tests, including the corrected
+   throttle polarity. This does not certify every regional set, audio,
+   extended play or link support. NetMerc and R360-specific work are deferred.
+   Timing audit and Z80 consolidation are now final post-implementation tasks,
+   not gates before YM3438 work, unless a concrete defect makes one necessary.
+
+   **Separate timing follow-up:** audit the one-cycle DPRAM read wait for the
+   original I/O-board games. It is now implemented on the advanced-board path
+   to prevent Wing War's premature I/O timeout; original-board timing was kept
+   unchanged and its existing five-game regression baseline still matches.
+   This is part of the [systematic Model 1 timing audit](#model-1-timing-audit-against-mame)
+   below, not a completed system-wide alignment.
 2. **YM3438 synthesis:** Rust FM/DAC synthesis is implemented and connected to
    the production MultiPCM board. Per-title listening and level acceptance remain
    pending; do not equate synthetic reference tests with verified game audio.
@@ -123,11 +155,21 @@ replacement for a user's persistent gameplay NVRAM.
    Next: validate per-game audio manually. DSB remains the next separate board.
 3. **Star Wars DSB:** implement the Z80/MPEG board and its filtered serial command
    path. Test music independently from the existing Model 1 sound board.
-4. **NetMerc initialization:** with verified ROMs and I/O, validate factory NVRAM,
+4. **NetMerc initialization — deferred, separate milestone:** after Wing War,
+   with verified ROMs and I/O, validate factory NVRAM,
    startup and gameplay. MAME itself still marks NetMerc not working, so it is
    not a complete gameplay oracle.
    Review the additional Polhemus/i386SX tracking subsystem separately from
-   the I/O board; the reference machine configuration includes it.
+   the I/O board; the reference machine configuration includes it. Do not require
+   NetMerc's boot, diagnostic LCD or tracking work to complete the Wing War
+   milestone. Shared hardware fixes remain reusable, not NetMerc-specific hacks.
+
+Priority confirmed on 2026-09-27 against the
+[official MAME driver](https://github.com/mamedev/mame/blob/master/src/mame/sega/model1.cpp):
+NetMerc is declared `MACHINE_NOT_WORKING`; Wing War World/US/Japan and R360
+have flags `0`. This is MAME's declared status, not a claim of perfect hardware
+fidelity or a new gameplay test. NetMerc's Polhemus/i386SX subsystem is additional
+to the shared I/O board and cannot be treated as a proven complete reference.
 
 ## Phase 3 — fidelity and remaining features
 
@@ -146,6 +188,58 @@ replacement for a user's persistent gameplay NVRAM.
   the existing controller rumble approximation.
 - Consider checksum-aware ROM diagnostics beyond the narrowly guarded TGP
   fallback. The current general loader matches names, not expected hashes.
+
+## Phase 4 — final post-implementation consolidation
+
+User priority: keep the following work until after the feature implementations.
+Bring forward only a bounded fix required by a demonstrated blocking defect;
+do not start a general audit or CPU migration just because Wing War now works.
+
+### Consolidate the Z80 implementations
+
+The local `tgpulse-z80` adaptation and registry `z80` dependency are a temporary
+isolation boundary, not the intended permanent architecture. Status: planned,
+not implemented; separate review/checkpoint from new-board implementation.
+
+- Inventory existing Z80 consumers and preserve their I/O contracts. Optional
+  interrupt/clock hooks must retain compatible default behavior.
+- Compare reset, IRQ/NMI, EI/HALT, RETI, cycle accounting and representative
+  execution before/after migration, separately from manual audio/gameplay.
+- Move consumers to one implementation only after compatibility checks pass;
+  then remove the redundant dependency and reconcile the lockfile.
+- Prefer the original dependency if a suitable release supplies the required
+  hooks/state API; otherwise retain one documented, auditable local adaptation.
+- CPU hook/state tests and Wing War firmware validation remain prerequisites;
+  NetMerc support is not. Do not migrate solely to eliminate duplication.
+
+### Model 1 timing audit against MAME
+
+**Status: planned, not started; deferred to final consolidation by the user.**
+This is not the next activity after Wing War testing. Do not change timing
+merely because this audit is on the roadmap.
+
+- Inventory access waits across the Model 1 memory/device map: DPRAM, other
+  mapped devices and coprocessor accesses. Distinguish explicit extra cycles
+  from accesses for which the reference models no additional delay.
+- Compare V60/TGP FIFO full/empty behavior, stall/HALT and resumption conditions,
+  including interrupt and instruction-boundary interactions.
+- Compare device clock ratios, fractional cycle debt, timers, interrupt delivery
+  and serial scheduling between the main CPU, I/O board, TGP and sound devices.
+- Start with the known DPRAM discrepancy: Wing War's advanced-board path now
+  charges MAME's one-cycle read wait; the original-board games still retain
+  their previous timing. Validate any extension separately across VR/Virtua
+  Formula, VF and SWA rather than applying it without regression evidence.
+- Record reference revisions and approximation boundaries. MAME's V60 uses an
+  eight-cycle average per instruction, so agreement with MAME is not proof of
+  cycle-exact hardware timing. Do not invent delays where the reference is
+  incomplete, or replace real handshakes with forced ready values.
+
+Deliver an evidence-backed discrepancy list before fixes. Apply confirmed
+corrections in small, independently reviewable changes, with bounded traces,
+slice-size/continuation tests where applicable and per-title regression checks.
+Preserve frontend-independent emulated time and snapshot-relevant scheduling
+state for a future Model 1 Libretro core. Keep automated timing/boot evidence
+separate from manual controls, audio and gameplay validation.
 
 ## Verification
 
@@ -235,3 +329,134 @@ Publication and toolkit/current release replacement require separate requests.
 - Re-ran `cargo test --offline --workspace`: 111 passed, one opt-in ROM-dependent
   test ignored. No runtime behavior or persistent user-file format was changed
   by these serialization derives; the snapshot APIs are still crate-private.
+
+### I/O board 2 bus / CTC / interrupt checkpoint — 2026-09-27
+
+- Added an isolated advanced-board bus using the existing 315-5338A, MSM6253
+  and EEPROM components. ROM/RAM mapping, physical pin wiring, ADC mirrors,
+  EEPROM protocol and host dual-port RAM access are covered without game ROMs.
+- Implemented four-channel CTC timing/counters and nested IRQ service, the
+  TMPZ84C015 priority register/port mirrors and internal watchdog. Clocks are
+  emulated integers; CTC output edges retain their order and clock offsets.
+- Added peripheral-bus snapshots without firmware/host resources, plus tests
+  for continued execution across snapshots and different time-slice lengths.
+  The bus remains independent of the desktop frontend and does not own a CPU.
+- Inspected Z80 1.0.2 and recorded the remaining CPU integration requirements:
+  explicit acknowledge/RETI hooks, canonical RETI IFF behavior and complete
+  CPU state access. The installed dependency and all existing game execution
+  paths are unchanged. SIO/PIO and other known missing devices fail explicitly
+  at the new bus boundary rather than returning an invented ready status.
+- Added 28 ROM-free tests. `cargo test --offline --workspace`: 139 passed,
+  one opt-in ROM-dependent test ignored. Offline release build passed; no new
+  dependencies were installed. The pre-existing `block` warning remains.
+- At 120 frames, the same debugger state, 64 KiB main NVRAM and 2 KiB shared
+  RAM snapshots still match the earlier baseline for `vr`, `vformula`, `vf`,
+  `swa` and `swaj`. This verifies that the unchanged board-1 game path remains
+  stable in this bounded check, not that the new board firmware has booted.
+- No advanced-board firmware has been run and no new game support is enabled.
+  The next checkpoint is the CPU adaptation and remaining SIO/PIO work before
+  Wing War firmware handshake testing. Changes remain local pending publication
+  authorization; MAME, toolkit releases and user ROMs/saves were not modified.
+
+### I/O board 2 isolated Z80 checkpoint — 2026-09-27
+
+- Added local `tgpulse-z80`, based on the already installed MIT-licensed Z80
+  1.0.2 source. Original authors, source hash, minimal code delta and limitations
+  are documented in [the component README](../crates/z80/README.md).
+- Added live interrupt acknowledgement, canonical RETI notification/IFF
+  restoration, integer emulated-clock callbacks and typed CPU snapshot/restore.
+  Corrected EI delaying NMI in this local adaptation only. The original registry
+  dependency and the running first-generation I/O board remain unchanged.
+- Added 18 synthetic integration tests, all passing in development and release
+  profiles. State tests verify registers and identical continued execution at
+  16 cut points through a block transfer, IM2 service, port I/O and HALT.
+- `cargo test --offline --workspace`: 157 passed, one opt-in ROM-dependent test
+  ignored. `cargo build --offline --release -p tgpulse` passed. The existing
+  `block` 0.1.6 future-compatibility warning remains unrelated.
+- At 120 debugger frames, `vr`, `vformula`, `vf`, `swa` and `swaj` still match
+  the preceding baseline byte-for-byte for reported CPU/FIFO state, 64 KiB
+  main NVRAM and the 4 KiB window containing shared RAM. Runs used an isolated
+  temporary working directory and did not write user saves. This is a bounded
+  old-path regression check, not a gameplay or new-firmware boot test.
+- Checkpoint reached before SIO/PIO: CPU-to-bus wiring, combined board/scheduler
+  snapshots and firmware execution are still pending. IM0 timing, undocumented
+  RETI aliases and asserted-NMI behavior are not certified by this adaptation;
+  it remains instruction-stepped, not a T-state-accurate bus implementation.
+- Development executable: `target/release/tgpulse`. No toolkit installation,
+  ROM/save/configuration change, dependency download, commit or push performed.
+  Z80 unification remains the separate follow-up above, after board validation.
+
+### I/O board 2 CPU/SIO/PIO checkpoint — 2026-09-27
+
+- Connected the adapted CPU to the actual advanced-board bus. CTC/SIO/PIO
+  acknowledge and RETI use live priority/service state; unsupported operations
+  latch a diagnostic fault and prevent later instructions from running.
+- Added PIO register/bit-control operation and a bounded asynchronous SIO model
+  clocked from CTC2/3, with FIFO/error handling and timestamped serial pin
+  events. Unsupported modes fail explicitly. This is not full SIO fidelity;
+  supported formats and remaining timing/protocol limits are documented in
+  [the integration contract](MODEL1_IOBOARD2.md#fourth-checkpoint--cpubus-wiring-and-bounded-siopio).
+- Added combined CPU/peripheral/scheduler snapshots. Tests check continuation
+  inside interrupt service and serial transfers, integer cycle debt, no replayed
+  output events, and identical results for whole versus one-clock time slices.
+- 21 new ROM-free tests; `cargo test --offline --workspace`: 178 passed,
+  one opt-in ROM-dependent test ignored. Release-profile core tests also passed
+  (77 passed, the same opt-in test ignored). Offline release build passed. The
+  existing `block` 0.1.6 warning is unrelated.
+- At 120 frames the same debugger CPU/FIFO and memory snapshots match the
+  previous baseline for `vr`, `vformula`, `vf`, `swa` and `swaj`. This checks
+  unchanged first-generation game paths, not advanced-board gameplay.
+- First isolated, hash-verified firmware probes: Wing War executes 10,000,002
+  clocks but remains polling `F080=01` for `02` at `0830`; NetMerc stops on its
+  diagnostic LCD write at instruction `03A9` (memory `8005`, 121479 clocks).
+  Neither established a complete handshake; main-board/serial peers were absent.
+  No firmware wait was patched or missing-device error ignored.
+- **Next (priority clarified):** diagnose Wing War's wait against the reference.
+  Add the diagnostic LCD only if that path proves necessary for Wing War;
+  defer NetMerc-specific blockers to its separate milestone. Keep game selection
+  disabled until the corresponding title's initialization/handshake checks pass.
+- No ROM/save/configuration changes, toolkit deployment, new software download,
+  commit or push. Development executable remains `target/release/tgpulse`.
+
+### Wing War reference-trace checkpoint — 2026-09-27
+
+- Diagnosed `F080=01` without changing emulation code or patching the firmware.
+  The earlier ~1.017-second probe ended during a normal EEPROM read sequence.
+  TGPulse reaches `F080=02` at 21,305,943 board clocks (~2.167352600 s);
+  the installed MAME 0.289 binary reaches the same transition at ~2.167353312 s.
+  Both complete the same 64-word blank-EEPROM buffer and clear the same transfer
+  state. This is not a general cycle-accuracy or full-machine equivalence claim.
+- The isolated TGPulse board runs for 20 seconds without a bus fault; normal
+  Wing War initialization did not need the diagnostic LCD. With no main-board
+  requests supplied, DPRAM remains zero and the firmware stays at state `02`.
+  The fresh MAME three-second trace continues into subsequent states with its
+  main CPU present. No successful host exchange is synthesized in TGPulse.
+- See [the comparison and limits](MODEL1_IOBOARD2.md#wing-war-eeprom-initialization-comparison--2026-09-27)
+  for reference binary/source versions, trace points and isolated test setup.
+  Offline core rebuild passed; workspace tests remain 178 passed, one opt-in
+  ROM-dependent test ignored. No production code or release binary changed.
+- **Next:** validate the main-board/DPRAM request-response contract against
+  Wing War, then wire the advanced board and its clock into the existing system
+  boundary. World/US/Japan boot, controls and EEPROM persistence remain pending;
+  R360 and NetMerc remain separate. No commit, push or deployment performed.
+
+### Wing War motherboard integration checkpoint — 2026-09-27
+
+- Replayed 619 real MAME host writes against the isolated board: sampled
+  firmware states, final 2 KiB DPRAM and 128-byte EEPROM match the reference.
+- Added the narrow `model1board` boundary and enabled firmware/clock selection
+  for World/US/Japan only. Inputs and NVRAM use existing interfaces; no new GUI
+  controls. Advanced snapshots include the fractional V60/board clock ratio.
+- Fixed the integrated I/O timeout by modeling MAME's one-cycle DPRAM read wait
+  on this new path. Original-board timing remains isolated pending its audit.
+  Also fixed V60 scaled negative-index overflow in debug builds without changing
+  release arithmetic. Unsupported board accesses stop with a reported error.
+- All three base sets pass boot and in-memory NVRAM reload; digital/analog
+  changes reach the expected DPRAM bytes. World/Japan attract-mode 3D frames
+  were inspected. Manual controls, service-menu option edits, audio and extended
+  gameplay remain unvalidated. R360, NetMerc and link play remain separate.
+- 187 tests passed, one ROM opt-in ignored; offline release build passed.
+  The five existing Model 1 debugger/memory baselines remain byte-identical.
+  See [the detailed evidence and limits](MODEL1_IOBOARD2.md#wing-war-dpram-and-motherboard-integration--2026-09-27).
+- Development binary: `target/release/tgpulse`. No user saves/settings/ROM ZIPs,
+  MAME or toolkit installations changed; no commit/push performed.

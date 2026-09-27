@@ -99,6 +99,10 @@ Suggested format:
 - Commit/push only with explicit authorization for the current work. A past
   publication request is not blanket permission. Do not replace toolkit/current
   releases without the corresponding release request.
+- Unless explicitly narrowed, a commit/push request covers all pending project
+  integrations, excluding personal/runtime data. Group commits by change type.
+  Publish the agreed final changes, not separate addition/removal commits for
+  experiments reverted before publication; preserve already published history.
 - Use `cargo test --offline --workspace` and proportionate targeted checks.
   Development build: `cargo build --offline --release -p tgpulse`;
   executable: `target/release/tgpulse`, launched by `tgpulse.dev` when installed.
