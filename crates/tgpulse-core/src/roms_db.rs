@@ -449,7 +449,7 @@ mod tests {
                 .iter()
                 .filter(|l| l.region == "ioboard:iocpu")
                 .collect();
-            if crate::model1board::Kind::for_set(&game.name) == crate::model1board::Kind::WingWar {
+            if matches!(crate::model1board::Kind::for_set(&game.name), crate::model1board::Kind::WingWar | crate::model1board::Kind::WingWarR360) {
                 assert_eq!(firmware.len(), 1);
                 assert_eq!(firmware[0].file, "epr-16891.6");
                 assert_eq!(firmware[0].len, 0x10000);
@@ -457,7 +457,7 @@ mod tests {
                     .regions
                     .iter()
                     .any(|(name, size, _)| name == "ioboard:iocpu" && *size == 0x10000));
-            } else if matches!(game.name.as_str(), "wingwar360" | "netmerc") {
+            } else if game.name == "netmerc" {
                 assert!(firmware.is_empty());
             } else {
                 assert_eq!(firmware.len(), 1);

@@ -135,6 +135,15 @@ impl IoBoard {
         cpu.init();
         Ok(Self { cpu, cycle_debt: 0 })
     }
+    /// Same board and firmware, with MAME's R360 cabinet feedback wiring.
+    pub fn new_r360(firmware: &[u8], eeprom: Eeprom93c46) -> Result<Self, BusError> {
+        let mut board = Self::new(firmware, eeprom)?;
+        board.cpu.io.bus.get_mut().state.r360 = Some(Default::default());
+        Ok(board)
+    }
+    pub fn is_r360(&self) -> bool {
+        self.cpu.io.bus.borrow().state.r360.is_some()
+    }
     /// Run a bounded number of requested board clocks, carrying overshoot to
     /// the next call. Pin events are delivered synchronously in clock order.
     /// An unsupported access may leave effects from its partial instruction;
@@ -237,6 +246,35 @@ impl IoBoard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r360_cpu_command_and_reply_continue_identically_after_restore() {
+        let mut firmware = vec![0; FIRMWARE_SIZE];
+        let program = [
+            0x3e, 4, 0x32, 8, 0x80, // IN2 direction
+            0x3e, 0xbd, 0x32, 4, 0x80, // setup command
+            0x3a, 2, 0x80, 0x32, 0, 0xe0, // read reply into RAM
+            0x76,
+        ];
+        firmware[..program.len()].copy_from_slice(&program);
+        let mut first = IoBoard::new_r360(&firmware, Eeprom93c46::new()).unwrap();
+        first.run(25, |_| {}).unwrap(); // mid-program, with CPU cycle debt
+        let snapshot =
+            bincode::deserialize(&bincode::serialize(&first.snapshot()).unwrap()).unwrap();
+        let mut second = IoBoard::new_r360(&firmware, Eeprom93c46::new()).unwrap();
+        second.restore(&snapshot).unwrap();
+        first.run(150, |_| {}).unwrap();
+        second.run(150, |_| {}).unwrap();
+        assert_eq!(first.bus().read_memory(0xe000), Ok(0xbb));
+        assert_eq!(
+            bincode::serialize(&first.snapshot()).unwrap(),
+            bincode::serialize(&second.snapshot()).unwrap()
+        );
+        let mut wrong = IoBoard::new(&firmware, Eeprom93c46::new()).unwrap();
+        let before = bincode::serialize(&wrong.snapshot()).unwrap();
+        assert_eq!(wrong.restore(&snapshot), Err(BusError::InvalidSnapshot));
+        assert_eq!(bincode::serialize(&wrong.snapshot()).unwrap(), before);
+    }
     fn board(program: &[u8]) -> IoBoard {
         let mut firmware = vec![0; FIRMWARE_SIZE];
         firmware[..program.len()].copy_from_slice(program);

@@ -64,6 +64,7 @@ pub struct Model1System {
     /// The I/O board: a Z80 with its own firmware, which owns the dual-port
     /// RAM it shares with the V60 and the 93C45 the operator settings live in.
     pub ioboard: crate::model1board::IoBoard,
+    pub comm: Option<crate::model1comm::CommBoard>,
     /// Transient CPU-bus context, never charged by debugger/renderer reads.
     v60_access_active: bool,
     v60_wait_cycles: u32,
@@ -212,6 +213,8 @@ impl Model1System {
             palette_ram: vec![0; 0x4000],
             colorxlat_ram: vec![0; 0xc000],
             ioboard,
+            comm: (roms.comm_board && config.cabinet == crate::config::Cabinet::Twin)
+                .then(crate::model1comm::CommBoard::new),
             v60_access_active: false,
             v60_wait_cycles: 0,
 
@@ -350,6 +353,9 @@ impl Model1System {
         // display list was not rasterized during that frame.
         crate::model1_video::scan_uploads(self);
         self.frame_num = self.frame_num.wrapping_add(1);
+        if let Some(comm) = &mut self.comm {
+            comm.tick();
+        }
         if self.irq_mask & (1 << 1) == 0 {
             self.raise_irq(1);
         }
@@ -710,13 +716,19 @@ impl Model1System {
             0x780000..=0x7fffff => self.char_ram[(address - 0x780000) as usize],
             0x900000..=0x903fff => self.palette_ram[(address - 0x900000) as usize],
             0x910000..=0x91bfff => self.colorxlat_ram[(address - 0x910000) as usize],
+            0xb00000..=0xb00fff => self
+                .comm
+                .as_ref()
+                .map_or(0xff, |c| c.shared_read((address - 0xb00000) as usize)),
+            0xb01000 => self.comm.as_ref().map_or(0xff, |c| c.cn_read()),
+            0xb01002 => self.comm.as_ref().map_or(0xff, |c| c.fg_read()),
             0xc00000..=0xc00fff if address & 1 == 0 => {
                 // MAME model1_state::dpram_r charges one V60 cycle per
                 // low-byte read. Without it Wing War times out just before
                 // the advanced board completes its initial EEPROM transfer.
                 // Keep board-1 timing unchanged until its separate audit.
                 if self.v60_access_active
-                    && self.ioboard.kind() == crate::model1board::Kind::WingWar
+                    && matches!(self.ioboard.kind(), crate::model1board::Kind::WingWar | crate::model1board::Kind::WingWarR360)
                 {
                     self.v60_wait_cycles += 1;
                 }
@@ -758,6 +770,21 @@ impl Model1System {
             0x780000..=0x7fffff => self.char_ram[(address - 0x780000) as usize] = value,
             0x900000..=0x903fff => self.palette_ram[(address - 0x900000) as usize] = value,
             0x910000..=0x91bfff => self.colorxlat_ram[(address - 0x910000) as usize] = value,
+            0xb00000..=0xb00fff => {
+                if let Some(c) = &mut self.comm {
+                    c.shared_write((address - 0xb00000) as usize, value);
+                }
+            }
+            0xb01000 => {
+                if let Some(c) = &mut self.comm {
+                    c.cn_write(value);
+                }
+            }
+            0xb01002 => {
+                if let Some(c) = &mut self.comm {
+                    c.fg_write(value);
+                }
+            }
             0xc00000..=0xc00fff if address & 1 == 0 => {
                 let index = ((address - 0xc00000) >> 1) as usize & 0x7ff;
                 self.dpram_write(index, value);
@@ -927,6 +954,7 @@ mod persistence_tests {
     fn empty_roms() -> Model1Roms {
         Model1Roms {
             dsb: None,
+            comm_board: false,
             ioboard_kind: crate::model1board::Kind::Original,
             nvram_default: vec![],
             maincpu: vec![],
@@ -939,6 +967,57 @@ mod persistence_tests {
             mpcm1: vec![],
             mpcm2: vec![],
             ioboard_config: vec![],
+        }
+    }
+
+    #[test]
+    fn comm_bus_lanes_and_masked_vblank() {
+        let mut roms = empty_roms();
+        let mut absent = Model1System::new(&roms).unwrap();
+        absent.write_u32(0xb00000, 0x12345678);
+        assert_eq!(absent.read_u32(0xb00000), u32::MAX);
+        roms.comm_board = true;
+        let mut sys = Model1System::with_config(&roms, Config {
+            cabinet: crate::config::Cabinet::Twin,
+            ..Config::default()
+        }).unwrap();
+        sys.write_u32(0xb00008, 0x12345678);
+        assert_eq!(sys.read_u32(0xb00008), 0x12345678);
+        sys.write_u16(0xb00ffe, 0xbeef);
+        assert_eq!(sys.read_u16(0xb00ffe), 0xbeef);
+        sys.write_u16(0xb01000, 0xff01);
+        assert_eq!(sys.read_u16(0xb01000), 0xffff);
+        sys.write_u16(0xb01002, 0xff01);
+        assert_eq!(sys.read_u16(0xb01002), 0xffff);
+        sys.irq_mask = 0xff;
+        sys.trigger_vblank();
+        assert_eq!(sys.read_u8(0xb00000), 5);
+        sys.write_u8(0xb01000, 0);
+        assert_eq!(sys.read_u16(0xb01000), 0xfffe);
+        assert_eq!(sys.read_u8(0xb01003), 0xff);
+    }
+
+    #[test]
+    fn cabinet_selects_comm_presence_without_changing_model1_nvram() {
+        for supported in [false, true] {
+            for cabinet in [crate::config::Cabinet::Single, crate::config::Cabinet::Twin] {
+                let mut roms = empty_roms();
+                roms.comm_board = supported;
+                let mut sys = Model1System::with_config(&roms, Config { cabinet, ..Config::default() }).unwrap();
+                let fitted = supported && cabinet == crate::config::Cabinet::Twin;
+                assert_eq!(sys.comm.is_some(), fitted);
+                let (bl, el) = sys.nvram_sizes();
+                let backup = vec![0x5a; bl];
+                let eeprom = vec![0xa5; el];
+                sys.set_nvram_blocks(&backup, &eeprom);
+                assert_eq!(sys.nvram_blocks(), (backup, eeprom));
+                if !fitted {
+                    sys.write_u32(0xb00000, 0);
+                    sys.write_u8(0xb01000, 1);
+                    assert_eq!(sys.read_u32(0xb00000), u32::MAX);
+                    assert_eq!(sys.read_u8(0xb01000), 0xff);
+                }
+            }
         }
     }
 
@@ -1051,21 +1130,23 @@ mod persistence_tests {
     #[test]
     fn advanced_dpram_waits_only_charge_cpu_low_byte_reads() {
         let mut roms = empty_roms();
-        roms.ioboard_kind = crate::model1board::Kind::WingWar;
-        roms.iocpu = vec![0; 0x10000];
-        let mut sys = Model1System::new(&roms).unwrap();
-        sys.read_u32(0xc00000);
-        assert_eq!(sys.take_wait_cycles(), 0); // debugger/host inspection
-        sys.v60_access_active = true;
-        sys.write_u8(0xc00042, 0x5a);
-        assert_eq!(sys.read_u8(0xc00042), 0x5a);
-        assert_eq!(sys.take_wait_cycles(), 1);
-        assert_eq!(sys.read_u8(0xc00043), 0xff);
-        assert_eq!(sys.take_wait_cycles(), 0);
-        sys.read_u16(0xc00042);
-        assert_eq!(sys.take_wait_cycles(), 1);
-        sys.read_u32(0xc00042);
-        assert_eq!(sys.take_wait_cycles(), 2);
+        for kind in [crate::model1board::Kind::WingWar, crate::model1board::Kind::WingWarR360] {
+            roms.ioboard_kind = kind;
+            roms.iocpu = vec![0; 0x10000];
+            let mut sys = Model1System::new(&roms).unwrap();
+            sys.read_u32(0xc00000);
+            assert_eq!(sys.take_wait_cycles(), 0); // debugger/host inspection
+            sys.v60_access_active = true;
+            sys.write_u8(0xc00042, 0x5a);
+            assert_eq!(sys.read_u8(0xc00042), 0x5a);
+            assert_eq!(sys.take_wait_cycles(), 1);
+            assert_eq!(sys.read_u8(0xc00043), 0xff);
+            assert_eq!(sys.take_wait_cycles(), 0);
+            sys.read_u16(0xc00042);
+            assert_eq!(sys.take_wait_cycles(), 1);
+            sys.read_u32(0xc00042);
+            assert_eq!(sys.take_wait_cycles(), 2);
+        }
         let mut original = Model1System::new(&empty_roms()).unwrap();
         original.v60_access_active = true;
         original.read_u32(0xc00042);

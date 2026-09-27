@@ -1,4 +1,6 @@
 MAME reference implementations adapted in:
+  crates/tgpulse-core/src/model1io2/r360.rs — copyright-holder Olivier Galibert
+  crates/tgpulse-core/src/model1comm.rs — copyright-holder Ariane Fugmann
   crates/tgpulse-core/src/mpeg.rs and mpeg/tables.rs — copyright-holder
     Olivier Galibert
   crates/tgpulse-core/src/dsbz80.rs — copyright-holders R. Belmont,
@@ -16,7 +18,7 @@ MAME reference implementations adapted in:
     Joakim Larsson Edstrom
 
 Copyright holders: R. Belmont, Olivier Galibert, smf, Dirk Best, AJR, hap, Juergen Buchmueller, Wilbert Pol,
-Tatsuyuki Satoh, Curt Coder, Joakim Larsson Edstrom
+Tatsuyuki Satoh, Curt Coder, Joakim Larsson Edstrom, Ariane Fugmann
 (respective components above).
 
 Redistribution and use in source and binary forms, with or without

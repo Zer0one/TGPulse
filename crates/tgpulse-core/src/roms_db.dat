@@ -4025,6 +4025,8 @@ L copro_data mpr-16739.41 2 80000 4b
 L copro_data mpr-16740.42 3 80000 4b
 L controlboard epr-18851.ic22 0 20000 p
 L controlboard epr-18850.ic67 20000 8000 p
+R ioboard:iocpu 10000 00
+L ioboard:iocpu epr-16891.6 0 10000 p
 G wingwarj m1 flight stickx sticky throttle
 T Wing War (Japan)	1994	Sega
 R copro_tables 40000 00

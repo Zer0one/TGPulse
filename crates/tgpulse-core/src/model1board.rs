@@ -9,20 +9,22 @@ pub enum Kind {
     #[default]
     Original,
     WingWar,
+    WingWarR360,
 }
 
 impl Kind {
     pub fn for_set(name: &str) -> Self {
         match name {
             "wingwar" | "wingwaru" | "wingwarj" => Self::WingWar,
-            // R360 cabinet wiring and NetMerc are separate, unvalidated paths.
+            "wingwar360" => Self::WingWarR360,
+            // NetMerc remains a separate, unvalidated path.
             _ => Self::Original,
         }
     }
     pub fn clock_hz(self) -> u32 {
         match self {
             Self::Original => model1io::Z80_HZ,
-            Self::WingWar => model1io2::CPU_HZ,
+            Self::WingWar | Self::WingWarR360 => model1io2::CPU_HZ,
         }
     }
 }
@@ -78,6 +80,9 @@ impl IoBoard {
                 Device::Original(board)
             }
             Kind::WingWar => Device::Advanced(Box::new(model1io2::IoBoard::new(firmware, eeprom)?)),
+            Kind::WingWarR360 => {
+                Device::Advanced(Box::new(model1io2::IoBoard::new_r360(firmware, eeprom)?))
+            }
         };
         Ok(Self {
             device,
@@ -86,9 +91,15 @@ impl IoBoard {
     }
 
     pub fn kind(&self) -> Kind {
-        match self.device {
+        match &self.device {
             Device::Original(_) => Kind::Original,
-            Device::Advanced(_) => Kind::WingWar,
+            Device::Advanced(board) => {
+                if board.is_r360() {
+                    Kind::WingWarR360
+                } else {
+                    Kind::WingWar
+                }
+            }
         }
     }
     pub fn fault(&self) -> Option<model1io2::BusError> {
@@ -189,11 +200,12 @@ mod tests {
         IoBoard::new(Kind::WingWar, &rom, Eeprom93c46::new()).unwrap()
     }
     #[test]
-    fn only_base_wingwar_sets_select_advanced_board() {
+    fn wingwar_variants_select_their_advanced_board_wiring() {
         for set in ["wingwar", "wingwaru", "wingwarj"] {
             assert_eq!(Kind::for_set(set), Kind::WingWar);
         }
-        for set in ["vr", "vf", "swa", "wingwar360", "netmerc", "unknown"] {
+        assert_eq!(Kind::for_set("wingwar360"), Kind::WingWarR360);
+        for set in ["vr", "vf", "swa", "netmerc", "unknown"] {
             assert_eq!(Kind::for_set(set), Kind::Original);
         }
         assert_eq!(Kind::Original.clock_hz(), 4_000_000);

@@ -171,6 +171,7 @@ fn build_model1(
     };
     Ok(Model1Roms {
         dsb,
+        comm_board: false,
         ioboard_kind,
         maincpu: {
             let mut m = take(&mut regions, "maincpu", 0x2000000);
@@ -277,17 +278,21 @@ pub fn load_model1_zip(path: &str) -> Result<Model1Roms, String> {
     // Z80 firmware mirrors it into dpram so the game boots configured.
     let ioboard_config = read_chip(&mut archive, "vr_defaults.nv").unwrap_or_default();
     let regions = crate::roms_db::build_regions(def, &mut archive)?;
-    build_model1(
+    let mut roms = build_model1(
         regions,
         ioboard_config,
         crate::model1board::Kind::for_set(&def.name),
-    )
+    )?;
+    roms.comm_board = crate::model1comm::present_for_set(&def.name);
+    Ok(roms)
 }
 
 /// Loads Star Wars Arcade, building the V60 memory image
 /// `ROM_START(swa)` lays it out.
 pub struct Model1Roms {
     pub dsb: Option<DsbRoms>,
+    /// MAME machine configuration selects the M1COMM board, not the filename.
+    pub comm_board: bool,
     /// Selected from the identified ROM set, not a file path or frontend setting.
     pub ioboard_kind: crate::model1board::Kind,
     /// Factory battery-backed RAM image (NetMerc). Saved user NVRAM wins.

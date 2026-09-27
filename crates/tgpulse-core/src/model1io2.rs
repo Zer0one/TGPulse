@@ -3,7 +3,7 @@
 // See LICENSES/MAME-BSD-3-Clause.txt.
 //! Advanced Model 1 I/O board bus: 837-10859 (Wing War), 837-11659 (NetMerc).
 //!
-//! Bus and CPU integration, selected for base Wing War by `model1board`.
+//! Bus and CPU integration, selected for Wing War and R360 by `model1board`.
 //! Firmware is supplied in memory; no host resources or
 //! frontend bindings live here. Known missing devices return errors rather than
 //! invented ready values. Other games retain their existing board selection.
@@ -15,6 +15,7 @@ use crate::tmpz84c015::{InterruptSource, Peripherals};
 pub use crate::z80sio::{SerialInputs, SerialOutputs};
 
 mod cpu;
+mod r360;
 pub use cpu::{BoardState, IoBoard, SerialEvent};
 
 pub const CPU_HZ: u32 = 9_830_400;
@@ -107,6 +108,7 @@ pub struct BusState {
     outputs: Outputs,
     secondary: bool,
     lcd_data: u8,
+    r360: Option<r360::Cabinet>,
 }
 
 pub struct Bus {
@@ -135,11 +137,16 @@ impl Bus {
                 },
                 secondary: false,
                 lcd_data: 0,
+                r360: None,
             },
         })
     }
 
-    pub fn set_inputs(&mut self, inputs: Inputs) {
+    pub fn set_inputs(&mut self, mut inputs: Inputs) {
+        if let Some(cabinet) = &mut self.state.r360 {
+            cabinet.throttle = inputs.analog[2];
+            inputs.analog[2] = 0; // MAME R360: throttle travels via drive commands.
+        }
         self.state
             .cpu_peripherals
             .set_pio_inputs([inputs.dips[1], inputs.dips[2]]);
@@ -178,7 +185,8 @@ impl Bus {
     }
 
     pub fn restore(&mut self, state: &BusState) -> Result<(), BusError> {
-        if !state.cpu_peripherals.valid_state() {
+        if !state.cpu_peripherals.valid_state() || state.r360.is_some() != self.state.r360.is_some()
+        {
             return Err(BusError::InvalidSnapshot);
         }
         self.state = state.clone();
@@ -198,6 +206,7 @@ impl Bus {
             0x8000..=0x800f => state.io.read(
                 (address & 15) as u8,
                 |port| match port {
+                    2 if state.r360.is_some() => state.r360.as_ref().unwrap().response,
                     0..=2 => state.inputs.digital[port as usize],
                     4 => state.inputs.drive,
                     _ => 0xff,
@@ -248,6 +257,9 @@ impl Bus {
             3 => state.outputs.lamps = data,
             4 => {
                 state.outputs.drive = data;
+                if let Some(cabinet) = &mut state.r360 {
+                    cabinet.write(data);
+                }
                 state.lcd_data = data;
             }
             5 => {
@@ -400,6 +412,51 @@ mod tests {
                 comm_error: false
             }
         );
+    }
+
+    #[test]
+    fn r360_feedback_matches_mame_and_preserves_latched_reply_on_restore() {
+        let mut original = bus();
+        original.state.r360 = Some(Default::default());
+        original.write_memory(0x8008, 4).unwrap(); // IN2 reads external cabinet.
+        assert_eq!(original.read_memory(0x8002), Ok(0));
+        for (cmd, response) in [
+            (0xbf, 0xbf),
+            (0xbe, 0xbf),
+            (0xbd, 0xbb),
+            (0xbc, 0xba),
+            (0xbb, 0xb9),
+            (0xba, 0xbf),
+            (0xb9, 0xbf),
+            (0x99, 0xbf),
+        ] {
+            original.write_memory(0x8004, cmd).unwrap();
+            assert_eq!(original.read_memory(0x8002), Ok(response));
+        }
+        for throttle in 0..=255 {
+            let mut inputs = Inputs::default();
+            inputs.analog[2] = throttle;
+            original.set_inputs(inputs);
+            assert_eq!(original.state.inputs.analog[2], 0);
+            original.write_memory(0x8004, 0xaf).unwrap();
+            assert_eq!(original.read_memory(0x8002), Ok(!throttle));
+        }
+        let saved = bincode::serialize(&original.snapshot()).unwrap();
+        let state = bincode::deserialize(&saved).unwrap();
+        let mut restored = bus();
+        assert_eq!(restored.restore(&state), Err(BusError::InvalidSnapshot));
+        restored.state.r360 = Some(Default::default());
+        restored.restore(&state).unwrap();
+        for cmd in [0xbd, 0xbc, 0xbb, 0xaf, 0x00, 0xb9] {
+            for b in [&mut original, &mut restored] {
+                b.write_memory(0x8004, cmd).unwrap();
+            }
+            assert_eq!(original.read_memory(0x8002), restored.read_memory(0x8002));
+            assert_eq!(
+                bincode::serialize(&original.snapshot()).unwrap(),
+                bincode::serialize(&restored.snapshot()).unwrap()
+            );
+        }
     }
 
     #[test]

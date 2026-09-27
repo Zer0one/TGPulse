@@ -151,7 +151,7 @@ def scheme_table(text):
 # The I/O board's Z80 firmware lives in MAME's `model1io_device`, not in any
 # game's ROM_START, so it has to be attached here. Which revision a game uses
 # comes from its `set_default_bios_tag`. The advanced board is enabled for
-# base Wing War cabinets; R360 and NetMerc remain separate validation tasks.
+# Wing War including R360; NetMerc remains a separate validation task.
 IOBOARD_FIRMWARE = {
     "vf": "epr-14869b.25",
     "swa": "epr-14869b.25",
@@ -159,9 +159,10 @@ IOBOARD_FIRMWARE = {
     "wingwar": "epr-16891.6",
     "wingwaru": "epr-16891.6",
     "wingwarj": "epr-16891.6",
+    "wingwar360": "epr-16891.6",
 }
 IOBOARD_DEFAULT = "epr-14869.25"
-IOBOARD_NONE = {"wingwar360", "netmerc"}
+IOBOARD_NONE = {"netmerc"}
 
 
 def main():

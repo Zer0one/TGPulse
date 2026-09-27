@@ -41,9 +41,13 @@ impl std::str::FromStr for Widescreen {
     }
 }
 
-/// Whether the M2COMM network board (837-10537) is fitted. This is a physical
+/// Whether a supported Model 1/2 COMM network board is fitted. This is a physical
 /// property of the cabinet, not a game setting, so it cannot be derived from
 /// the ROMs and has to be told to us.
+///
+/// Model 1 uses this only for board presence; operator roles stay in NVRAM
+/// and the desktop frontend starts TCP when fitted. The following legacy
+/// boot/role behavior describes Model 2, not a Model 1 role override.
 ///
 /// The game's boot code copes with either, and takes a visibly different branch
 /// for each:
@@ -55,11 +59,12 @@ impl std::str::FromStr for Widescreen {
 ///   carries on as a lone node.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Cabinet {
-    /// Board fitted, and the game set to run as the link master. With one
+    /// Board fitted. Model 1 retains the game's NVRAM role. Model 2 sets the
+    /// game to run as the link master. With one
     /// cabinet the ring cable closes back on this board, so it links to itself
     /// as a single-node ring: link id 1 of 1.
     Twin,
-    /// No board fitted and the game set to standalone, as a single cabinet
+    /// No board fitted. On Model 2 the game is also set to standalone, as a single cabinet
     /// ships. The boot code then skips the network check entirely.
     Single,
 }
