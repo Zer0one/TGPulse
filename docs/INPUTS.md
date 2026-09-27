@@ -143,6 +143,14 @@ physical bindings and no redundant Shot/Shift/Foot Sensor entries.
 | H-Gate gears 1–4 | Right-stick diagonals | 1–4 | Direct gear selection |
 | H-Gate neutral | West | 0 | Neutral |
 
+Sega Rally (all revisions), Super GT 24h and Star Wars Arcade/SWAJ have
+one View button: their `View / Select 1` also accepts the gamepad binding of
+`View / Select 4`. With the defaults this is **D-pad Down OR D-pad Up**.
+The GUI notes this rule below View / Select 1. Keyboard bindings are unchanged;
+reassigning View / Select 4's gamepad binding also reassigns the alternative.
+Multi-view cabinets remain separate. Titles already using View / Select 4 for
+their single view already accept D-pad Up and need no extra binding.
+
 Face buttons and shoulders are OR alternatives, not a chord: either one
 activates the same signal. R2/L2 remain analog pedals. The aliases preserve
 the requested global action positions; sequential shifts retain L1 down/R1 up.
@@ -157,14 +165,16 @@ Axis defaults use left X for steering/bank/handle/curving/swing; left X/Y for
 gun aim and analog flight; right X for roll/inclining; and right Y
 (downward half) for Bat Swing. Accelerator and Brake use R2/L2.
 Star Wars Arcade and Wing War share two assignable entries, `Throttle Up`
-(`throttle_up = KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+`) and
+(`throttle_up = KeyW, ArrowUp, pad:LeftZ+, pad:RightStickY+`) and
 `Throttle Down`
-(`throttle_down = KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-`).
-R2 OR right stick up increases throttle; L2 OR right stick down decreases it.
+(`throttle_down = KeyS, ArrowDown, pad:RightZ+, pad:RightStickY-`).
+L2 OR right stick up selects Throttle Up; R2 OR right stick down selects Throttle Down.
+By user request, the ADC polarity is inverted and the trigger assignments are
+swapped; signal labels, right-stick Y and keyboard bindings remain unchanged.
+The unchanged stick/keyboard bindings consequently have inverted ADC effects.
 Both triggers read positive travel; gilrs right-stick Y is positive up.
-The translator subtracts Up from Down on the single throttle ADC, since
-in-game testing confirms lower ADC means more power. Released/equal inputs
-give 0x80. Full Up/Down give 0x01/0xFF for Wing War and 28/228 for SWA,
+The translator subtracts Down from Up on the single throttle ADC. Released/equal inputs
+give 0x80. Full Up/Down give 0xFF/0x01 for Wing War and 228/28 for SWA,
 preserving each cabinet's ADC range with the same polarity. Alternatives use the
 stronger input, not a sum; opposite directions compensate.
 This centred rest is a gamepad adaptation, not MAME's minimum idle value.

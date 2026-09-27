@@ -1064,6 +1064,7 @@ fn swa_view_uses_view1_defaults_not_action3() {
         let mut out = Inputs::default();
         for (button, expected) in [
             (gilrs::Button::DPadDown, [255, 0xef, 255]),
+            (gilrs::Button::DPadUp, [255, 0xef, 255]),
             (gilrs::Button::West, [255; 3]),
         ] {
             input.set_pad_button(button, true);
@@ -1085,6 +1086,54 @@ fn swa_view_uses_view1_defaults_not_action3() {
 }
 
 #[test]
+fn single_view_pad_alias_preserves_multiview_and_other_cabinets() {
+    use gilrs::Button as B;
+    for cabinet in cabinets() {
+        for game in cabinet.sets.split_whitespace() {
+            let single = game.starts_with("srally")
+                || matches!(game, "sgt24h" | "swa" | "swaj");
+            let mut input = state(game, cabinet.scheme);
+            if !cabinet.buttons.iter().any(|&(s, _, _)| matches!(s, S::View1 | S::View2 | S::View3 | S::View4)) {
+                input.set_pad_button(B::DPadUp, true);
+                assert_eq!(input.signal(S::View1), 0.0, "{game}: no view alias");
+                continue;
+            }
+            for button in [B::DPadUp, B::DPadDown] {
+                let mut baseline = Inputs::default();
+                input.poll(&mut baseline);
+                let mut expected = ports(&baseline);
+                let signal = if button == B::DPadDown || single { S::View1 } else { S::View4 };
+                // Other cabinet types can map Up/Down to joystick movement.
+                let direction = if button == B::DPadUp { S::Up } else { S::Down };
+                for &(s, port, mask) in cabinet.buttons {
+                    if s == signal || s == direction { expected[port] &= !mask; }
+                }
+                input.set_pad_button(button, true);
+                let mut out = Inputs::default();
+                input.poll(&mut out);
+                assert_eq!(ports(&out), expected, "{game}: {button:?}");
+                input.set_pad_button(button, false);
+            }
+            if single {
+                input.on_key(KeyCode::KeyV, true);
+                let mut out = Inputs::default();
+                input.poll(&mut out);
+                assert_eq!(ports(&out), cabinet.idle, "{game}: no keyboard alias");
+                input.on_key(KeyCode::KeyV, false);
+                input.set_pad_button(B::DPadUp, true);
+                input.set_pad_button(B::DPadDown, true);
+                input.poll(&mut out);
+                let mut expected = cabinet.idle;
+                for &(s, port, mask) in cabinet.buttons {
+                    if s == S::View1 { expected[port] &= !mask; }
+                }
+                assert_eq!(ports(&out), expected, "{game}: OR, not toggle/cancellation");
+            }
+        }
+    }
+}
+
+#[test]
 fn swa_throttle_default_keys_cover_both_directions_and_cancel() {
     for game in ["swa", "swaj"] {
         let mut input = state(game, Scheme::Flight);
@@ -1092,8 +1141,8 @@ fn swa_throttle_default_keys_cover_both_directions_and_cancel() {
         let mut out = Inputs::default();
         for (accelerator, brake, expected) in [
             (false, false, 128),
-            (true, false, 28),
-            (false, true, 228),
+            (true, false, 228),
+            (false, true, 28),
             (true, true, 128),
         ] {
             input.on_key(KeyCode::KeyW, accelerator);
@@ -1125,20 +1174,20 @@ fn wave_runner_throttle_keeps_its_own_rest_and_range() {
 #[test]
 fn flight_throttle_half_axes_are_independent_of_pedals_and_cancel() {
     for (game, min, max, half_up, half_down) in [
-        ("swa", 28, 228, 78, 178),
-        ("swaj", 28, 228, 78, 178),
-        ("wingwar", 1, 255, 65, 192),
-        ("wingwaru", 1, 255, 65, 192),
-        ("wingwarj", 1, 255, 65, 192),
-        ("wingwar360", 1, 255, 65, 192),
+        ("swa", 28, 228, 178, 78),
+        ("swaj", 28, 228, 178, 78),
+        ("wingwar", 1, 255, 192, 65),
+        ("wingwaru", 1, 255, 192, 65),
+        ("wingwarj", 1, 255, 192, 65),
+        ("wingwar360", 1, 255, 192, 65),
     ] {
         let mut input = state(game, Scheme::Flight);
         input.set_analog_roles(db_roles(game));
         let mut out = Inputs::default();
         for (up, down, expected) in [
             (false, false, 128),
-            (true, false, min),
-            (false, true, max),
+            (true, false, max),
+            (false, true, min),
             (true, true, 128),
         ] {
             input.on_key(KeyCode::KeyW, up);
@@ -1173,8 +1222,8 @@ fn flight_throttle_half_axes_are_independent_of_pedals_and_cancel() {
             .unwrap();
         for (up, down, expected) in [
             (0.0, 0.0, 128),
-            (1.0, 0.0, min),
-            (0.0, 1.0, max),
+            (1.0, 0.0, max),
+            (0.0, 1.0, min),
             (0.5, 0.0, half_up),
             (0.0, 0.5, half_down),
             (0.5, 0.5, 128),

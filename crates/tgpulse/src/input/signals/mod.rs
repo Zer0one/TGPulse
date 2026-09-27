@@ -55,8 +55,8 @@ signals! {
     Neutral, "H-Gate: Neutral", "neutral", false, "Digit0, pad:West";
     SkyX, "Analog Joystick X", "analog_x", true, "keys:ArrowLeft/ArrowRight, keys:KeyA/KeyD, pad:LeftStickX";
     SkyY, "Analog Joystick Y", "analog_y", true, "keys:KeyG/KeyT, pad:LeftStickY";
-    ThrottleUp, "Throttle Up", "throttle_up", false, "KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+";
-    ThrottleDown, "Throttle Down", "throttle_down", false, "KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-";
+    ThrottleUp, "Throttle Up", "throttle_up", false, "KeyW, ArrowUp, pad:LeftZ+, pad:RightStickY+";
+    ThrottleDown, "Throttle Down", "throttle_down", false, "KeyS, ArrowDown, pad:RightZ+, pad:RightStickY-";
     Handle, "Wave Runner: Handle", "handle", true, "keys:ArrowLeft/ArrowRight, keys:KeyA/KeyD, pad:LeftStickX";
     GunYaw, "Gun Yaw", "gun_yaw", true, "keys:ArrowLeft/ArrowRight, keys:KeyA/KeyD, pad:LeftStickX";
     GunPitch, "Gun Pitch", "gun_pitch", true, "keys:ArrowDown/ArrowUp, keys:KeyS/KeyW, pad:LeftStickY";
@@ -134,6 +134,7 @@ impl Signal {
     /// Game families, including their revisions. Kept with the public labels.
     pub fn usage(self) -> Option<&'static str> {
         match self {
+            Self::View1 => Some("(Sega Rally, Super GT 24h, Star Wars Arcade: also View / Select 4 gamepad binding)"),
             Self::SkyX | Self::SkyY => Some("(Sky Target, Star Wars Arcade, Wing War, NetMerc)"),
             Self::ThrottleUp | Self::ThrottleDown => Some("(Star Wars Arcade, Wing War)"),
             Self::Action4 => Some(

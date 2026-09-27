@@ -934,11 +934,11 @@ mod tests {
         assert_eq!(loaded.binding(Signal::Brake).text, "KeyO");
         assert_eq!(
             loaded.binding(Signal::ThrottleUp).text,
-            "KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+"
+            "KeyW, ArrowUp, pad:LeftZ+, pad:RightStickY+"
         );
         assert_eq!(
             loaded.binding(Signal::ThrottleDown).text,
-            "KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-"
+            "KeyS, ArrowDown, pad:RightZ+, pad:RightStickY-"
         );
         assert_eq!(
             std::fs::read_to_string(path.with_extension("conf.pre-players")).unwrap(),

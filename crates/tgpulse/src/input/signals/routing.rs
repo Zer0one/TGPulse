@@ -27,7 +27,18 @@ impl InputState {
     }
 
     pub(in crate::input) fn signal(&self, signal: S) -> f32 {
-        self.sample_signal(signal, false, false)
+        let value = self.sample_signal(signal, false, false);
+        // Single-view cabinets may use either gamepad view position. Reuse the
+        // assignable View4 pad binding (default D-pad Up), not a hidden button
+        // check. Do not alias keyboard View4 or multi-view cabinets.
+        if signal == S::View1
+            && (self.game.starts_with("srally")
+                || matches!(self.game.as_str(), "sgt24h" | "swa" | "swaj"))
+        {
+            value.max(self.sample_signal(S::View4, false, true))
+        } else {
+            value
+        }
     }
     fn sample_signal(&self, signal: S, keyboard_only: bool, pad_only: bool) -> f32 {
         self.sample_player_signal(Player::One, signal, keyboard_only, pad_only)
@@ -297,9 +308,10 @@ impl InputState {
                 A::Throttle if swa || self.game.starts_with("wingwar") => {
                     // Two assignable half-axes drive one cabinet ADC. Centre
                     // at release is a gamepad adaptation, not MAME's idle value.
-                    // In-game testing confirms lower ADC means more throttle.
+                    // User-selected polarity: Up raises the ADC, Down lowers it.
+                    // Keep signal names and right-stick assignments unchanged.
                     return centered(
-                        self.signal(S::ThrottleDown) - self.signal(S::ThrottleUp),
+                        self.signal(S::ThrottleUp) - self.signal(S::ThrottleDown),
                         128,
                         if swa { 28 } else { 1 },
                         if swa { 228 } else { 255 },
