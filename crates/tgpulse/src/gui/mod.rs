@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use tgpulse_core::config::Config;
 use tgpulse_core::library::{self, Entry};
+use tgpulse_core::sound::AudioSource;
 use tgpulse_core::tilemap::{SCREEN_H, SCREEN_W};
 
 use crate::bindings::{Bindings, Hotkey, Source};
@@ -60,6 +61,8 @@ pub struct Stats {
 
 pub struct Gui {
     context: imgui::Context,
+    /// The running machine's implemented outputs; empty in the library.
+    pub audio_sources: &'static [AudioSource],
 
     /// Whether the player wants the interface up.
     pub visible: bool,
@@ -134,6 +137,7 @@ impl Gui {
 
         Self {
             context,
+            audio_sources: &[],
             visible: true,
             suppressed: false,
             show_settings: false,
@@ -344,7 +348,13 @@ impl Gui {
         }
 
         if show_settings {
-            settings_window(ui, config, &mut show_settings, &mut actions);
+            settings_window(
+                ui,
+                config,
+                self.audio_sources,
+                &mut show_settings,
+                &mut actions,
+            );
         }
         if show_input {
             input_window(
@@ -533,6 +543,7 @@ fn library_window(
 fn settings_window(
     ui: &imgui::Ui,
     config: &mut Config,
+    audio_sources: &[AudioSource],
     open: &mut bool,
     actions: &mut Vec<Action>,
 ) {
@@ -579,6 +590,24 @@ fn settings_window(
                 changed = true;
             }
             ui.text_disabled("SCSP titles mix quiet; try 400 for Sega Rally.");
+            if audio_sources.is_empty() {
+                ui.text_disabled("Load a game to show its audio sources.");
+            } else {
+                for source in audio_sources {
+                    let (label, muted) = match source {
+                        AudioSource::MultiPcm1 => {
+                            ("Mute MultiPCM 1", &mut config.audio_mutes.multipcm1)
+                        }
+                        AudioSource::MultiPcm2 => {
+                            ("Mute MultiPCM 2", &mut config.audio_mutes.multipcm2)
+                        }
+                        AudioSource::Scsp => ("Mute SCSP", &mut config.audio_mutes.scsp),
+                        AudioSource::Ym3438 => ("Mute FM (YM3438)", &mut config.audio_mutes.ym3438),
+                    };
+                    changed |= ui.checkbox(label, muted);
+                }
+                ui.text_disabled("Mute output only; sound hardware keeps running.");
+            }
 
             ui.separator();
             ui.text_disabled("Machine");
@@ -603,6 +632,7 @@ fn settings_window(
                 config.smooth_shadows = shipped.smooth_shadows;
                 config.fullscreen = shipped.fullscreen;
                 config.volume = shipped.volume;
+                config.audio_mutes = shipped.audio_mutes;
                 config.rumble = shipped.rumble;
                 config.cabinet = shipped.cabinet;
                 changed = true;

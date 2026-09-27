@@ -179,6 +179,15 @@ impl System {
     }
 }
 
+/// Output-only preferences: never stop chip clocks, voices or sound CPUs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AudioMutes {
+    pub multipcm1: bool,
+    pub multipcm2: bool,
+    pub ym3438: bool,
+    pub scsp: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub rom_path: String,
@@ -222,6 +231,7 @@ pub struct Config {
     /// full scale because the cabinet's amplifier did the rest. This is a
     /// plain digital gain on the mixed output, clamped against clipping.
     pub volume: u32,
+    pub audio_mutes: AudioMutes,
 
     /// Off: legacy native framing. On: widen the 3D field of view.
     /// Auto: present the native image at the saved cabinet's 4:3/16:9 aspect.
@@ -268,6 +278,7 @@ impl Default for Config {
             // did on a CRT; the exact dither is one flag away for purists.
             smooth_shadows: true,
             volume: 100,
+            audio_mutes: AudioMutes::default(),
             widescreen: Widescreen::Off,
             widescreen_stretch_2d: true,
             reverse_landscape: false,

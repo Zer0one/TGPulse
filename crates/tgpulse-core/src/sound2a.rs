@@ -197,6 +197,7 @@ pub struct SoundSystem2A {
     remainder: i64,
     /// Fractional sample-clock accumulator (SCSP samples per 68000 cycle).
     sample_acc: f64,
+    muted: bool,
     /// Rendered stereo output at the SCSP rate, drained by the front end.
     /// Headless tools never drain it, so it is capped rather than unbounded.
     pub samples: std::collections::VecDeque<(i16, i16)>,
@@ -207,6 +208,69 @@ pub struct SoundSystem2A {
 
 /// Upper bound on buffered audio (~2s) so headless runs don't accumulate it.
 const MAX_BUFFERED_SAMPLES: usize = 90_000;
+
+#[cfg(test)]
+mod mute_tests {
+    use super::*;
+
+    fn sounding_board() -> SoundSystem2A {
+        let mut program = vec![0; 16];
+        program[..4].copy_from_slice(&0x0007fff0u32.to_be_bytes());
+        program[4..8].copy_from_slice(&0x00600008u32.to_be_bytes());
+        program[8..12].copy_from_slice(&[0x4e, 0x71, 0x60, 0xfc]);
+        let mut sound = SoundSystem2A::new(program, vec![]);
+        let scsp = &mut sound.board.scsp;
+        for i in 0..16 {
+            let value = if i < 8 { 0x4000i16 } else { -0x4000i16 };
+            scsp.ram[0x100 + i * 2..0x102 + i * 2].copy_from_slice(&value.to_be_bytes());
+        }
+        for (reg, value) in [
+            (0x200, 15),
+            (1, 0x100),
+            (2, 0),
+            (3, 16),
+            (4, 31),
+            (5, 31),
+            (6, 0),
+            (8, 0),
+            (0x0b, 7 << 13),
+            (0, 0x1820),
+            (0x20c, 0),
+        ] {
+            scsp.write(reg, value, 0xffff);
+        }
+        sound
+    }
+
+    #[test]
+    fn scsp_mute_preserves_timers_cpu_and_audio_continuation() {
+        let mut reference = sounding_board();
+        let mut muted = sounding_board();
+        muted.set_muted(true);
+        reference.run(200_013, SND2A_CPU_HZ);
+        muted.run(200_013, SND2A_CPU_HZ);
+        assert!(!reference.samples.is_empty());
+        assert!(reference.samples.iter().any(|&s| s != (0, 0)));
+        assert_eq!(reference.samples.len(), muted.samples.len());
+        assert!(muted.samples.iter().all(|&s| s == (0, 0)));
+        assert_eq!(reference.cpu.regs.pc, muted.cpu.regs.pc);
+        assert_eq!(
+            reference.board.scsp.read(0x210),
+            muted.board.scsp.read(0x210)
+        );
+        assert_ne!(
+            muted.board.scsp.read(0x210) & 0x40,
+            0,
+            "SCSP timer still runs"
+        );
+        reference.samples.clear();
+        muted.set_muted(false);
+        assert!(muted.samples.is_empty());
+        reference.run(100_003, SND2A_CPU_HZ);
+        muted.run(100_003, SND2A_CPU_HZ);
+        assert_eq!(reference.samples, muted.samples);
+    }
+}
 
 impl SoundSystem2A {
     pub fn new(rom: Vec<u8>, samples: Vec<u8>) -> Self {
@@ -230,6 +294,7 @@ impl SoundSystem2A {
             board,
             remainder: 0,
             sample_acc: 0.0,
+            muted: false,
             samples: std::collections::VecDeque::new(),
             exception_counts: [0; 256],
         }
@@ -238,6 +303,13 @@ impl SoundSystem2A {
     /// Output sample rate: the SCSP's native 44.1kHz.
     pub fn sample_rate(&self) -> f32 {
         SCSP_SAMPLE_RATE
+    }
+
+    pub fn set_muted(&mut self, muted: bool) {
+        if self.muted != muted {
+            self.muted = muted;
+            self.samples.clear();
+        }
     }
 
     /// Hands the driver a byte from the i960.
@@ -256,6 +328,8 @@ impl SoundSystem2A {
         while self.sample_acc >= 1.0 {
             self.sample_acc -= 1.0;
             let (l, r) = self.board.scsp.generate();
+            // Timers, MIDI, DSP and voices must continue while muted.
+            let (l, r) = if self.muted { (0, 0) } else { (l, r) };
             let l = l.clamp(-32768, 32767) as i16;
             let r = r.clamp(-32768, 32767) as i16;
             if self.samples.len() < MAX_BUFFERED_SAMPLES {

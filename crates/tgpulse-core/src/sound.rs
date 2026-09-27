@@ -23,14 +23,259 @@
 //!   f00000-f0ffff work RAM
 //! ```
 
+use crate::config::AudioMutes;
 use crate::multipcm::MultiPcm;
 use m68000::cpu_details::Mc68000;
 use m68000::exception::{Exception, Vector};
 use m68000::memory_access::MemoryAccess;
 use m68000::M68000;
+mod fm;
+use fm::FmPath;
+pub use fm::FmPathState;
 
 /// 20MHz crystal divided by two.
 pub const SND_CPU_HZ: u32 = 10_000_000;
+
+/// Implemented audio outputs, not hardware enable/disable switches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AudioSource {
+    MultiPcm1,
+    MultiPcm2,
+    Ym3438,
+    Scsp,
+}
+
+pub const MULTIPCM_SOURCES: &[AudioSource] = &[
+    AudioSource::MultiPcm1,
+    AudioSource::MultiPcm2,
+    AudioSource::Ym3438,
+];
+pub const SCSP_SOURCES: &[AudioSource] = &[AudioSource::Scsp];
+
+#[cfg(test)]
+mod mute_tests {
+    use super::*;
+
+    fn sounding_board(chip: usize) -> SoundSystem {
+        let mut program = vec![0; 16];
+        program[..4].copy_from_slice(&0x00f0fff0u32.to_be_bytes());
+        program[4..8].copy_from_slice(&8u32.to_be_bytes());
+        program[8..12].copy_from_slice(&[0x4e, 0x71, 0x60, 0xfc]); // NOP; BRA
+        let mut samples = vec![0; 0x140];
+        // Instrument 0: signed 8-bit waveform at 0x100, loop 0..64,
+        // instant attack, sustained envelope, no LFO.
+        samples[..12].copy_from_slice(&[0, 1, 0, 0, 0, 0xff, 0xc0, 0, 0xf0, 0, 0xff, 0]);
+        for i in 0..64 {
+            samples[0x100 + i] = (i as i8 * 2 - 64) as u8;
+        }
+        let mut sound = SoundSystem::new(program, samples.clone(), samples);
+        for (reg, value) in [(0, 0), (1, 0), (2, 0), (3, 0x10), (5, 1), (4, 0x80)] {
+            sound.board.pcm[chip].write(2, reg);
+            sound.board.pcm[chip].write(0, value);
+        }
+        for (address, value) in [(0x24, 255), (0x25, 3), (0x27, 5)] {
+            sound.board.ym.write(0, address);
+            sound.board.ym.write(1, value);
+        }
+        sound
+    }
+
+    #[test]
+    fn each_multipcm_mute_changes_only_output_and_preserves_continuation() {
+        for chip in 0..2 {
+            let mut reference = sounding_board(chip);
+            let mut muted = sounding_board(chip);
+            muted.set_mutes(AudioMutes {
+                multipcm1: chip == 0,
+                multipcm2: chip == 1,
+                ..AudioMutes::default()
+            });
+            reference.run(70_013, SND_CPU_HZ);
+            muted.run(70_013, SND_CPU_HZ);
+            assert!(!reference.samples.is_empty());
+            assert!(reference.samples.iter().any(|&s| s != (0, 0)));
+            assert_eq!(reference.samples.len(), muted.samples.len());
+            assert!(muted.samples.iter().all(|&s| s == (0, 0)));
+            assert_eq!(reference.cpu.regs.pc, muted.cpu.regs.pc);
+            assert_eq!(
+                reference.board.pcm[chip].active_samples(),
+                muted.board.pcm[chip].active_samples()
+            );
+            assert_eq!(reference.board.ym.read(0), muted.board.ym.read(0));
+            assert_ne!(muted.board.ym.read(0) & 1, 0, "YM timer still runs");
+            reference.samples.clear();
+            muted.set_mutes(AudioMutes::default());
+            assert!(muted.samples.is_empty());
+            reference.run(50_003, SND_CPU_HZ);
+            muted.run(50_003, SND_CPU_HZ);
+            assert_eq!(
+                reference.samples, muted.samples,
+                "unmute must not restart/freeze the chip"
+            );
+        }
+    }
+
+    #[test]
+    fn muting_the_other_multipcm_does_not_change_gain() {
+        for chip in 0..2 {
+            let mut reference = sounding_board(chip);
+            let mut muted = sounding_board(chip);
+            muted.set_mutes(AudioMutes {
+                multipcm1: chip != 0,
+                multipcm2: chip != 1,
+                ..AudioMutes::default()
+            });
+            reference.run(70_013, SND_CPU_HZ);
+            muted.run(70_013, SND_CPU_HZ);
+            assert_eq!(reference.samples, muted.samples);
+        }
+    }
+
+    fn fm_dac(sound: &mut SoundSystem) {
+        // Use the actual odd-byte bus map, not a second control path.
+        for (address, data) in [(0x2b, 0x80), (0x2a, 255)] {
+            sound.board.write8(0xd00001, address);
+            sound.board.write8(0xd00003, data);
+        }
+    }
+
+    #[test]
+    fn fm_mute_is_output_only_and_unmute_continues_identically() {
+        let mut reference = sounding_board(0);
+        let mut muted = sounding_board(0);
+        for board in [&mut reference, &mut muted] {
+            fm_dac(board);
+            board.set_mutes(AudioMutes {
+                multipcm1: true,
+                multipcm2: true,
+                ..AudioMutes::default()
+            });
+        }
+        muted.set_mutes(AudioMutes {
+            multipcm1: true,
+            multipcm2: true,
+            ym3438: true,
+            ..AudioMutes::default()
+        });
+        reference.run(70_013, SND_CPU_HZ);
+        muted.run(70_013, SND_CPU_HZ);
+        assert!(reference.samples.iter().any(|s| *s != (0, 0)));
+        assert!(muted.samples.iter().all(|s| *s == (0, 0)));
+        assert_eq!(reference.snapshot_fm_path(), muted.snapshot_fm_path());
+        reference.samples.clear();
+        muted.set_mutes(AudioMutes {
+            multipcm1: true,
+            multipcm2: true,
+            ..AudioMutes::default()
+        });
+        reference.run(50_003, SND_CPU_HZ);
+        muted.run(50_003, SND_CPU_HZ);
+        assert_eq!(reference.samples, muted.samples);
+    }
+
+    #[test]
+    fn mixed_stream_and_cpu_are_independent_of_main_slice_size() {
+        for hz in [16_000_000, 25_000_000] {
+            let mut whole = sounding_board(0);
+            let mut sliced = sounding_board(0);
+            fm_dac(&mut whole);
+            fm_dac(&mut sliced);
+            whole.run(100_003, hz);
+            for _ in 0..100_003 {
+                sliced.run(1, hz);
+            }
+            assert_eq!(whole.cpu.regs.pc, sliced.cpu.regs.pc);
+            assert_eq!(whole.remainder, sliced.remainder);
+            assert_eq!(whole.main_fraction, sliced.main_fraction);
+            assert_eq!(whole.samples, sliced.samples);
+            assert_eq!(whole.snapshot_fm_path(), sliced.snapshot_fm_path());
+            assert!(!whole.samples.is_empty());
+        }
+    }
+
+    #[test]
+    fn bus_ports_follow_ymfm_and_do_not_wire_fm_irq_to_uart() {
+        let mut sound = sounding_board(0);
+        sound.board.write8(0xd00000, 0x2a); // unused high byte
+        assert_eq!(sound.board.ym_writes, 0);
+        fm_dac(&mut sound);
+        assert_eq!(sound.board.ym_writes, 4);
+        assert_eq!(sound.board.read8(0xd00000), 0);
+        assert_ne!(sound.board.read8(0xd00001) & 0x80, 0);
+        assert_eq!(sound.board.read8(0xd00005), 0);
+        sound.render_cycles(500);
+        assert_eq!(sound.board.read8(0xd00001) & 0x80, 0);
+        assert_ne!(sound.board.read8(0xd00001) & 1, 0);
+        assert!(!sound.irq_pending);
+    }
+
+    #[test]
+    fn mixer_keeps_reference_gains_and_clips_final_sum() {
+        assert_eq!(
+            mix((1000, -1000), (2000, -2000), [1000, -1000], [false; 3]),
+            (1800, -1800)
+        );
+        assert_eq!(
+            mix(
+                (1000, -1000),
+                (2000, -2000),
+                [1000, -1000],
+                [false, false, true]
+            ),
+            (1500, -1500)
+        );
+        assert_eq!(
+            mix(
+                (1000, -1000),
+                (2000, -2000),
+                [1000, -1000],
+                [true, false, false]
+            ),
+            (1300, -1300)
+        );
+        assert_eq!(
+            mix(
+                (100000, -100000),
+                (100000, -100000),
+                [32768, -32896],
+                [false; 3]
+            ),
+            (32767, -32768)
+        );
+    }
+
+    #[test]
+    fn actual_68000_writes_produce_fm_through_the_board_mixer() {
+        let mut rom = vec![0; 8];
+        rom[..4].copy_from_slice(&0x00f0fff0u32.to_be_bytes());
+        rom[4..8].copy_from_slice(&8u32.to_be_bytes());
+        let mut registers = vec![(0xb0, 7), (0xb4, 0xc0)];
+        for slot in [0, 4, 8, 12] {
+            registers.extend([
+                (0x30 + slot, 1),
+                (0x40 + slot, 32),
+                (0x50 + slot, 31),
+                (0x80 + slot, 15),
+            ]);
+        }
+        registers.extend([(0xa4, 0x22), (0xa0, 0x69), (0x28, 0xf0)]);
+        let writes = registers.len() * 2;
+        for (reg, data) in registers {
+            for (address, value) in [(0x00d00001u32, reg), (0x00d00003, data)] {
+                rom.extend(0x13fcu16.to_be_bytes()); // MOVE.B #imm,abs.l
+                rom.extend((value as u16).to_be_bytes());
+                rom.extend(address.to_be_bytes());
+            }
+        }
+        rom.extend(0x60feu16.to_be_bytes()); // BRA.S self
+        let mut sound = SoundSystem::new(rom, vec![], vec![]);
+        sound.run(100_000, SND_CPU_HZ);
+        assert_eq!(sound.board.ym_writes, writes as u64);
+        assert_eq!(sound.exception_counts.iter().sum::<u64>(), 0);
+        assert!(sound.samples.iter().any(|&(l, r)| l > 0 && r > 0));
+        assert!(sound.samples.iter().any(|&(l, r)| l < 0 && r < 0));
+    }
+}
 
 /// The board's RAM: the reference maps 0xf00000-0xf0ffff, noting the real PCB carries
 /// two 8Kx8 SRAMs.
@@ -42,93 +287,6 @@ const SND_RAM_SIZE: usize = 0x10000;
 const UART_TX_RDY: u8 = 0x01;
 const UART_RX_RDY: u8 = 0x02;
 const UART_TX_EMPTY: u8 = 0x04;
-
-/// Timing/status portion of the YM3438 (OPN2). The sound driver uses these
-/// timers as a timebase for its sequencer, independently of the chip's FM
-/// output. Leaving status hard-wired to zero lets the UART-driven engine
-/// updater run but strands music and speech waiting for a timer overflow.
-#[derive(Default)]
-struct Ym3438Timers {
-    address: [u8; 2],
-    timer_a: u16,
-    timer_b: u8,
-    mode: u8,
-    status: u8,
-    clocks_a: u64,
-    clocks_b: u64,
-    /// 8MHz YM clock expressed as fifths of a 10MHz 68000 cycle.
-    clock_fifths: u64,
-}
-
-impl Ym3438Timers {
-    fn write_address(&mut self, bank: usize, value: u8) {
-        self.address[bank] = value;
-    }
-
-    fn write_data(&mut self, bank: usize, value: u8) {
-        // Timer/mode registers live on port 0 only.
-        if bank != 0 {
-            return;
-        }
-        match self.address[0] {
-            0x24 => self.timer_a = (self.timer_a & 0x0003) | ((value as u16) << 2),
-            0x25 => self.timer_a = (self.timer_a & 0x03fc) | (value as u16 & 3),
-            0x26 => self.timer_b = value,
-            0x27 => {
-                if value & 0x10 != 0 {
-                    self.status &= !0x01;
-                }
-                if value & 0x20 != 0 {
-                    self.status &= !0x02;
-                }
-                // Loading a timer starts a fresh period on the hardware.
-                if value & 0x01 != 0 && self.mode & 0x01 == 0 {
-                    self.clocks_a = 0;
-                }
-                if value & 0x02 != 0 && self.mode & 0x02 == 0 {
-                    self.clocks_b = 0;
-                }
-                self.mode = value;
-            }
-            _ => {}
-        }
-    }
-
-    fn status(&self) -> u8 {
-        self.status
-    }
-
-    fn advance_68000_cycles(&mut self, cycles: usize) {
-        // YM3438 clock is 8MHz while the board CPU is 10MHz.
-        self.clock_fifths += cycles as u64 * 4;
-        let clocks = self.clock_fifths / 5;
-        self.clock_fifths %= 5;
-
-        if self.mode & 0x01 != 0 {
-            self.clocks_a += clocks;
-            // YMFM: period * OPERATORS * clock_prescale. YM3438 has six
-            // channels/four operators (24) and fixed prescale 6 => 144.
-            let period = (1024u64 - self.timer_a as u64) * 144;
-            while self.clocks_a >= period.max(1) {
-                self.clocks_a -= period.max(1);
-                if self.mode & 0x04 != 0 {
-                    self.status |= 0x01;
-                }
-            }
-        }
-        if self.mode & 0x02 != 0 {
-            self.clocks_b += clocks;
-            // Timer B has an additional factor of 16: 16 * 24 * 6 = 2304.
-            let period = (256u64 - self.timer_b as u64) * 2304;
-            while self.clocks_b >= period.max(1) {
-                self.clocks_b -= period.max(1);
-                if self.mode & 0x08 != 0 {
-                    self.status |= 0x02;
-                }
-            }
-        }
-    }
-}
 
 /// The board's memory map and devices, everything except the 68000 itself.
 pub struct SoundBoard {
@@ -150,10 +308,9 @@ pub struct SoundBoard {
     /// Byte the driver sent back, waiting for the i960 to collect it.
     pub tx: Option<u8>,
 
-    /// YM3438 traffic. The FM chip is not implemented; counting its writes
-    /// keeps "why is this part silent" answerable instead of mysterious.
+    /// YM3438 bus traffic for diagnostics (including address writes).
     pub ym_writes: u64,
-    ym: Ym3438Timers,
+    ym: FmPath,
 }
 
 impl SoundBoard {
@@ -170,7 +327,7 @@ impl SoundBoard {
             rx_read_count: 0,
             tx: None,
             ym_writes: 0,
-            ym: Ym3438Timers::default(),
+            ym: FmPath::new(),
         }
     }
 
@@ -253,8 +410,7 @@ impl SoundBoard {
             0xc60001..=0xc60007 if a & 1 == 1 => self.pcm[1].read(),
             // YM3438: address/status A, data A, address/status B, data B,
             // all on the low byte lane of successive 16-bit words.
-            0xd00001 | 0xd00005 => self.ym.status(),
-            0xd00003 | 0xd00007 => 0,
+            0xd00001..=0xd00007 if a & 1 == 1 => self.ym.read(((a - 0xd00001) >> 1) as u8),
             _ => 0,
         }
     }
@@ -280,21 +436,9 @@ impl SoundBoard {
             // 68000 address 0xc40001 is chip offset 0, 0xc40003 offset 1,...
             0xc40001..=0xc40007 if a & 1 == 1 => self.pcm[0].write((a - 0xc40001) >> 1, val),
             0xc60001..=0xc60007 if a & 1 == 1 => self.pcm[1].write((a - 0xc60001) >> 1, val),
-            0xd00001 => {
+            0xd00001..=0xd00007 if a & 1 == 1 => {
                 self.ym_writes += 1;
-                self.ym.write_address(0, val);
-            }
-            0xd00003 => {
-                self.ym_writes += 1;
-                self.ym.write_data(0, val);
-            }
-            0xd00005 => {
-                self.ym_writes += 1;
-                self.ym.write_address(1, val);
-            }
-            0xd00007 => {
-                self.ym_writes += 1;
-                self.ym.write_data(1, val);
+                self.ym.write(((a - 0xd00001) >> 1) as u8, val);
             }
             0x000000..=0x09ffff => {} // ROM
             _ => {}
@@ -331,8 +475,9 @@ pub struct SoundSystem {
     remainder: i64,
     /// The UART's rxrdy line is wired to the 68000's IRQ 2.
     irq_pending: bool,
-    /// Fractional sample-clock accumulator (chip samples per 68000 cycle).
-    sample_acc: f64,
+    /// Main-CPU to sound-CPU fractional conversion; callers keep main Hz fixed.
+    main_fraction: u64,
+    muted: [bool; 3],
     /// Rendered stereo output at the chip rate, drained by the front end.
     /// Headless tools never drain it, so it is capped rather than unbounded.
     pub samples: std::collections::VecDeque<(i16, i16)>,
@@ -343,6 +488,18 @@ pub struct SoundSystem {
 
 /// Upper bound on buffered audio (~2s) so headless runs don't accumulate it.
 const MAX_BUFFERED_SAMPLES: usize = 90_000;
+
+fn mix(pcm1: (i32, i32), pcm2: (i32, i32), fm: [i32; 2], muted: [bool; 3]) -> (i16, i16) {
+    let side = |a: i32, b: i32, fm: i32| {
+        let a = if muted[0] { 0 } else { a.clamp(-32768, 32767) };
+        let b = if muted[1] { 0 } else { b.clamp(-32768, 32767) };
+        let fm = if muted[2] { 0 } else { fm };
+        // MAME board gains: MultiPCM 0.5 each, FM 0.30. Clip only the final mix
+        // after the existing per-MultiPCM clamp; never normalize for muted chips.
+        (((a + b) * 5 + fm * 3) / 10).clamp(-32768, 32767) as i16
+    };
+    (side(pcm1.0, pcm2.0, fm[0]), side(pcm1.1, pcm2.1, fm[1]))
+}
 
 impl SoundSystem {
     pub fn new(rom: Vec<u8>, pcm1: Vec<u8>, pcm2: Vec<u8>) -> Self {
@@ -366,7 +523,8 @@ impl SoundSystem {
             board,
             remainder: 0,
             irq_pending: false,
-            sample_acc: 0.0,
+            main_fraction: 0,
+            muted: [false; 3],
             samples: std::collections::VecDeque::new(),
             exception_counts: [0; 256],
         }
@@ -377,48 +535,57 @@ impl SoundSystem {
         self.board.pcm[0].sample_rate()
     }
 
+    pub fn set_mutes(&mut self, mutes: AudioMutes) {
+        let muted = [mutes.multipcm1, mutes.multipcm2, mutes.ym3438];
+        if self.muted != muted {
+            self.muted = muted;
+            self.samples.clear();
+        }
+    }
+
     /// Hands the driver a byte from the i960 and raises the UART's interrupt,.
     pub fn send(&mut self, data: u8) {
         self.board.uart_send(data);
         self.irq_pending = true;
     }
 
-    /// Advances the two DACs by the amount of 68000 time that just elapsed.
-    ///
-    /// This intentionally runs alongside the CPU, rather than once after an
-    /// entire main-board slice. MultiPCM register writes are stream barriers
-    /// in the reference: audio before a key-on/key-off/bank change must be rendered with
-    /// the old state. Rendering a whole video frame from the final register
-    /// state erased short speech/music events and made the continuously-updated
-    /// engine voice dominate the complete frame.
-    fn render_cycles(&mut self, cycles: usize) {
-        self.sample_acc +=
-            cycles as f64 * self.board.pcm[0].sample_rate() as f64 / SND_CPU_HZ as f64;
-        while self.sample_acc >= 1.0 {
-            self.sample_acc -= 1.0;
-            let (l1, r1) = self.board.pcm[0].generate();
-            let (l2, r2) = self.board.pcm[1].generate();
+    /// Only the FM chip/converter, not a complete board or machine snapshot.
+    /// A future full restore must also restore PCM, 68000, UART and run budgets.
+    pub fn snapshot_fm_path(&self) -> FmPathState {
+        self.board.ym.snapshot()
+    }
 
-            // Each MultiPCM stream clamps to signed 16-bit first; the board
-            // mixer then routes each at 0.5. Summing the raw accumulators
-            // before clamping lets a continuously driven engine voice swamp
-            // everything else and is not how the reference stream routing works.
-            let l1 = l1.clamp(-32768, 32767);
-            let r1 = r1.clamp(-32768, 32767);
-            let l2 = l2.clamp(-32768, 32767);
-            let r2 = r2.clamp(-32768, 32767);
-            let l = ((l1 + l2) / 2) as i16;
-            let r = ((r1 + r2) / 2) as i16;
-            if self.samples.len() < MAX_BUFFERED_SAMPLES {
-                self.samples.push_back((l, r));
+    pub fn restore_fm_path(&mut self, state: &FmPathState) -> Result<(), &'static str> {
+        self.board.ym.restore(state)?;
+        self.samples.clear(); // host output is not emulated state
+        Ok(())
+    }
+
+    /// Advance all sound devices on the 68000 instruction grid. The CPU core
+    /// exposes instruction totals, not timed bus micro-operations: reads/writes
+    /// occur at that instruction's start, then we render its elapsed interval.
+    /// This preserves write order without pretending to be bus-cycle accurate.
+    fn render_cycles(&mut self, cycles: usize) {
+        let SoundBoard { ym, pcm, .. } = &mut self.board;
+        let muted = self.muted;
+        let samples = &mut self.samples;
+        ym.advance(cycles, |fm| {
+            // All chips run even if muted or if the bounded output queue is full.
+            let pcm1 = pcm[0].generate();
+            let pcm2 = pcm[1].generate();
+            let mixed = mix(pcm1, pcm2, fm, muted);
+            if samples.len() < MAX_BUFFERED_SAMPLES {
+                samples.push_back(mixed);
             }
-        }
+        });
     }
 
     /// Runs the board for `i960_cycles` of main-board time.
     pub fn run(&mut self, i960_cycles: i32, i960_hz: u32) {
         // Convert the main board's budget into this board's clock.
-        self.remainder += i960_cycles as i64 * SND_CPU_HZ as i64 / i960_hz as i64;
+        let scaled = i960_cycles as i64 * SND_CPU_HZ as i64 + self.main_fraction as i64;
+        self.remainder += scaled.div_euclid(i960_hz as i64);
+        self.main_fraction = scaled.rem_euclid(i960_hz as i64) as u64;
         // The 8251's rxrdy line drives the driver's level-2 interrupt. Assert
         // it when a byte arrives; then re-assert it (edge per byte) each time
         // the driver actually consumes one while more remain, so a burst -- VF
@@ -446,11 +613,9 @@ impl SoundSystem {
             if used == 0 {
                 let rest = self.remainder as usize;
                 self.remainder = 0;
-                self.board.ym.advance_68000_cycles(rest);
                 self.render_cycles(rest);
             } else {
                 self.remainder -= used as i64;
-                self.board.ym.advance_68000_cycles(used);
                 self.render_cycles(used);
             }
         }
@@ -471,6 +636,20 @@ pub enum Sound {
 }
 
 impl Sound {
+    pub fn sources(&self) -> &'static [AudioSource] {
+        match self {
+            Self::MultiPcm(_) => MULTIPCM_SOURCES,
+            Self::Scsp(_) => SCSP_SOURCES,
+        }
+    }
+
+    pub fn set_mutes(&mut self, mutes: AudioMutes) {
+        match self {
+            Self::MultiPcm(s) => s.set_mutes(mutes),
+            Self::Scsp(s) => s.set_muted(mutes.scsp),
+        }
+    }
+
     /// The i960 has put a byte on the wire.
     pub fn send(&mut self, data: u8) {
         match self {

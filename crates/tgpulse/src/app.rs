@@ -118,6 +118,7 @@ impl Session {
             foreground: vec![0; SCREEN_W * SCREEN_H],
         };
         session.load_nvram();
+        session.set_audio_mutes(config.audio_mutes);
         log::info!(target: "app", "{} ({:?} controls)", session.title, session.scheme);
         Ok((session, config))
     }
@@ -139,6 +140,20 @@ impl Session {
                 log::info!(target: "nvram", "loaded {}", nvram::path_for(&self.set).display());
             }
             None => log::info!(target: "nvram", "none saved; the game will initialise it"),
+        }
+    }
+
+    fn audio_sources(&self) -> &'static [tgpulse_core::sound::AudioSource] {
+        match &self.machine {
+            Machine::Model1(_) => tgpulse_core::sound::MULTIPCM_SOURCES,
+            Machine::Model2(sys) => sys.sound.sources(),
+        }
+    }
+
+    fn set_audio_mutes(&mut self, mutes: tgpulse_core::config::AudioMutes) {
+        match &mut self.machine {
+            Machine::Model1(sys) => sys.sound.set_mutes(mutes),
+            Machine::Model2(sys) => sys.sound.set_mutes(mutes),
         }
     }
 
@@ -688,6 +703,10 @@ impl App {
             Ok(p) => log::info!(target: "state", "loaded slot {slot} <- {}", p.display()),
             Err(e) => log::error!(target: "state", "load failed: {e}"),
         }
+        // Output preferences belong to the frontend, not to machine snapshots.
+        if let Some(session) = &mut self.session {
+            session.set_audio_mutes(self.config.audio_mutes);
+        }
     }
 
     /// Runs emulated time forward to catch up with the wall clock.
@@ -758,6 +777,7 @@ impl App {
         self.last_present = now;
 
         let title = self.session.as_ref().map(|s| s.title.clone());
+        self.gui.audio_sources = self.session.as_ref().map_or(&[], Session::audio_sources);
         // Destructured so the renderer, the interface, the settings and the
         // session are borrowed as the separate fields they are: a frame needs
         // several at once, and going through `self` methods would not allow it.
@@ -866,6 +886,7 @@ impl App {
                     crate::storage::set_reverse_landscape(self.config.reverse_landscape);
                     if let Some(session) = &mut self.session {
                         session.audio.set_volume(self.config.volume);
+                        session.set_audio_mutes(self.config.audio_mutes);
                         session.input.enable_rumble(self.config.rumble);
                     }
                     // Supersampling and the widescreen framing shape the

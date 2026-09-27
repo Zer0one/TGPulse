@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tgpulse_core::config::{Cabinet, Config, Widescreen};
+use tgpulse_core::config::{AudioMutes, Cabinet, Config, Widescreen};
 
 /// The adjustable subset of `Config` that is worth remembering between runs.
 ///
@@ -26,6 +26,7 @@ pub struct Settings {
     pub widescreen_stretch_2d: bool,
     pub smooth_shadows: bool,
     pub volume: u32,
+    pub audio_mutes: AudioMutes,
     pub rumble: bool,
     pub cabinet: Cabinet,
     pub reverse_landscape: bool,
@@ -46,6 +47,7 @@ impl Settings {
             widescreen_stretch_2d: config.widescreen_stretch_2d,
             smooth_shadows: config.smooth_shadows,
             volume: config.volume,
+            audio_mutes: config.audio_mutes,
             rumble: config.rumble,
             cabinet: config.cabinet,
             reverse_landscape: config.reverse_landscape,
@@ -59,6 +61,7 @@ impl Settings {
         config.widescreen_stretch_2d = self.widescreen_stretch_2d;
         config.smooth_shadows = self.smooth_shadows;
         config.volume = self.volume;
+        config.audio_mutes = self.audio_mutes;
         config.rumble = self.rumble;
         config.cabinet = self.cabinet;
         config.reverse_landscape = self.reverse_landscape;
@@ -125,6 +128,20 @@ impl Settings {
                     }
                 },
                 "rumble" => settings.rumble = boolean(value).unwrap_or(settings.rumble),
+                "mute_multipcm1" => {
+                    settings.audio_mutes.multipcm1 =
+                        boolean(value).unwrap_or(settings.audio_mutes.multipcm1)
+                }
+                "mute_multipcm2" => {
+                    settings.audio_mutes.multipcm2 =
+                        boolean(value).unwrap_or(settings.audio_mutes.multipcm2)
+                }
+                "mute_scsp" => {
+                    settings.audio_mutes.scsp = boolean(value).unwrap_or(settings.audio_mutes.scsp)
+                }
+                "mute_ym3438" => {
+                    settings.audio_mutes.ym3438 = boolean(value).unwrap_or(settings.audio_mutes.ym3438)
+                }
                 "reverse_landscape" => {
                     settings.reverse_landscape =
                         boolean(value).unwrap_or(settings.reverse_landscape)
@@ -166,6 +183,11 @@ impl Settings {
              widescreen_stretch_2d = {}\n\
              smooth_shadows = {}\n\
              volume = {}\n\
+             # Output mutes only; chip emulation continues.\n\
+             mute_multipcm1 = {}\n\
+             mute_multipcm2 = {}\n\
+             mute_ym3438 = {}\n\
+             mute_scsp = {}\n\
              rumble = {}\n\
              cabinet = {}\n\
              reverse_landscape = {}\n",
@@ -175,6 +197,10 @@ impl Settings {
             on_off(self.widescreen_stretch_2d),
             on_off(self.smooth_shadows),
             self.volume,
+            on_off(self.audio_mutes.multipcm1),
+            on_off(self.audio_mutes.multipcm2),
+            on_off(self.audio_mutes.ym3438),
+            on_off(self.audio_mutes.scsp),
             on_off(self.rumble),
             cabinet,
             on_off(self.reverse_landscape),
@@ -197,6 +223,12 @@ mod tests {
             widescreen: Widescreen::Auto,
             smooth_shadows: false,
             volume: 400,
+            audio_mutes: AudioMutes {
+                multipcm1: true,
+                multipcm2: true,
+                ym3438: true,
+                scsp: true,
+            },
             cabinet: Cabinet::Twin,
             ..Settings::default()
         };
@@ -222,6 +254,7 @@ mod tests {
         assert_eq!(settings.volume, 250);
         assert_eq!(settings.ssaa, Settings::default().ssaa);
         assert_eq!(settings.cabinet, Settings::default().cabinet);
+        assert_eq!(settings.audio_mutes, AudioMutes::default());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -230,6 +263,12 @@ mod tests {
         let mut config = Config::default();
         Settings {
             volume: 300,
+            audio_mutes: AudioMutes {
+                multipcm1: true,
+                multipcm2: false,
+                ym3438: true,
+                scsp: true,
+            },
             ..Settings::default()
         }
         .apply_to(&mut config);
@@ -238,6 +277,12 @@ mod tests {
             Settings::from_config(&config),
             Settings {
                 volume: 300,
+                audio_mutes: AudioMutes {
+                    multipcm1: true,
+                    multipcm2: false,
+                    ym3438: true,
+                    scsp: true
+                },
                 ..Settings::default()
             }
         );
