@@ -118,7 +118,18 @@ replacement for a user's persistent gameplay NVRAM.
    World/Japan attract-mode 3D frames were inspected. The user subsequently
    reported successful Wing War play/control tests, including the corrected
    throttle polarity. This does not certify every regional set, audio,
-   extended play or link support. NetMerc and R360-specific work are deferred.
+   extended play or link support. NetMerc remains deferred.
+   R360 source audit (2026-09-27): MAME declares `wingwar360` without a
+   NOT_WORKING flag and reuses MODEL1IO2, wiring IN2/drive commands to
+   `r360_r`/`r360_w` (cabinet safety/setup acknowledgements and throttle), with
+   ADC channel 2 held at zero. The R360 follow-up now selects the advanced board,
+   loads `epr-16891.6` via the database/generator, applies the shared DPRAM wait
+   cycle and implements the MAME cabinet response protocol synchronously on
+   drive writes. Reply/throttle state is serialized with the existing board;
+   restoration rejects a different cabinet type. Cold boot reaches attract mode
+   at 1,800 frames instead of I/O BOARD ERROR. Manual controls/gameplay/audio,
+   R360 networking and mechanical motion remain unvalidated; this is not a full
+   motion-system simulation. See the R360 checkpoint in MODEL1_IOBOARD2.md.
    Timing audit and Z80 consolidation are now final post-implementation tasks,
    not gates before YM3438 work, unless a concrete defect makes one necessary.
 
@@ -312,8 +323,46 @@ manual gameplay confirmation; the clipping check above remains open.
   New integrations should inventory state and add serialization/continuation
   coverage where applicable now, without waiting for the full adapter. The
   current shared I/O chips are covered; the complete Model 1 machine is not.
-- Implement cabinet link and review drive/motion-board fidelity separately from
-  the existing controller rumble approximation.
+- Cabinet link: first M1COMM HLE checkpoint implemented from MAME's active
+  simulation path, with 4 KiB V60 mapping, VINT scheduling, ring protocol and
+  serializable board state. Nine new tests cover board/bus behavior; 302 workspace
+  tests pass and the offline release build passes. VR standalone completes 1,800
+  debugger frames, but no linked gameplay is established. See
+  [source inventory, protocol and evidence](MODEL1_NETWORK.md).
+  The next desktop checkpoint adds a frontend-owned TCP ring, persistent
+  settings and GUI names based on the actual Supermodel Standalone Networking
+  controls. Loopback TCP board exchange, fragmented I/O, missing peer,
+  disconnect/cleanup and configuration round-trip pass; 309 workspace tests
+  pass. Two narrowly scoped V60 overflow fixes match MAME's wrapping arithmetic.
+  Per-instance `--config` and read/write `nvram` profiles now preserve the caller's
+  explicit relative paths through toolkit launchers. ROM-free checks cover
+  independent files, invalid/missing NVRAM, CLI precedence and path resolution;
+  311 workspace tests pass. Example VR profiles do not set operator roles.
+  User-configured VR NVRAM now passes real-ROM boot/link acceptance for both
+  MASTER/SLAVE and MASTER/SLAVE/LIVE: 2,400 frames each, online for the last 600.
+  Roles/IDs/counts are 1/1/2, 2/2/2 and LIVE relay 0/0/2, without forced COMM
+  success or writes to the original NVRAM. The same test uses real loopback TCP
+  within one host process, not separate desktop instances.
+  Wing War World now passes the same 2,400-frame MASTER/SLAVE ROM/NVRAM link
+  probe (roles/IDs 1 and 2, count 2, last 600 frames online). R360 does not:
+  its two machines advance but COMM RAM remains zero and no link is established.
+  Repeated R360 diagnostics show the game rewriting the provided EEPROM in
+  memory (signature/configuration changes), with CN/FG still FE/FE. Diagnose
+  fixture reinitialization before transport; originals were not saved or changed.
+  Diagnose that game-specific activation/configuration path before claiming
+  R360 link support. Neither result establishes synchronized human gameplay.
+  `cabinet = single|twin` now selects COMM absence/presence for eligible Model 1
+  games too; the GUI control is shared with Model 2. On the desktop, `twin` now
+  also starts TCP; the redundant Network toggle/config key is removed.
+  Operator NVRAM roles are not overridden. Regression coverage
+  checks both cabinet values with supported/unsupported sets and NVRAM retention.
+  **Next:** synchronized race and LIVE spectator validation in separate desktop
+  instances, then physical LAN and MAME interoperability. The earlier scripted
+  menu preparation failure is superseded by user-configured fixtures;
+  no synchronized gameplay result is claimed. No automatic fake loopback,
+  invented protocol, Z80 COMM firmware claim or full-machine save-state claim.
+  Drive/motion-board fidelity remains separate from cabinet link and the existing
+  controller rumble approximation.
 - Consider checksum-aware ROM diagnostics beyond the narrowly guarded TGP
   fallback. The current general loader matches names, not expected hashes.
 

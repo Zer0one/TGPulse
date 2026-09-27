@@ -451,7 +451,8 @@ motion/drive behavior likewise remain separate from the base I/O board.
 3. **Bounded reference comparison passed:** Wing War EEPROM initialization,
    DPRAM transaction replay and integrated cold boot. No firmware patched.
 4. **Done for base Wing War:** select the advanced board/clock and load its
-   `iocpu` region through the existing ROM database. R360/NetMerc remain excluded.
+   `iocpu` region through the existing ROM database. R360 is covered by the
+   follow-up below; NetMerc remains excluded.
 5. **Automated checks passed; manual validation pending:** Wing War World/US/Japan
    digital/analog delivery and EEPROM lifecycle. Verify actual gamepad use,
    operator-menu edits and extended gameplay. Validate R360 cabinet behavior separately;
@@ -460,3 +461,39 @@ motion/drive behavior likewise remain separate from the base I/O board.
 
 Firmware now executes in the integrated base Wing War system. User configuration,
 ROM archives and installed toolkit releases remain unchanged.
+
+## R360 cabinet follow-up — 2026-09-27
+
+`wingwar360` now reuses the advanced board, its 9,830,400 Hz clock and the existing
+one-cycle V60 DPRAM read wait. The database and generator attach `epr-16891.6`
+to `ioboard:iocpu`; it was previously omitted, causing a zero-filled fallback
+even after changing board selection. The user's ZIP already contains this chip;
+no ROM archive or firmware patch is required.
+
+Reference: MAME `src/mame/sega/model1.cpp`, `wingwar360`, `r360_r` and `r360_w`.
+The small `model1io2/r360.rs` state machine follows those handlers: commands
+BF/BE/BA/B9 latch inverted 40, BD inverted 44, BC inverted 45, BB inverted 46,
+AF inverted throttle; unknown commands retain the last response. IN2 reads that
+latch. ADC channel 2 is zero; the already translated throttle input supplies
+the AF command instead. Drive writes update the reply immediately on the bus,
+including repeated commands, without sampling only the last output per frame.
+This is MAME-style protocol simulation, not low-level controlboard firmware or
+mechanical motion/safety simulation. Attribution is in the MAME license inventory.
+
+The optional cabinet reply/throttle state is included in the existing board
+snapshot. Restore rejects a base/R360 mismatch before mutating state and never
+replays commands. Tests cover command replies, all 256 throttle values, unknown
+commands, response continuation, and Z80 mid-program save/restore with identical
+continued execution; existing board selection, firmware and DPRAM timing checks
+also cover R360. These are device states, not complete Model 1 machine saves.
+
+Fresh-NVRAM headless ROM probe: 1,800 frames, V60 PC `00003CBD`; captured output
+shows the 3D attract sequence and INSERT COIN(S), replacing the earlier I/O BOARD
+ERROR. No user NVRAM or settings were modified. The headless renderer capture
+is not native Metal visual-quality acceptance. Real gamepad controls, safety
+setup/start sequence, extended gameplay, audio and networking remain to validate.
+
+Final checks: 314 workspace tests and offline release build pass. A second
+fresh-directory run of the final binary reaches 1,800 frames for both base
+Wing War (PC `00003A41`) and R360 (PC `00003CBD`). No commit/push or toolkit
+release deployment was performed.

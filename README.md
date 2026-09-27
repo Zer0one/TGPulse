@@ -90,6 +90,16 @@ YM3438 synthesis always runs: FM sounds in Virtua Racing have also been
 confirmed in-game by the user. Muting FM silences only its output.
 See [audio integration and limits](docs/MODEL1_AUDIO.md).
 
+**Model 1 networking (experimental).** `cabinet = twin` fits the network board
+and enables TCP for supported games. Settings exposes `AddressIn`, `PortIn`,
+`AddressOut` and `PortOut`, following Supermodel Standalone's naming with MAME's
+local bind address. Apply saves the configuration; reload/reset the game to use
+it. TCP uses MAME's M1COMM ring frames, with no automatic loopback. Transport,
+board and VR/Wing War boot/link tests pass; synchronized gameplay is not yet
+validated. Wing War R360 boots, but its link test currently fails after the game
+reinitializes the supplied EEPROM configuration. See
+[setup, verification boundaries and remaining work](docs/MODEL1_NETWORK.md).
+
 **Player 2 (Model 1 and Model 2).** Settings → Input has Cabinet P1/P2 tabs with
 independent bindings and controller selection. P2 supports local two-player
 joystick games, Model 2 guns, Dynamite Baseball's bat, Power Sled's second seat
