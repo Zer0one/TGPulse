@@ -139,8 +139,8 @@ impl InputState {
             C::ViewGreen => S::View4,
             C::Throttle => S::Accelerator,
             C::Brake => S::Brake,
-            C::GearUp => S::Action1,
-            C::GearDown => S::Action2,
+            C::GearUp => S::Action2,
+            C::GearDown => S::Action1,
             C::Fire => S::Action1,
             C::Reload => S::Action2,
             C::ViewChange => S::View4,
@@ -233,7 +233,15 @@ impl InputState {
                     )
                 }
                 A::Throttle if self.game.starts_with("wingwar") => {
-                    return (1.0 + 254.0 * self.amount(C::Throttle).clamp(0.0, 1.0)).round() as u8
+                    // Two assignable half-axes drive one cabinet ADC. Centre
+                    // at release is a gamepad adaptation, not MAME's idle value.
+                    // In-game testing confirms lower ADC means more throttle.
+                    return centered(
+                        self.signal(S::WingWarThrottleDown) - self.signal(S::WingWarThrottleUp),
+                        128,
+                        1,
+                        255,
+                    );
                 }
                 _ => {}
             }
@@ -414,10 +422,10 @@ impl InputState {
             write(&mut out.in1, 0x10, down && !up);
         } else if self.scheme == Scheme::Bike || (self.scheme == Scheme::Racing && !self.h_gate()) {
             out.in1 = 0xff;
-            let up = pressed(S::Action1);
-            let down = pressed(S::Action2);
             // Motor Raid has independent Punch/Kick, not a sequential shifter.
             let independent = self.game.starts_with("motoraid");
+            let up = pressed(if independent { S::Action1 } else { S::Action2 });
+            let down = pressed(if independent { S::Action2 } else { S::Action1 });
             write(&mut out.in1, 0x10, up && (independent || !down));
             write(&mut out.in1, 0x20, down && (independent || !up));
             if self.game.starts_with("overrev")
@@ -455,8 +463,8 @@ impl InputState {
             write(&mut out.in0, 0x40, pressed(S::Start));
             write(&mut out.in1, 2, pressed(S::View4));
             write(&mut out.in1, 1, pressed(S::Action3));
-            write(&mut out.in1, 4, pressed(S::Action2)); // L1: Pitch Left
-            write(&mut out.in1, 8, pressed(S::Action1)); // R1: Pitch Right
+            write(&mut out.in1, 4, pressed(S::Action2)); // Pitch Left
+            write(&mut out.in1, 8, pressed(S::Action1)); // Pitch Right
         } else if self.game == "skisuprg" {
             out.in1 = 0xff;
             write(&mut out.in0, 0x20, pressed(S::View4));
@@ -464,8 +472,8 @@ impl InputState {
             write(&mut out.in0, 0x80, pressed(S::Action4));
             write(&mut out.in0, 0x10, pressed(S::Start));
             write(&mut out.in0, 0x40, pressed(S::Action3));
-            out.in2 = if pressed(S::Action2) { 0xf0 } else { 0 } // L1: left foot
-                | if pressed(S::Action1) { 0x0f } else { 0 }; // R1: right foot
+            out.in2 = if pressed(S::Action2) { 0xf0 } else { 0 } // left foot
+                | if pressed(S::Action1) { 0x0f } else { 0 }; // right foot
         } else if self.game.starts_with("topskatr") {
             out.in1 = 0xff;
             write(&mut out.in0, 0x40, pressed(S::Start));

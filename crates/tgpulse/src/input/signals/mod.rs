@@ -30,8 +30,8 @@ signals! {
     Down, "Joystick Down", "down", false, "ArrowDown, KeyS, pad:DPadDown";
     Left, "Joystick Left", "left", false, "ArrowLeft, KeyA, pad:DPadLeft";
     Right, "Joystick Right", "right", false, "ArrowRight, KeyD, pad:DPadRight";
-    Action1, "Action 1", "action1", false, "KeyJ, KeyE, Space, pad:East, pad:RightTrigger";
-    Action2, "Action 2", "action2", false, "KeyK, KeyQ, KeyR, pad:South, pad:LeftTrigger";
+    Action1, "Action 1", "action1", false, "KeyJ, KeyE, Space, pad:South, pad:LeftTrigger";
+    Action2, "Action 2", "action2", false, "KeyK, KeyQ, KeyR, pad:East, pad:RightTrigger";
     Action3, "Action 3", "action3", false, "KeyL, pad:West";
     Action4, "Extra Action", "action4", false, "KeyI, pad:North";
     View1, "View / Select 1", "view1", false, "KeyZ, pad:DPadDown";
@@ -48,6 +48,8 @@ signals! {
     Neutral, "H-Gate: Neutral", "neutral", false, "Digit0, pad:West";
     SkyX, "Analog Joystick X", "analog_x", true, "keys:ArrowLeft/ArrowRight, keys:KeyA/KeyD, pad:LeftStickX";
     SkyY, "Analog Joystick Y", "analog_y", true, "keys:KeyG/KeyT, pad:LeftStickY";
+    WingWarThrottleUp, "Wing War: Throttle: Up", "wingwar_throttle_up", false, "KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+";
+    WingWarThrottleDown, "Wing War: Throttle: Down", "wingwar_throttle_down", false, "KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-";
     Handle, "Wave Runner: Handle", "handle", true, "keys:ArrowLeft/ArrowRight, keys:KeyA/KeyD, pad:LeftStickX";
     GunYaw, "Gun Yaw", "gun_yaw", true, "keys:ArrowLeft/ArrowRight, keys:KeyA/KeyD, pad:LeftStickX";
     GunPitch, "Gun Pitch", "gun_pitch", true, "keys:ArrowDown/ArrowUp, keys:KeyS/KeyW, pad:LeftStickY";

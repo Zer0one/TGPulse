@@ -75,7 +75,7 @@ fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     crate::settings::Settings::load_or_create(&crate::settings::Settings::path())
         .apply_to(&mut config);
     storage::set_reverse_landscape(config.reverse_landscape);
-    if let Err(e) = app::run_with(event_loop, config, None) {
+    if let Err(e) = app::run_with(event_loop, config, None, gui::StartupPanels::default()) {
         log::error!(target: "app", "{e}");
     }
 }

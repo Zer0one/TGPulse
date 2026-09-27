@@ -2,18 +2,23 @@
 //!
 //! The emulator is usable two ways and this decides which: name a romset and it
 //! boots straight into it, name nothing and it opens the library window. Either
-//! way the same settings apply, so every option here is also reachable from the
-//! GUI's settings panel.
+//! way the same settings apply. GUI startup flags only open existing panels;
+//! `--debug` instead selects the headless scriptable debugger.
 
 use std::path::PathBuf;
 
 use tgpulse_core::config::Config;
 use tgpulse_core::library;
 
+use crate::gui::StartupPanels;
+
 /// What the front end should do once arguments are understood.
 pub enum Command {
     /// Open the window; boot straight into a romset if one was named.
-    Run { rom: Option<PathBuf> },
+    Run {
+        rom: Option<PathBuf>,
+        panels: StartupPanels,
+    },
     /// Print the contents of the ROM directory and exit.
     ListRoms,
     /// Run the scriptable debugger over a romset.
@@ -32,6 +37,82 @@ pub enum Script {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gui_panel_flags_are_independent_and_accept_a_rom() {
+        // Resolution only requires an existing file; no ROM is loaded here.
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        for show_stats in [false, true] {
+            for show_debugger in [false, true] {
+                for with_rom in [false, true] {
+                    let mut args = Vec::new();
+                    if show_stats {
+                        args.push("--show-stats".into());
+                    }
+                    if with_rom {
+                        args.push(path.to_string_lossy().into_owned());
+                    }
+                    if show_debugger {
+                        args.push("--show-debugger".into());
+                    }
+                    let parsed = parse_from(args, Config::default()).unwrap();
+                    let Command::Run { rom, panels } = parsed.command else {
+                        panic!("expected GUI command");
+                    };
+                    assert_eq!(rom, with_rom.then(|| path.clone()));
+                    assert_eq!(
+                        panels,
+                        StartupPanels {
+                            show_stats,
+                            show_debugger
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gui_panel_flags_reject_headless_commands() {
+        for flag in ["--show-stats", "--show-debugger"] {
+            for command in ["--debug", "--list"] {
+                for args in [
+                    vec![flag.into(), command.into()],
+                    vec![command.into(), flag.into()],
+                ] {
+                    let Err(error) = parse_from(args, Config::default()) else {
+                        panic!("expected incompatible command error");
+                    };
+                    assert!(error.contains("require the GUI"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn debug_still_selects_headless_script_runner() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let parsed = parse_from(
+            vec![
+                path.to_string_lossy().into_owned(),
+                "--debug".into(),
+                "-c".into(),
+                "run 1; regs".into(),
+            ],
+            Config::default(),
+        )
+        .unwrap();
+        let Command::Debug {
+            rom,
+            script: Script::Inline(commands),
+        } = parsed.command
+        else {
+            panic!("expected headless debugger");
+        };
+        assert_eq!(rom, path);
+        assert_eq!(commands, ["run 1", "regs"]);
+    }
+
     #[test]
     fn widescreen_modes_override_saved_config() {
         use tgpulse_core::config::Widescreen;
@@ -95,6 +176,7 @@ fn parse_from(args: Vec<String>, mut config: Config) -> Result<Args, String> {
     let mut rom: Option<String> = None;
     let mut list = false;
     let mut debug = false;
+    let mut panels = StartupPanels::default();
     let mut script: Option<Script> = None;
 
     let mut i = 0;
@@ -113,6 +195,8 @@ fn parse_from(args: Vec<String>, mut config: Config) -> Result<Args, String> {
             "--rom" => rom = Some(next(&mut i)?),
             "--list" => list = true,
             "--debug" => debug = true,
+            "--show-stats" => panels.show_stats = true,
+            "--show-debugger" => panels.show_debugger = true,
             "-c" => script = Some(Script::Inline(split_commands(&next(&mut i)?))),
             "-f" => script = Some(Script::File(PathBuf::from(next(&mut i)?))),
             "--cabinet" => config.cabinet = next(&mut i)?.parse()?,
@@ -157,6 +241,10 @@ fn parse_from(args: Vec<String>, mut config: Config) -> Result<Args, String> {
         i += 1;
     }
 
+    if (list || debug) && (panels.show_stats || panels.show_debugger) {
+        return Err("--show-stats and --show-debugger require the GUI; cannot combine with --debug or --list".into());
+    }
+
     if list {
         return Ok(Args {
             command: Command::ListRoms,
@@ -176,7 +264,7 @@ fn parse_from(args: Vec<String>, mut config: Config) -> Result<Args, String> {
             script: script.unwrap_or(Script::Stdin),
         }
     } else {
-        Command::Run { rom }
+        Command::Run { rom, panels }
     };
 
     Ok(Args { command, config })
@@ -279,7 +367,12 @@ Machine:
   --cabinet twin|single Whether the network board is fitted (default
                         single, which skips the game's link check).
 
-Debugger:
+GUI panels (this launch only):
+  --show-stats          Open View > Statistics at startup
+  --show-debugger       Open View > Debugger at startup
+                        May be combined; not available with --debug or --list.
+
+Headless debugger (--debug, no window):
   -c \"cmd; cmd\"         Run these commands, then exit
   -f <file>             Run a command script, then exit
                         With neither, commands are read from stdin.

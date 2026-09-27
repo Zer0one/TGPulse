@@ -335,8 +335,8 @@ impl Bindings {
             ("view_blue", Signal::View2),
             ("view_yellow", Signal::View3),
             ("view_green", Signal::View4),
-            ("gear_up", Signal::Action1),
-            ("gear_down", Signal::Action2),
+            ("gear_up", Signal::Action2),
+            ("gear_down", Signal::Action1),
             ("fire", Signal::Action1),
             ("reload", Signal::Action2),
         ] {
@@ -680,6 +680,29 @@ mod tests {
         let mut b = Bindings::default();
         assert!(b.set_expression(Signal::Gear1, "KeyJ & nonsense").is_err());
         assert_eq!(b.binding(Signal::Gear1).text, Signal::Gear1.default_text());
+    }
+    #[test]
+    fn existing_signals_file_inherits_wingwar_throttle_defaults() {
+        let path = std::env::temp_dir().join(format!(
+            "tgpulse-wingwar-bindings-{}.conf",
+            std::process::id()
+        ));
+        let original = "format = signals-v1\naction1 = F12\naccelerator = KeyU\nbrake = KeyO\n";
+        std::fs::write(&path, original).unwrap();
+        let loaded = Bindings::load_or_create(&path);
+        assert_eq!(loaded.binding(Signal::Action1).text, "F12");
+        assert_eq!(loaded.binding(Signal::Accelerator).text, "KeyU");
+        assert_eq!(loaded.binding(Signal::Brake).text, "KeyO");
+        assert_eq!(
+            loaded.binding(Signal::WingWarThrottleUp).text,
+            "KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+"
+        );
+        assert_eq!(
+            loaded.binding(Signal::WingWarThrottleDown).text,
+            "KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn migration_keeps_custom_keyboard_and_hotkey_uniqueness() {

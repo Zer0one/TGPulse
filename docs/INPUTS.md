@@ -24,12 +24,20 @@ Click a Cabinet binding, edit its expression, then Apply. Cancel discards the
 editor contents. An invalid expression is reported without replacing the
 working binding. Emulator hotkeys retain keyboard capture.
 
-### Return to the game menu
+### Return to game menu / quit
 
 Esc or Select + Start stops the current game using the same action as Stop:
 save NVRAM, leave fullscreen and return to the library without quitting or
 changing the fullscreen startup preference. It also works while paused.
-Settings → Input → Emulator lists "Return to game menu" after the other
+Exception: when a romset was supplied on the command line and the window is
+currently fullscreen, Close Game acts as Quit (including NVRAM saving),
+returning to the terminal. Windowed CLI runs and games launched from the
+library still return to the library. The current fullscreen state counts,
+including an F11 toggle, not just the saved startup preference.
+With no game running, the same command quits. The held-chord state is retained
+when returning to the library: release and press again to quit, rather than
+closing the application immediately with the same press.
+Settings → Input → Emulator lists "Return to game menu / quit" after the other
 commands, using the same binding row. Click it to edit the expression:
 `return_to_menu = Escape, pad:Select & pad:Start` in config/input.conf.
 Existing files without this entry inherit the default; an empty value disables
@@ -48,8 +56,8 @@ physical bindings and no redundant Shot/Shift/Foot Sensor entries.
 
 | Signal | Pad | Keyboard | Examples of routed functions |
 | --- | --- | --- | --- |
-| Action 1 | East OR R1 | J, E, Space | Punch, long pass, shot, shift up, left twin shot, right pitch/foot |
-| Action 2 | South OR L1 | K, Q, R | Kick, short pass, secondary/reload, shift down, right twin shot, left pitch/foot |
+| Action 1 | South OR L1 | J, E, Space | Punch, long pass, shot, shift down, left twin shot, right pitch/foot |
+| Action 2 | East OR R1 | K, Q, R | Kick, short pass, secondary/reload, shift up, right twin shot, left pitch/foot |
 | Action 3 | West | L | Guard/hold, shoot in soccer, Desert shift, left dash, Water Ski set |
 | Extra Action | North | I | Rally handbrake, right dash, Ski Super G Select 2 |
 | View / Select 1–4 | Down, Left, Right, Up | Z, X, C, V | VR buttons, view changes, menu selections and zoom |
@@ -58,13 +66,31 @@ physical bindings and no redundant Shot/Shift/Foot Sensor entries.
 
 Face buttons and shoulders are OR alternatives, not a chord: either one
 activates the same signal. R2/L2 remain analog pedals. The aliases preserve
-SM2-Emu's shot/shift shoulder positions as well as fighting face positions.
+the requested global action positions; sequential shifts retain L1 down/R1 up.
+Gear Down routes to Action 1 and Gear Up to Action 2, including sequential
+stepping of an H-gate. Direct H-gate bindings do not change. Keyboard bindings
+stay with their actions: J/E/Space now shift down, K/Q/R shift up. Other game
+functions stay on the same logical actions, so their physical positions swap.
 Virtual On uses the four action signals for its four independent shot/dash
 functions, with both sticks kept independent.
 
 Axis defaults use left X for steering/bank/handle/curving/swing; left X/Y for
 gun aim and analog flight; right X for roll/inclining; and right Y
 (downward half) for Bat Swing. Accelerator and Brake use R2/L2.
+Wing War has two separate assignable entries, `Wing War: Throttle: Up`
+(`wingwar_throttle_up = KeyW, ArrowUp, pad:RightZ+, pad:RightStickY+`) and
+`Wing War: Throttle: Down`
+(`wingwar_throttle_down = KeyS, ArrowDown, pad:LeftZ+, pad:RightStickY-`).
+R2 OR right stick up increases throttle; L2 OR right stick down decreases it.
+Both triggers read positive travel; gilrs right-stick Y is positive up.
+The translator subtracts Up from Down on the single throttle ADC, since
+in-game testing confirms lower ADC means more power. Released/equal inputs
+give 0x80, full Up gives 0x01, full Down gives 0xFF. Alternatives use the
+stronger input, not a sum; opposite directions compensate.
+This centred rest is a gamepad adaptation, not MAME's minimum idle value.
+It applies to the Wing War family only, independently of Accelerator/Brake.
+Existing binding files inherit these defaults for absent entries; GUI edits
+save them normally, without requiring a reset of existing bindings.
 Slide is split into Water Ski: Slide (left X, arrows/A/D) and Top Skater:
 Slide (right X, U/O), matching their respective SM2-Emu defaults.
 The GUI shows game-family names in parentheses below Analog Joystick X/Y
@@ -107,7 +133,7 @@ selection latches when released. Conflicting direct selections leave the
 current gear unchanged. Sequential shifting remains edge-triggered.
 
 Virtua Racing / Virtua Formula do not use the Daytona H-gate encoding:
-Action 1/2 drive their native active-low Shift Up/Down switches. Both are
+Action 1/2 drive their native active-low Shift Down/Up switches. Both are
 released at rest and on conflicting requests. Direct H-gate signals are
 unused for those two games. VR4 remains independent of the shift switches.
 

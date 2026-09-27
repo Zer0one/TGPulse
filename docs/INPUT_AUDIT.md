@@ -45,7 +45,7 @@ multiplayer implementation.
 | All Model 2 cars / bikes | Full 00..ff ADC travel, including Daytona; reversed Bank; reversed Over Rev / Super GT pedals |
 | Sega Rally | Handbrake retains intermediate values when rebound to an analog source |
 | Ski Super G | Tested SM2 order: ADC 0 Inclining, ADC 1 reversed Swing; not the opposite MAME-generated order |
-| Water Ski / Top Skater | Reversed Slide / Curving per SM2; Top Skater Slide remains independent and direct; Water Ski Pitch Left/Right follow L1/R1 |
+| Water Ski / Top Skater | Reversed Slide / Curving per SM2; Top Skater Slide remains independent and direct; Water Ski Pitch Left/Right use Action 2/1 (now R1/L1) |
 | Wave Runner | Reversed throttle half-range 80→00, independent Roll/Pitch; only the real coin line is used |
 | Gun cabinets | Stick aim moves and holds a cursor; reload only on serial guns; correct per-title ADC / serial ranges; rchase2a remains distinct from rchase2 |
 | Air Walkers | Port F bit 7 selects the other player pair; P1 controls and Start are not mirrored onto P3. Unsupported P3/P4 remain released |
@@ -60,10 +60,10 @@ sample so another cabinet's handbrake/port values cannot leak through.
 The agreed **single global signal catalogue and binding file** remain in place.
 This audit is not permission to replace them with per-game RetroPad bindings.
 
-- Action 1 remains East OR R1 (Punch / Shot / Shift Up and other collapsed
-  primary functions), Action 2 South OR L1, Action 3 West, Extra Action North.
-  This deliberately differs from SM2's South primary shot, including the
-  two-button shooters. Fighting, soccer and baseball retain their semantic
+- Action 1 is South OR L1 (Punch / Shot / Shift Down and other collapsed
+  primary functions), Action 2 East OR R1 (including Shift Up), Action 3 West,
+  Extra Action North. Sequential shifts therefore retain L1 down/R1 up;
+  Motor Raid's Punch/Kick are not shifts. Fighting, soccer and baseball retain their semantic
   port-order exceptions. Shoulder/face aliases remain OR, not chords.
 - Service remains R3/F8 and Test L3/F2, as explicitly requested previously.
   BEL swaps the destination bits, not these bindings.
@@ -71,7 +71,7 @@ This audit is not permission to replace them with per-game RetroPad bindings.
   cabinets consume View / Select 4 (Up) and 1 (Down), following SM2's layout.
 - Start also serves Manx TT/Motor Raid Start/VR, Water Ski Select Down and
   Ski Super G Select 3. There are no redundant configurable Start aliases.
-- Ski Super G uses Action 2/L1 for left foot and Action 1/R1 for right foot,
+- Ski Super G uses Action 2/R1 for left foot and Action 1/L1 for right foot,
   Action 3 for Select 1 and Extra Action for Select 2; it does not copy SM2's
   separate face-button and shoulder assignments.
 - Keyboard ramping, deadzones, H-gate latching and initial gear policy are

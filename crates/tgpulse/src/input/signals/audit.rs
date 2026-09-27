@@ -43,7 +43,7 @@ fn cabinets() -> Vec<Cabinet> {
             (View2, 0, 0x40),
             (View3, 0, 0x80),
             (View4, 1, 1),
-            (Action1, 1, 0x20),
+            (Action2, 1, 0x20),
             (Gear1, 1, 0x20),
             (Gear2, 1, 0x10),
             (Gear3, 1, 0x60),
@@ -62,8 +62,8 @@ fn cabinets() -> Vec<Cabinet> {
             (View2, 0, 0x40),
             (View3, 0, 0x80),
             (View4, 1, 1),
-            (Action1, 1, 0x20),
-            (Action2, 1, 0x10),
+            (Action2, 1, 0x20),
+            (Action1, 1, 0x10),
         ],
     );
     add(
@@ -76,7 +76,7 @@ fn cabinets() -> Vec<Cabinet> {
         &[
             (View1, 0, 0x20),
             (Action4, 2, 255),
-            (Action1, 1, 0x20),
+            (Action2, 1, 0x20),
             (Gear1, 1, 0x20),
             (Gear2, 1, 0x10),
             (Gear3, 1, 0x60),
@@ -93,8 +93,8 @@ fn cabinets() -> Vec<Cabinet> {
         &[
             (View4, 1, 1),
             (View1, 1, 2),
-            (Action1, 1, 0x10),
-            (Action2, 1, 0x20),
+            (Action2, 1, 0x10),
+            (Action1, 1, 0x20),
         ],
     );
     add(
@@ -104,10 +104,19 @@ fn cabinets() -> Vec<Cabinet> {
         0x40,
         false,
         true,
-        &[(View1, 1, 1), (Action1, 1, 0x10), (Action2, 1, 0x20)],
+        &[(View1, 1, 1), (Action2, 1, 0x10), (Action1, 1, 0x20)],
     );
     add(
-        "manxtt manxttc manxttdx motoraid motoraiddx",
+        "manxtt manxttc manxttdx",
+        Bike,
+        [255; 3],
+        0x40,
+        false,
+        true,
+        &[(Action2, 1, 0x10), (Action1, 1, 0x20)],
+    );
+    add(
+        "motoraid motoraiddx",
         Bike,
         [255; 3],
         0x40,
@@ -486,7 +495,7 @@ fn all_sets_route_each_signal_without_digital_crosstalk() {
                 let latching = (game.starts_with("daytona") || game.starts_with("srally"))
                     && matches!(
                         signal,
-                        S::Action1 | S::Gear1 | S::Gear2 | S::Gear3 | S::Gear4
+                        S::Action2 | S::Gear1 | S::Gear2 | S::Gear3 | S::Gear4
                     )
                     || game == "desert" && signal == S::Action3;
                 assert_eq!(
@@ -805,8 +814,6 @@ fn wave_runner_and_flight_throttles_use_their_own_rest_and_range() {
         ("waverunr", Scheme::Jetski, 2, 128, 0),
         ("swa", Scheme::Flight, 2, 128, 28),
         ("swaj", Scheme::Flight, 2, 128, 28),
-        ("wingwar", Scheme::Flight, 2, 1, 255),
-        ("wingwar360", Scheme::Flight, 2, 1, 255),
     ] {
         let mut input = state(game, scheme);
         input.set_analog_roles(db_roles(game));
@@ -820,5 +827,63 @@ fn wave_runner_and_flight_throttles_use_their_own_rest_and_range() {
         input.on_key(KeyCode::F12, true);
         input.poll(&mut out);
         assert_eq!(out.analog[channel], max, "{game} throttle");
+    }
+}
+
+#[test]
+fn wingwar_throttle_half_axes_are_independent_and_cancel() {
+    for game in ["wingwar", "wingwaru", "wingwarj", "wingwar360"] {
+        let mut input = state(game, Scheme::Flight);
+        input.set_analog_roles(db_roles(game));
+        let mut out = Inputs::default();
+        for (up, down, expected) in [
+            (false, false, 128),
+            (true, false, 1),
+            (false, true, 255),
+            (true, true, 128),
+        ] {
+            input.on_key(KeyCode::KeyW, up);
+            input.on_key(KeyCode::KeyS, down);
+            input.poll(&mut out);
+            assert_eq!(out.analog[2], expected, "{game} keyboard");
+        }
+        input.keys.clear();
+        // Rebinding the shared pedals must not change the dedicated throttle.
+        input
+            .bindings
+            .set_expression(S::Accelerator, "F11")
+            .unwrap();
+        input.bindings.set_expression(S::Brake, "F12").unwrap();
+        input.on_key(KeyCode::F11, true);
+        input.poll(&mut out);
+        assert_eq!(out.analog[2], 128, "{game} independent accelerator");
+        input.keys.clear();
+        input.on_key(KeyCode::F12, true);
+        input.poll(&mut out);
+        assert_eq!(out.analog[2], 128, "{game} independent brake");
+        input.keys.clear();
+        // Exercise assignable half-axes with synthetic analog travel, without
+        // depending on a connected controller or its native trigger mapping.
+        input
+            .bindings
+            .set_expression(S::WingWarThrottleUp, "pad:LeftStickX+")
+            .unwrap();
+        input
+            .bindings
+            .set_expression(S::WingWarThrottleDown, "pad:LeftStickY+")
+            .unwrap();
+        for (up, down, expected) in [
+            (0.0, 0.0, 128),
+            (1.0, 0.0, 1),
+            (0.0, 1.0, 255),
+            (0.5, 0.0, 65),
+            (0.0, 0.5, 192),
+            (0.5, 0.5, 128),
+            (1.0, 1.0, 128),
+        ] {
+            input.set_pad_stick(up, down);
+            input.poll(&mut out);
+            assert_eq!(out.analog[2], expected, "{game} analog {up}/{down}");
+        }
     }
 }

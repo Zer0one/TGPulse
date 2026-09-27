@@ -1221,6 +1221,22 @@ mod tests {
     }
 
     #[test]
+    fn exit_chord_remains_held_when_input_moves_back_to_menu() {
+        let mut input = state(ControlScheme::Racing);
+        input.set_pad_button(gilrs::Button::Select, true);
+        input.set_pad_button(gilrs::Button::Start, true);
+        assert!(input.return_to_menu_requested());
+        // App transfers the session's input to the library instead of resetting it.
+        let mut menu_input = Some(input);
+        let input = menu_input.as_mut().unwrap();
+        assert!(!input.return_to_menu_requested());
+        input.set_pad_button(gilrs::Button::Start, false);
+        assert!(!input.return_to_menu_requested());
+        input.set_pad_button(gilrs::Button::Start, true);
+        assert!(input.return_to_menu_requested());
+    }
+
+    #[test]
     fn return_to_menu_is_configurable_and_edge_triggered() {
         use gilrs::Button;
         let mut input = state(ControlScheme::Racing);
@@ -1356,8 +1372,8 @@ mod tests {
         let mut input = state(ControlScheme::Joystick);
         let mut out = Inputs::default();
 
-        // Button 1 uses the East face button, like SM2-Emu's arcade bit 1.
-        input.set_pad_button(gilrs::Button::East, true);
+        // Button 1 uses the shared Action 1 South face button.
+        input.set_pad_button(gilrs::Button::South, true);
         input.poll(&mut out);
         assert_eq!(
             out.in1 & IN1_JOY_BTN1,
@@ -1365,7 +1381,7 @@ mod tests {
             "a platform pad button is ignored"
         );
 
-        input.set_pad_button(gilrs::Button::East, false);
+        input.set_pad_button(gilrs::Button::South, false);
         input.poll(&mut out);
         assert_ne!(out.in1 & IN1_JOY_BTN1, 0, "it stayed pressed");
     }
@@ -1428,8 +1444,8 @@ mod tests {
         use gilrs::Button as B;
         let mut input = state(ControlScheme::Joystick);
         for (signal, face, shoulder, other) in [
-            (Signal::Action1, B::East, B::RightTrigger, Signal::Action2),
-            (Signal::Action2, B::South, B::LeftTrigger, Signal::Action1),
+            (Signal::Action1, B::South, B::LeftTrigger, Signal::Action2),
+            (Signal::Action2, B::East, B::RightTrigger, Signal::Action1),
         ] {
             for buttons in [vec![face], vec![shoulder], vec![face, shoulder]] {
                 input.external.buttons.clear();
@@ -1475,6 +1491,37 @@ mod tests {
         input.on_key(KeyCode::Digit0, true);
         input.poll(&mut out);
         assert_eq!(input.gear, 0);
+    }
+
+    #[test]
+    fn sequential_shifts_keep_their_physical_positions() {
+        use gilrs::Button as B;
+        for game in ["indy500", "stcc", "overrev", "sgt24h", "manxtt"] {
+            let mut input = state(if game == "manxtt" {
+                ControlScheme::Bike
+            } else {
+                ControlScheme::Racing
+            });
+            input.set_game(game);
+            let mut out = Inputs::default();
+            for (button, expected) in [
+                (B::East, 0xef),
+                (B::RightTrigger, 0xef),
+                (B::South, 0xdf),
+                (B::LeftTrigger, 0xdf),
+            ] {
+                input.set_pad_button(button, true);
+                input.poll(&mut out);
+                assert_eq!(out.in1, expected, "{game} {button:?}");
+                input.set_pad_button(button, false);
+                input.poll(&mut out);
+                assert_eq!(out.in1, 0xff, "{game} release");
+            }
+            input.set_pad_button(B::LeftTrigger, true);
+            input.set_pad_button(B::RightTrigger, true);
+            input.poll(&mut out);
+            assert_eq!(out.in1, 0xff, "{game} conflict");
+        }
     }
 
     #[test]
@@ -1533,7 +1580,7 @@ mod tests {
     fn game_context_routes_start_actions_and_independent_axes() {
         let mut input = state(ControlScheme::Joystick);
         input.set_game("vf");
-        input.set_pad_button(gilrs::Button::East, true);
+        input.set_pad_button(gilrs::Button::South, true);
         let mut out = Inputs::default();
         input.poll(&mut out);
         assert_eq!(out.in1 & 7, 5); // Model 1 Punch is bit 2.

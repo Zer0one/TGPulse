@@ -44,7 +44,7 @@ fn main() {
             Ok(())
         }
         cli::Command::Debug { rom, script } => run_debugger(&rom, script),
-        cli::Command::Run { rom } => app::run(args.config, rom),
+        cli::Command::Run { rom, panels } => app::run(args.config, rom, panels),
     };
 
     if let Err(message) = result {

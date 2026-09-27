@@ -59,6 +59,36 @@ pub struct Stats {
     pub render_ms: f32,
 }
 
+/// Panels opened for this launch only, independent of emulation settings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StartupPanels {
+    pub show_stats: bool,
+    pub show_debugger: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_panels_initialize_existing_windows() {
+        // Keep ImGui contexts sequential: only one can be active at a time.
+        for show_stats in [false, true] {
+            for show_debugger in [false, true] {
+                let panels = StartupPanels {
+                    show_stats,
+                    show_debugger,
+                };
+                let gui = Gui::new(&Config::default(), panels);
+                assert_eq!(gui.show_stats, show_stats);
+                assert_eq!(gui.show_debugger, show_debugger);
+                assert!(gui.visible);
+                assert!(!gui.suppressed);
+            }
+        }
+    }
+}
+
 pub struct Gui {
     context: imgui::Context,
     /// The running machine's implemented outputs; empty in the library.
@@ -111,7 +141,7 @@ impl Gui {
         self.context.io().want_text_input
     }
 
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config, panels: StartupPanels) -> Self {
         let mut context = imgui::Context::create();
         context.set_ini_filename(None);
         // A sane display size before the first `Resized`: laying windows out
@@ -144,8 +174,8 @@ impl Gui {
             show_input: false,
             awaiting: None,
             binding_editor: BindingEditor::default(),
-            show_debugger: false,
-            show_stats: false,
+            show_debugger: panels.show_debugger,
+            show_stats: panels.show_stats,
             entries: library::scan(&config.rom_dir),
             selected: None,
             library_error: None,
@@ -686,7 +716,7 @@ fn input_window(
                         );
                     }
                     let bound = &bindings.return_to_menu.text;
-                    binding_row(ui, "Return to game menu", if bound.is_empty() { "Unbound" } else { bound }, false, || {
+                    binding_row(ui, "Return to game menu / quit", if bound.is_empty() { "Unbound" } else { bound }, false, || {
                         *awaiting = None;
                         editor.return_to_menu = Some(bound.clone());
                         editor.return_to_menu_error = None;

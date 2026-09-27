@@ -24,7 +24,7 @@ use tgpulse_core::{roms_db::AnalogRole, system::Model2System};
 
 use crate::attract::Attract;
 use crate::bindings::{Bindings, Hotkey};
-use crate::gui::{Action, Gui, Stats};
+use crate::gui::{Action, Gui, StartupPanels, Stats};
 use crate::input::{ControlScheme, InputState};
 use crate::platform::audio::Audio;
 use crate::platform::video::Model2Video;
@@ -86,7 +86,9 @@ impl Session {
         let machine = match config.system {
             System::Model1 => {
                 let roms = loader::load_model1_zip(&config.rom_path)?;
-                Machine::Model1(Box::new(Model1System::with_config(&roms, config.clone())))
+                Machine::Model1(Box::new(
+                    Model1System::with_config(&roms, config.clone()).map_err(|e| e.to_string())?,
+                ))
             }
             System::Model2 => {
                 let roms = loader::load_model2_zip(&config.rom_path)?;
@@ -166,11 +168,12 @@ impl Session {
     }
 
     /// Advances one emulated frame.
-    fn step(&mut self) {
+    fn step(&mut self) -> Result<(), String> {
         match &mut self.machine {
             Machine::Model1(sys) => {
                 self.input.poll(&mut sys.inputs);
-                sys.run_slice(tgpulse_core::model1::CYCLES_PER_FRAME);
+                sys.run_slice(tgpulse_core::model1::CYCLES_PER_FRAME)
+                    .map_err(|e| e.to_string())?;
                 self.audio.push(sys.sound.samples.drain(..));
                 self.input.set_rumble(sys.drive_cmd);
                 sys.trigger_vblank();
@@ -188,6 +191,7 @@ impl Session {
             self.nvram_countdown = NVRAM_FLUSH_INTERVAL;
             self.save_nvram();
         }
+        Ok(())
     }
 
     fn reset(&mut self, config: &Config) {
@@ -211,8 +215,13 @@ fn analog_roles(rom_path: &str) -> [AnalogRole; 8] {
         .unwrap_or([AnalogRole::None; 8])
 }
 
-pub fn run(config: Config, rom: Option<PathBuf>) -> Result<(), String> {
-    run_with(EventLoop::new().map_err(|e| e.to_string())?, config, rom)
+pub fn run(config: Config, rom: Option<PathBuf>, panels: StartupPanels) -> Result<(), String> {
+    run_with(
+        EventLoop::new().map_err(|e| e.to_string())?,
+        config,
+        rom,
+        panels,
+    )
 }
 
 /// Runs against an event loop the caller built. Android needs to construct it
@@ -221,6 +230,7 @@ pub fn run_with(
     event_loop: EventLoop<()>,
     config: Config,
     rom: Option<PathBuf>,
+    panels: StartupPanels,
 ) -> Result<(), String> {
     let window = WindowBuilder::new()
         .with_title("TGPulse")
@@ -231,7 +241,7 @@ pub fn run_with(
         .build(&event_loop)
         .map_err(|e| e.to_string())?;
 
-    let mut app = App::new(config, rom);
+    let mut app = App::new(config, rom, panels);
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop
         .run(move |event, elwt| app.handle(&window, event, elwt))
@@ -255,9 +265,13 @@ struct App {
     presenter: Option<Presenter>,
     gui: Gui,
     session: Option<Session>,
+    /// Retain exit-chord state across the transition back to the library.
+    menu_input: Option<InputState>,
     debugger: Option<Debugger>,
     /// A romset named on the command line, launched once there is a surface.
     pending_rom: Option<PathBuf>,
+    /// Retained after pending_rom is consumed, for fullscreen Close Game.
+    started_from_cli: bool,
 
     fullscreen: bool,
     paused: bool,
@@ -287,20 +301,25 @@ struct App {
 }
 
 impl App {
-    fn new(config: Config, pending_rom: Option<PathBuf>) -> Self {
+    fn new(config: Config, pending_rom: Option<PathBuf>, panels: StartupPanels) -> Self {
         let now = Instant::now();
+        let bindings = Bindings::load_or_create(&Bindings::path());
+        let mut menu_input = InputState::new();
+        menu_input.set_bindings(bindings.clone());
         Self {
-            gui: Gui::new(&config),
+            gui: Gui::new(&config, panels),
             config,
             presenter: None,
             session: None,
+            menu_input: Some(menu_input),
             debugger: None,
+            started_from_cli: pending_rom.is_some(),
             pending_rom,
             // The library starts windowed even when games should be fullscreen.
             fullscreen: false,
             paused: false,
             fast_forward: false,
-            bindings: Bindings::load_or_create(&Bindings::path()),
+            bindings,
             attract: Attract::new(),
             frame_duration: Duration::from_nanos(FRAME_NANOS),
             last_frame: now,
@@ -334,8 +353,10 @@ impl App {
     /// worked; the renderer is the caller's business, because the two boards
     /// need different pipelines and the order matters at startup.
     fn open_session(&mut self, window: &Window, rom: &Path) -> bool {
-        if let Some(session) = &self.session {
+        if let Some(mut session) = self.session.take() {
             session.save_nvram();
+            session.input.enable_rumble(false);
+            self.menu_input = Some(session.input);
         }
         self.session = None;
         self.debugger = None;
@@ -346,6 +367,7 @@ impl App {
                 window.set_title(&format!("TGPulse - {}", session.title));
                 session.input.set_bindings(self.bindings.clone());
                 self.session = Some(session);
+                self.menu_input = None;
                 self.sync_fullscreen(window);
                 self.last_frame = Instant::now();
                 true
@@ -361,8 +383,15 @@ impl App {
     }
 
     fn close_game(&mut self, window: &Window) {
-        if let Some(session) = self.session.take() {
+        if self.session.is_none() || (self.started_from_cli && self.fullscreen) {
+            // Reuse Quit, including its NVRAM save, without returning to the library.
+            self.apply(window, vec![Action::Quit]);
+            return;
+        }
+        if let Some(mut session) = self.session.take() {
             session.save_nvram();
+            session.input.enable_rumble(false);
+            self.menu_input = Some(session.input);
         }
         self.debugger = None;
         window.set_title("TGPulse");
@@ -535,7 +564,9 @@ impl App {
                 if self
                     .session
                     .as_mut()
-                    .is_some_and(|session| session.input.return_to_menu_requested())
+                    .map(|session| &mut session.input)
+                    .or(self.menu_input.as_mut())
+                    .is_some_and(InputState::return_to_menu_requested)
                 {
                     self.close_game(window);
                 }
@@ -586,6 +617,8 @@ impl App {
                 let pressed = event.state == ElementState::Pressed;
                 if let Some(session) = &mut self.session {
                     session.input.set_pad_button(button, pressed);
+                } else if let Some(input) = &mut self.menu_input {
+                    input.set_pad_button(button, pressed);
                 }
             }
             return;
@@ -614,6 +647,8 @@ impl App {
         {
             if let Some(session) = &mut self.session {
                 session.input.on_key(code, pressed);
+            } else if let Some(input) = &mut self.menu_input {
+                input.on_key(code, pressed);
             }
             return;
         }
@@ -732,7 +767,11 @@ impl App {
             // Run a burst per displayed frame rather than chasing the clock,
             // which is what makes it fast rather than merely uncapped.
             for _ in 0..FAST_FORWARD_FRAMES {
-                session.step();
+                if let Err(error) = session.step() {
+                    self.paused = true;
+                    self.gui.report_error(error);
+                    return;
+                }
                 self.emulated += 1;
             }
             self.last_frame = Instant::now();
@@ -745,7 +784,11 @@ impl App {
         while now.duration_since(self.last_frame) >= self.frame_duration && catch_up < MAX_CATCH_UP
         {
             self.last_frame += self.frame_duration;
-            session.step();
+            if let Err(error) = session.step() {
+                self.paused = true;
+                self.gui.report_error(error);
+                return;
+            }
             self.emulated += 1;
             catch_up += 1;
         }
@@ -915,6 +958,9 @@ impl App {
     /// Pushes the edited bindings to the running machine and to disk, so a
     /// rebinding takes effect at once and survives a restart.
     fn apply_bindings(&mut self) {
+        if let Some(input) = &mut self.menu_input {
+            input.set_bindings(self.bindings.clone());
+        }
         if let Some(session) = &mut self.session {
             session.input.set_bindings(self.bindings.clone());
         }

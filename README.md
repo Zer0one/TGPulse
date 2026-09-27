@@ -33,8 +33,22 @@ Refresh after adding archives.
 ./target/release/tgpulse --help     # all options
 ```
 
+**Diagnostic panels.** Open Statistics and/or the GUI Debugger at startup:
+
+```sh
+./target/release/tgpulse wingwar --show-stats --show-debugger
+```
+
+Both flags also work without a romset, starting in the library. They apply only
+to this launch and do not save panel preferences. These are the existing
+View menu panels, not `--debug`, which runs the scriptable debugger without a
+window. GUI panel flags cannot be combined with `--debug` or `--list`.
+The existing visibility rules still apply: Statistics remains visible in
+fullscreen, while the Debugger requires the interface to be visible. Add
+`--fullscreen off` to inspect the Debugger if games normally start fullscreen.
+
 **Controls.** Coin `5` (Select), start `Enter` (Start), digital movement on
-arrows/WASD or the d-pad. Action 1 is East OR R1, Action 2 is South OR L1,
+arrows/WASD or the d-pad. Action 1 is South OR L1, Action 2 is East OR R1,
 and Action 3 is West; Extra Action uses
 North. Each has one binding across games: Action 1/2 also handle firing,
 secondary fire/reload and sequential shifting. Analog driving uses left
