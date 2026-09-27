@@ -6,6 +6,71 @@ use crate::geometry::GeometryEngine;
 use crate::loader::Roms;
 use crate::sound::{Sound, SoundSystem};
 
+#[cfg(test)]
+mod player_input_tests {
+    use super::*;
+    use i960::bus::Bus;
+
+    #[test]
+    fn both_guns_reach_dpram_and_serial_mux_and_continue_after_restore() {
+        let roms = Roms {
+            maincpu: vec![],
+            main_data: vec![],
+            copro_data: vec![],
+            copro_tables: vec![],
+            polygons: vec![],
+            textures: vec![],
+            eeprom: vec![],
+            sndcpu: vec![],
+            mpcm1: vec![],
+            mpcm2: vec![],
+            sound_scsp: false,
+            coprocessor: crate::roms_db::Board::Model2a,
+            airwalkers_matrix: false,
+        };
+        let mut sys = Model2System::new(&roms);
+        sys.inputs.gun_x = 0x123;
+        sys.inputs.gun_y = 0x234;
+        sys.inputs.gun2_x = 0x345;
+        sys.inputs.gun2_y = 0x156;
+        let expected = [0x34, 2, 0x23, 1, 0x56, 1, 0x45, 3];
+        for flags in 0..4 {
+            sys.inputs.gun_offscreen = flags & 1 != 0;
+            sys.inputs.gun2_offscreen = flags & 2 != 0;
+            sys.io_publish_lightguns();
+            assert_eq!(&sys.dpram[0x80..0x88], &expected);
+            assert_eq!(&sys.dpram[0x88..0x8a], &[flags, 0]);
+            for mux in 0..=8 {
+                sys.write_byte(0x01c00014, mux);
+                assert_eq!(
+                    sys.read_byte(0x01c00018),
+                    if mux == 8 {
+                        0xfc | flags
+                    } else {
+                        expected[mux as usize]
+                    }
+                );
+            }
+        }
+        sys.write_byte(0x01c00014, 5); // Mid-P2 coordinate, high Y byte next.
+        let bytes = crate::savestate::encode(&sys.snapshot()).unwrap();
+        let snapshot = crate::savestate::decode(&bytes, "").unwrap();
+        let mut restored = Model2System::new(&roms);
+        restored.restore(&snapshot);
+        assert_eq!(restored.read_byte(0x01c00018), sys.read_byte(0x01c00018));
+        for mux in 6..=8 {
+            sys.write_byte(0x01c00014, mux);
+            restored.write_byte(0x01c00014, mux);
+            assert_eq!(restored.read_byte(0x01c00018), sys.read_byte(0x01c00018));
+        }
+        restored.io_publish_lightguns();
+        assert_eq!(&restored.dpram[0x80..0x8a], &sys.dpram[0x80..0x8a]);
+        assert!(crate::savestate::decode(&1u32.to_le_bytes(), "")
+            .err()
+            .unwrap()
+            .contains("format 1"));
+    }
+}
 // --- Model 1 I/O board dual-port RAM layout (device byte offsets) ---
 /// Command register: the main CPU writes a command here and spins until the
 /// board zeroes it.
@@ -1170,14 +1235,13 @@ impl Model2System {
     fn io_publish_lightguns(&mut self) {
         let i = self.inputs;
         let le = |v: u16| [v as u8, (v >> 8) as u8];
-        // P1 from the front end; P2 parked at its centre (single player).
-        let words = [le(i.gun_y), le(i.gun_x), le(0x0e8), le(0x179)];
+        let words = [le(i.gun_y), le(i.gun_x), le(i.gun2_y), le(i.gun2_x)];
         for (n, w) in words.iter().enumerate() {
             self.dpram[0x80 + n * 2] = w[0];
             self.dpram[0x81 + n * 2] = w[1];
         }
         // Off-screen detect: bit 0 = P1, bit 1 = P2, zero on-screen.
-        self.dpram[0x88] = u8::from(i.gun_offscreen);
+        self.dpram[0x88] = u8::from(i.gun_offscreen) | (u8::from(i.gun2_offscreen) << 1);
         self.dpram[0x89] = 0x00;
     }
 

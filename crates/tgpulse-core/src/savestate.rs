@@ -13,7 +13,7 @@ use crate::system::Model2System;
 
 /// Bumped whenever the snapshot layout changes, so an old file is rejected
 /// rather than silently misread into the machine.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Declares the snapshot struct and the copy in/out, from one field list, so
 /// the two directions can never drift apart.
@@ -120,13 +120,20 @@ pub fn encode(s: &Snapshot) -> Result<Vec<u8>, String> {
 /// Decodes a snapshot, refusing one from a different layout or a different
 /// game rather than corrupting the running machine.
 pub fn decode(blob: &[u8], game: &str) -> Result<Snapshot, String> {
-    let s: Snapshot = bincode::deserialize(blob).map_err(|e| e.to_string())?;
-    if s.version != FORMAT_VERSION {
+    // Read the fixed-int bincode version before decoding a changed layout.
+    // This also gives pre-P2 saves an explicit diagnostic, not an EOF error.
+    let version = u32::from_le_bytes(
+        blob.get(..4)
+            .ok_or("truncated save state")?
+            .try_into()
+            .unwrap(),
+    );
+    if version != FORMAT_VERSION {
         return Err(format!(
-            "save state is format {} but this build reads {FORMAT_VERSION}",
-            s.version
+            "save state is format {version} but this build reads {FORMAT_VERSION}"
         ));
     }
+    let s: Snapshot = bincode::deserialize(blob).map_err(|e| e.to_string())?;
     if !s.game.is_empty() && !game.is_empty() && s.game != game {
         return Err(format!("save state is for {}, not {game}", s.game));
     }

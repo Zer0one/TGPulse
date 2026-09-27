@@ -22,7 +22,7 @@ fn ram_w(ram: &mut [u32], byte_off: u32, val: u32) {
 }
 
 /// Air Walkers' second pair is physically separate from players 1/2.
-/// The frontend currently supplies one player's controls (and Start 2), so
+/// The frontend supplies players 1/2, so
 /// players 3/4 must stay released, not receive mirrored P1 buttons and Start.
 fn digital_cabinet_port(inputs: &crate::config::Inputs, port: usize, second_pair: bool) -> u8 {
     match (port, second_pair) {
@@ -871,9 +871,12 @@ impl Model2System {
             if i.gun_offscreen {
                 data |= 1;
             }
+            if i.gun2_offscreen {
+                data |= 2;
+            }
             return data as u8;
         }
-        let port = [i.gun_y, i.gun_x, 0x200u16, 0x200u16][(mux >> 1) as usize];
+        let port = [i.gun_y, i.gun_x, i.gun2_y, i.gun2_x][(mux >> 1) as usize];
         if mux & 1 != 0 {
             (port >> 8) as u8
         } else {

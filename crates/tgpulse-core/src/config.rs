@@ -112,6 +112,10 @@ pub struct Inputs {
     /// Player-1 gun pointed off-screen (trigger reload). The I/O board reports
     /// this in its own byte rather than as an extreme coordinate.
     pub gun_offscreen: bool,
+    /// Independent P2 coordinates and off-screen detector, in cabinet ADC units.
+    pub gun2_x: u16,
+    pub gun2_y: u16,
+    pub gun2_offscreen: bool,
     /// The 315-5649's eight auto-incrementing analog channels (2A/2B/2C).
     /// Racing cabinets wire the first three to wheel/accelerator/brake, but
     /// Wave Runner's jet-ski uses four: handle, roll, throttle, pitch.
@@ -139,6 +143,9 @@ impl Default for Inputs {
             gun_x: 0x17c,
             gun_y: 0x0e6,
             gun_offscreen: false,
+            gun2_x: 0x179,
+            gun2_y: 0x0e8,
+            gun2_offscreen: false,
             // Unwired channels read back as all-ones on a real I/O board.
             analog: [0x80, 0x20, 0x20, 0x80, 0xFF, 0xFF, 0xFF, 0xFF],
             dsw: [0xFF; 3],
