@@ -1256,8 +1256,10 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 [[package]]
 name = "m68000"
 version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae608876c3e5b088c53d7b310dda17bae1b5aa33cb61a5824e7bc730a3f9c7fe"
+dependencies = [
+ "bincode",
+ "serde",
+]
 
 [[package]]
 name = "mach2"
