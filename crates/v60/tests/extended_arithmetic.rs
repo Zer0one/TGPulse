@@ -3,6 +3,26 @@ use v60::{Bus, V60};
 
 struct Ram(Vec<u8>);
 
+#[test]
+fn movcdh_final_cursors_wrap_one_halfword_before_start() {
+    for count in [0, 2] {
+        let mut ram = Ram(vec![0; 0x500]);
+        // MOVCD.H absolute 0x200,count,absolute 0x300,count (F7a).
+        let code = [0x5a, 0x09, 0xf3, 0, 2, 0, 0, count, 0xf3, 0, 3, 0, 0, count];
+        ram.0[0x100..0x100 + code.len()].copy_from_slice(&code);
+        ram.0[0x200..0x204].copy_from_slice(&[1, 2, 3, 4]);
+        let mut cpu = V60::new();
+        cpu.reg[PC] = 0x100;
+        cpu.run(&mut ram, 1);
+        assert_eq!(cpu.reg[28], 0x1fe);
+        assert_eq!(cpu.reg[27], 0x2fe);
+        assert_eq!(cpu.reg[PC], 0x100 + code.len() as u32);
+        if count != 0 {
+            assert_eq!(&ram.0[0x300..0x304], &[1, 2, 3, 4]);
+        }
+    }
+}
+
 impl Bus for Ram {
     fn read_u8(&mut self, address: u32) -> u8 {
         self.0.get(address as usize).copied().unwrap_or(0)

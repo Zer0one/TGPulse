@@ -276,7 +276,7 @@ impl V60 {
         if m2 & 0x10 == 0 {
             return 0; // Error4
         }
-        let idx = self.reg_n(self.modval) * self.scale();
+        let idx = self.reg_n(self.modval).wrapping_mul(self.scale());
         self.amflag = false;
         match m2 & 0xf {
             0 => {
@@ -998,6 +998,26 @@ impl V60 {
 mod indexed_tests {
     use super::*;
     struct Operand;
+    struct AbsoluteOperand;
+    impl Bus for AbsoluteOperand {
+        fn read_u8(&mut self, addr: u32) -> u8 {
+            [0xc1, 0xf3, 0, 2, 0, 0].get(addr as usize).copied().unwrap_or(0)
+        }
+        fn write_u8(&mut self, _: u32, _: u8) {}
+    }
+    #[test]
+    fn absolute_scaled_negative_index_wraps_like_register_relative() {
+        for dimension in 0..4 {
+            let mut cpu = V60::new();
+            cpu.reg[1] = (-2i32) as u32;
+            cpu.modadd = 0;
+            cpu.modm = true;
+            cpu.moddim = dimension;
+            assert_eq!(cpu.read_am_address(&mut AbsoluteOperand), 6);
+            assert_eq!(cpu.amout, 0x200 - (2 << dimension));
+            assert!(!cpu.amflag);
+        }
+    }
     impl Bus for Operand {
         fn read_u8(&mut self, addr: u32) -> u8 {
             [0xc1, 0x62].get(addr as usize).copied().unwrap_or(0)

@@ -1697,20 +1697,22 @@ impl V60 {
             }
             i += 1;
         }
-        self.reg[28] = op1.wrapping_add((l1.wrapping_sub(i).wrapping_sub(1)) * esz);
-        self.reg[27] = op2.wrapping_add((l2.wrapping_sub(i).wrapping_sub(1)) * esz);
+        // MAME opMOVSTRDH uses unsigned 32-bit arithmetic: after a full copy,
+        // the cursor is one element before the start, not an overflow trap.
+        self.reg[28] = op1.wrapping_add(l1.wrapping_sub(i).wrapping_sub(1).wrapping_mul(esz));
+        self.reg[27] = op2.wrapping_add(l2.wrapping_sub(i).wrapping_sub(1).wrapping_mul(esz));
         if fill && l1 < l2 {
             while i < l2 {
                 let addr = if esz == 1 {
                     op2.wrapping_add(dest)
                         .wrapping_add(l2.wrapping_sub(i).wrapping_sub(1))
                 } else {
-                    op2.wrapping_add((l2.wrapping_sub(i).wrapping_sub(1)) * esz)
+                    op2.wrapping_add(l2.wrapping_sub(i).wrapping_sub(1).wrapping_mul(esz))
                 };
                 self.write_elem(bus, addr, esz, r26);
                 i += 1;
             }
-            self.reg[27] = op2.wrapping_add((l2.wrapping_sub(i).wrapping_sub(1)) * esz);
+            self.reg[27] = op2.wrapping_add(l2.wrapping_sub(i).wrapping_sub(1).wrapping_mul(esz));
         }
         self.f7a_len()
     }
