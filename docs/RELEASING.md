@@ -16,6 +16,12 @@ publishes a GitHub prerelease only if all jobs succeed, attaching the three
 archives and `SHA256SUMS`. GitHub's generated notes are supplemental to these
 checks, not evidence that a binary runs on a user's machine.
 
+If the publishing job fails after a tag has already been pushed, fix the
+workflow on `main` and manually dispatch it there with `release_tag` set to
+that existing tag. The job checks out and rebuilds the tagged source, then
+publishes to the same tag; do not move an existing release tag. Leave
+`release_tag` empty for an ordinary dry run.
+
 The archives contain the executable, project README and license. The macOS
 archive also contains SDL3 and its license, with the executable linked to the
 adjacent dylib rather than to a Homebrew path. It uses Metal and is ad-hoc
