@@ -29,10 +29,25 @@ macos-emulation-toolkit and MAME projects.
   Master volume now also has a 100% reference and double-click reset.
 - User confirms the washed-out colour issue resolved with sRGB correction.
   Player 2 and the Model 1 networking milestone are closed by user decision
-  (details and evidence limits below). Wing War R360 follow-up is deferred.
-  MultiPCM1 distortion and extended per-title audio testing remain open;
+  (details and evidence limits below). User testing now closes Model 1 save-state
+  acceptance across the remaining catalogue games. Audio is also closed by user
+  acceptance: the perceived SWA/MultiPCM clipping occurs in MAME as well.
+  Further audio fidelity checks and the Wing War R360 follow-up are possible
+  future work rather than open acceptance gates;
   the timing audit is closed as a bounded implementation milestone, not a
   hardware-cycle-accuracy or fresh gameplay certification.
+
+### Current milestone status — 2026-09-28
+
+| Stato | Attività | Cosa resta |
+| --- | --- | --- |
+| 🟢 | Model 1 save states | Closed after user tests on the remaining catalogue games; COMM-fitted saves remain unsupported by design. |
+| 🟢 | Model 1 audio (FM, DSB, MultiPCM) | Closed by user acceptance; the perceived SWA clipping also occurs in MAME. |
+| 🟢 | Model 1 pad rumble | Closed for the established VR use case. On current evidence VFormula is not an FFB-capable game; other cabinet actuators are separate possible work. |
+| 🟢 | Wing War I/O, Z80 consolidation, bounded timing audit, P2, networking and sRGB correction | Milestones closed with the evidence limits below. |
+| 🔵 | Extended audio fidelity checks, R360 motion/link and NetMerc | Possible separate follow-ups, not open acceptance gates for the closed milestones. |
+
+Legenda: 🟢 Completato · 🟡 Parziale · ⚪ Da iniziare · 🔵 Possibili.
 
 Apply the preflight/checkpoint/recap agreement in [AGENTS.md](../AGENTS.md).
 The table is an initial engineering estimate, not a measured cost or completion
@@ -57,52 +72,45 @@ runs can refine estimates, but account-wide percentage deltas are not per-task
 costs. Do not backfill a consumption figure for Phase 1: no comparable start/end
 usage baseline was collected for that implementation.
 
-## Cross-cutting direction — future Model 1 Libretro core
+## Cross-cutting architecture — possible external Model 1 Libretro port
 
 During every integration, consider a future Libretro frontend initially limited
 to Model 1: execution/lifecycle, input, audio/video, resources, portability and
 save states, not serialization alone. Apply the concrete guidance in
 [AGENTS.md](../AGENTS.md) where relevant, keeping changes minimal and avoiding
-an unsolicited adapter or broad rewrite. This is not a claim of Libretro support.
+an unsolicited adapter or broad rewrite. A Libretro adapter is not a TGPulse
+project milestone or a claim of current Libretro support.
 
-### Rumble and force feedback — VR pad checkpoint
+### Model 1 pad rumble — closed VR checkpoint
 
-User decision (2026-09-27): address this during development of the Model 1
-Libretro core, not as a prerequisite for the current standalone milestones.
-Follow-up (2026-09-28): complete a bounded standalone VR pad-rumble pass now,
-using the captured cabinet commands and SailorSat's VR protocol description.
-The Libretro adapter and wheel force feedback remain separate future work.
+The bounded standalone VR pad-rumble pass uses captured cabinet commands and
+SailorSat's VR protocol description. User acceptance closes this Model 1 rumble
+milestone (2026-09-28). Wheel force feedback and unrelated cabinet actuators
+are outside it; an external Libretro port is not a deliverable of this project.
 
 - [x] Decode VR's 0x1x..0x6x drive commands and all four strength bits in a
   frontend-independent core module. The prior shared decoder came from
   Daytona's `epr-16488a` firmware and remains in use only for the unaudited
   paths; the VR-motor family adapter is selected for `vr` and `vformula`.
   MAME wires both games to the same original Model 1 drive-board callback;
-  VFormula does not need a Cabinet Type service-menu entry for this routing.
-  The original Model 1 output latch remains serialized, while frontend pad effects reset
-  on load, session stop and backend change.
-- [ ] Audit other Model 1 drive/output protocols per game before assigning
-  them VR semantics. MAME exposes the output byte but does not decode VR pad
-  effects; Wing War R360 motion is not established by the VR protocol.
-- [ ] Map suitable effects to the Libretro rumble interface, with capability
-  checks and explicit player routing. Preserve the distinction between a
-  gamepad intensity approximation and directional wheel force feedback;
-  do not claim that rumble implements the latter.
-- [ ] Validate command decoding separately from real frontend/controller output,
-  including no-effect/stop, reset, unload and supported games. Decide dedicated
-  wheel force-feedback scope separately; R360 cabinet motion is not pad rumble.
+  that wiring alone does not establish FFB support in VFormula. The original
+  Model 1 output latch remains serialized, while frontend pad effects reset on
+  load, session stop and backend change.
+- [x] Verify VR command decoding and stop/reset behavior with automated tests
+  and the user's non-Standard-cabinet pad test. On current evidence VFormula
+  does not offer FFB, so a physical pad test for it is not an acceptance gate.
+  This does not certify wheel torque or other hardware families.
 
 Current standalone limit: only P1 receives pad rumble. VR and VFormula now
-share the motor-board decoder and bounded pad approximation; VFormula's actual
-gamepad output still requires user testing. The Standard VR cabinet's capture
-had only handshake outputs and therefore remains silent. Special, Upright and 2P Link captured
-drive commands. Low/high SDL3 motor levels are distinct; gilrs uses the larger
-level as its single effect gain. Pad buzz is not directional wheel torque.
+share motor-board routing, but VFormula is not claimed to produce FFB. The
+Standard VR cabinet's capture had only handshake outputs and therefore remains
+silent. Special, Upright and 2P Link captured drive commands. Low/high SDL3
+motor levels are distinct; gilrs uses the larger level as its single effect
+gain. Pad buzz is not directional wheel torque.
 The locked `gilrs-core` 0.5.15 macOS backend reports no force-feedback support
 and its motor-output function is empty, even with `rumble = on`. The SDL3
 backend can drive P1 pad motors on macOS; unit tests establish command and
-adapter behavior, not physical feel. A future Libretro frontend owns host rumble
-delivery; physical cabinet motion remains outside this milestone.
+adapter behavior. Physical cabinet motion remains outside this milestone.
 
 Other Model 1 output survey (MAME `model1.cpp`, 2026-09-28): ordinary Wing War
 has I/O board 2 but no drive callback; Wing War R360 adds a separate feedback
@@ -179,7 +187,7 @@ replacement for a user's persistent gameplay NVRAM.
    World/Japan attract-mode 3D frames were inspected. The user subsequently
    reported successful Wing War play/control tests, including the corrected
    throttle polarity. This does not certify every regional set, audio,
-   extended play or link support. NetMerc remains deferred.
+   extended play or link support. NetMerc remains possible future work.
    R360 source audit (2026-09-27): MAME declares `wingwar360` without a
    NOT_WORKING flag and reuses MODEL1IO2, wiring IN2/drive commands to
    `r360_r`/`r360_w` (cabinet safety/setup acknowledgements and throttle), with
@@ -191,8 +199,8 @@ replacement for a user's persistent gameplay NVRAM.
    at 1,800 frames instead of I/O BOARD ERROR. Manual controls/gameplay/audio,
    R360 networking and mechanical motion remain unvalidated; this is not a full
    motion-system simulation. See the R360 checkpoint in MODEL1_IOBOARD2.md.
-   **R360 follow-up is deferred by user decision**, including the EEPROM/link
-   diagnosis; it does not keep the main networking milestone open.
+   **R360 follow-up is possible future work by user decision**, including the
+   EEPROM/link diagnosis; it does not keep the main networking milestone open.
    The bounded timing audit and Z80 consolidation are complete; whole-machine
    save/load is implemented, with broader in-game acceptance still open.
 
@@ -201,8 +209,9 @@ replacement for a user's persistent gameplay NVRAM.
    See the bounded [timing checkpoint](#dpram-checkpoint--2026-09-27) below;
    this is not a completed system-wide alignment.
 2. **YM3438 synthesis:** Rust FM/DAC synthesis is implemented and connected to
-   the production MultiPCM board. Per-title listening and level acceptance remain
-   pending; do not equate synthetic reference tests with verified game audio.
+   the production MultiPCM board. Audio is closed by user acceptance; the
+   historical test checkpoints below are not claims of exhaustive per-title
+   waveform equivalence.
    **Current checkpoint:** [audio integration contract](MODEL1_AUDIO.md).
    Output-only mute controls for MultiPCM/SCSP, FM and the integrated DSB are
    available. The user confirmed mute operation and FM sounds in VR gameplay.
@@ -234,7 +243,7 @@ replacement for a user's persistent gameplay NVRAM.
    The experimental timers-only option has been removed; synthesis always runs
    and only output muting remains. See the
    [audit method and limits](MODEL1_AUDIO.md#driver-use-audit--2026-09-27).
-   Next: extend per-game listening acceptance; DSB integration is recorded below.
+   Further per-game listening is possible future work; DSB integration is recorded below.
 3. **Star Wars DSB:** implement the Z80/MPEG board and its filtered serial command
    path. Test music independently from the existing Model 1 sound board.
    [Source audit and integration contract](MODEL1_DSB.md) complete: use the local
@@ -254,16 +263,16 @@ replacement for a user's persistent gameplay NVRAM.
    are now integrated: normal SWA/SWAJ constructors enable the board. Settings
    persist `mute_dsb`; missing/wrong-size DSB chips fail explicitly. The filtered
    68000 -> DSB -> mixed signal path passes for both sets. Basic SWA playback
-   is user-confirmed. Next: extended SWA/SWAJ listening/gameplay acceptance,
-   including transitions and balance; no full-machine
-   save-state or MAME-resampler-equivalence claim.
+   is user-confirmed. Extended SWA/SWAJ listening, transitions and balance are
+   possible future checks, not a condition for the audio milestone's closure;
+   no MAME-resampler-equivalence claim follows.
    Verification: 260 workspace tests and 36 release DSB tests passed; normal SWA/SWAJ
    boot probes completed 1,800 release frames each. Six musical commands produced
    nonzero isolated DSB mix for both sets; five Model 1 titles pass 120-frame CLI smoke.
    Separately investigate the existing
    V60 string-operation multiplication overflow encountered in the debug probe
    (`ops.rs`, register-28 update); do not mask it with global overflow settings.
-4. **NetMerc initialization — deferred, separate milestone:** after Wing War,
+4. **NetMerc initialization — possible separate milestone:** after Wing War,
    with verified ROMs and I/O, validate factory NVRAM,
    startup and gameplay. MAME itself still marks NetMerc not working, so it is
    not a complete gameplay oracle.
@@ -281,7 +290,7 @@ to the shared I/O board and cannot be treated as a proven complete reference.
 
 ## Phase 3 — fidelity and remaining features
 
-- [ ] **🔵 Deferred — Wave Runner throttle travel (Model 2 follow-up):**
+- [ ] **🔵 Possible — Wave Runner throttle travel (Model 2 follow-up):**
   user reports RT drives Throttle Lever and LT does not. This matches the
   current SM2 Libretro profile and the pre-refactor behavior, but equivalence
   alone does not establish correct hardware travel. The original Sega
@@ -311,13 +320,12 @@ to the shared I/O board and cannot be treated as a proven complete reference.
   into other widgets. Development release
   rebuilt; real-game listening and manual slider interaction remain pending.
 
-- [ ] **MultiPCM1 distortion during SWA acceleration/deceleration:** user
-  reports apparent clipping attributed to this source (2026-09-27). Capture
-  reproducible pre/post-mix peaks and clipped samples, compare the MultiPCM
-  voice accumulation, sample conversion and output with MAME, and distinguish
-  source distortion from final mixer saturation. Existing nominal board gains
-  match MAME; do not lower them speculatively. Basic SWA playback is now
-  user-confirmed, not a certification of audio fidelity or all sequences.
+- [x] **MultiPCM1 distortion during SWA acceleration/deceleration:** user
+  compared the perceived clipping with MAME and reports the same artifact there
+  (2026-09-28). The audio milestone is closed on that acceptance basis; this is
+  not a measured sample-by-sample equivalence. If revisited, a possible fidelity
+  check would capture pre/post-mix peaks in both emulators before changing gains.
+  Do not lower nominal board gains speculatively.
 - [x] **Model 1 washed-out colours: resolved with sRGB correction.**
   User confirmation on 2026-09-27 closes this reported defect, not every possible
   per-title rendering discrepancy.
@@ -440,15 +448,15 @@ manual gameplay confirmation; the clipping check above remains open.
   checks both cabinet values with supported/unsupported sets and NVRAM retention.
   Separate desktop synchronized gameplay, physical LAN and MAME interoperability
   were not established by these probes; the user accepts closure with these
-  evidence limits. R360 EEPROM/link diagnosis is a separate deferred follow-up.
+  evidence limits. R360 EEPROM/link diagnosis is possible separate follow-up work.
   The earlier scripted
   menu preparation failure is superseded by user-configured fixtures;
   no synchronized gameplay result is claimed. No automatic fake loopback,
   invented protocol, Z80 COMM firmware claim or full-machine save-state claim.
   Drive/motion-board fidelity remains separate from cabinet link and the existing
   controller rumble approximation. The VR-family standalone pad checkpoint is
-  implemented above; Libretro rumble and wheel force feedback remain separate
-  future work, not part of the networking milestone.
+  closed above; wheel force feedback is separate possible work, not part of the
+  networking milestone. A Libretro adapter belongs to an external project.
 - Consider checksum-aware ROM diagnostics beyond the narrowly guarded TGP
   fallback. The current general loader matches names, not expected hashes.
 
@@ -494,9 +502,12 @@ adapter, Model 2 snapshot redesign or host-file side effect.
 | 🟢 | Motherboard / V60 / MB86233 state API | CPU state, RAM, FIFOs/latches, timers/IRQ, frame counter, TGP fractional phase and retry/debt state captured at stable execution boundaries; synthetic and bounded ROM continuation verified. |
 | 🟢 | Machine envelope / COMM boundary | Version 1, loaded-ROM identity, bounded decoding, all-or-nothing restore and core audio invalidation. Save/load explicitly refused whenever COMM is fitted. No implicit NVRAM disk writes. |
 | 🟢 | Desktop save/load integration | Existing menu/F5/F7/slots now dispatch Model 1; bounded reads, atomic slot writes, output invalidation and fullscreen feedback covered by automated tests. Model 2 snapshot path unchanged. |
-| 🟡 | Machine continuation acceptance | Machine API passes fresh-resource restore plus 30 equal frames/audio/state on seven sets; user confirms basic desktop save/load in VR and SWA. Other games and broader in-game scenarios remain. |
+| 🟢 | Machine continuation acceptance | Machine API passes fresh-resource restore plus 30 equal frames/audio/state on seven sets; user reports successful save/load tests across the remaining catalogue games after VR and SWA. The milestone is closed by user acceptance; COMM-fitted saves remain explicitly unsupported. |
 
-Legend: 🟢 completed · 🟡 partial · ⚪ not started · 🔵 deferred.
+Acceptance update (2026-09-28): the user's wider catalogue tests supersede the
+earlier VR/SWA-only manual acceptance boundary in the historical checkpoints
+below. They do not change the explicit COMM limitation or establish deterministic
+long-running gameplay after every restore.
 
 **Completed first checkpoint:** the previously paused MultiPCM draft is tested
 using synthetic ROM resources, without touching game ROMs or NVRAM. Both 8-bit
@@ -515,12 +526,10 @@ Verification: 347 workspace tests pass, including the two new MultiPCM tests.
 The development release builds offline. No new manual gameplay/save-load proof
 is claimed; the desktop still has no complete Model 1 save-state integration.
 
-**Next checkpoint:** extend real-window save/load acceptance beyond the user's
-successful VR/SWA tests, paused and running,
-plus broader in-game scenarios/audio continuity across the supported Model 1
-board variants. Do not conflate startup or headless checks with manual gameplay.
-Publication of these checkpoints is separate
-from the already completed publication above.
+**Historical next checkpoint (superseded by the acceptance update above):**
+extend real-window save/load acceptance beyond VR/SWA, including paused/running
+scenarios and audio continuity. The wider user tests close this milestone;
+individual edge-case regressions can still be investigated when reported.
 
 ### Audio CPU / board save-state checkpoint — 2026-09-27
 
@@ -770,7 +779,7 @@ plus the complete encoded state immediately and after continuation. All match.
 States are about 19.6 MB uncompressed. These runs use fixed default inputs and
 ROM-supplied defaults, no personal NVRAM or TCP. They do not certify manual
 gameplay, GPU/frontend behavior, arbitrary save points or networking, and do
-not change the deferred R360 compatibility status.
+not change the possible R360 compatibility follow-up.
 
 Temporary evidence: `/tmp/tgpulse-envelope.3ycXBp/{check.rs,check,continuation.log}`;
 suite/build logs: `/tmp/tgpulse-envelope-workspace.log` and
@@ -1230,9 +1239,10 @@ limits producer batching but does not prove hardware-edge equivalence. The
 confidence limits. The existing constructor's reset/first-instruction timing
 is unchanged. No sub-instruction raster/beam model, full-machine save state,
 NetMerc/R360 playability, or complete audio fidelity claim follows from closure.
-Fresh listening and extended gameplay remain user acceptance work; the
-MultiPCM distortion investigation stays separate. The next implementation
-phase is complete Model 1 machine save states, under a separate go-ahead.
+At this timing checkpoint, fresh listening, extended gameplay and the MultiPCM
+distortion investigation were still separate; audio and Model 1 save states were
+later closed by user acceptance as recorded above. No broader hardware-fidelity
+claim follows from that acceptance.
 
 ## Verification
 

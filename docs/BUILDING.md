@@ -1,5 +1,8 @@
 # Building
 
+For the fork's tagged desktop artifacts and versioning, see
+[RELEASING.md](RELEASING.md). Local builds remain development builds.
+
 TGPulse is a Cargo workspace. A native build needs nothing but a Rust
 toolchain:
 
