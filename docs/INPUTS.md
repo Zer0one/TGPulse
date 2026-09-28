@@ -27,6 +27,14 @@ SDL3 needs the native SDL3 library available at build and launch time. Neither
 provider changes keyboard, mouse, touch or the emulated I/O ports. Device
 identifiers can differ between providers: if P1/P2 was assigned an
 explicit controller rather than `auto`, reselect it after switching backend.
+
+Model 2 pad rumble now interprets the drive-board byte by game family:
+Daytona/Indy 500, Sega Rally and Touring Car. The device-neutral command
+decoder is in `tgpulse-core`; the desktop adapter maps impacts and steering
+load to P1 pad motors, with separate SDL3 low/high levels. The command tables
+and treatment of streamed torque follow SM2-Emu's standalone implementation;
+no board protocol is inferred for other Model 2 titles. Pad vibration is an
+approximation, not directional wheel force feedback or physical-test proof.
 Native-code fallback polling is deliberately avoided: on macOS an
 SDL-mapped Xbox R3 can share the fallback code for D-pad Right, otherwise
 activating Service and View / Select 3 together. Disconnecting clears the

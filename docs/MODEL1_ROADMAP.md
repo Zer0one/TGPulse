@@ -65,18 +65,25 @@ save states, not serialization alone. Apply the concrete guidance in
 [AGENTS.md](../AGENTS.md) where relevant, keeping changes minimal and avoiding
 an unsolicited adapter or broad rewrite. This is not a claim of Libretro support.
 
-### Deferred milestone — rumble and force feedback during Libretro development
+### Rumble and force feedback — VR pad checkpoint
 
 User decision (2026-09-27): address this during development of the Model 1
 Libretro core, not as a prerequisite for the current standalone milestones.
+Follow-up (2026-09-28): complete a bounded standalone VR pad-rumble pass now,
+using the captured cabinet commands and SailorSat's VR protocol description.
+The Libretro adapter and wheel force feedback remain separate future work.
 
-- [ ] Audit Model 1 drive/output protocols per game against MAME and verified
-  board references. The current shared rumble decoder comes from Daytona's
-  `epr-16488a` drive firmware; forwarding Model 1 output bytes through it does
-  not establish correct VR/Wing War effects.
-- [ ] Expose verified output state/events through a frontend-independent core
-  interface. Keep host devices and callbacks outside serialized device state;
-  define reset/unload behavior so effects cannot remain active after a session.
+- [x] Decode VR's 0x1x..0x6x drive commands and all four strength bits in a
+  frontend-independent core module. The prior shared decoder came from
+  Daytona's `epr-16488a` firmware and remains in use only for the unaudited
+  paths; the VR-motor family adapter is selected for `vr` and `vformula`.
+  MAME wires both games to the same original Model 1 drive-board callback;
+  VFormula does not need a Cabinet Type service-menu entry for this routing.
+  The original Model 1 output latch remains serialized, while frontend pad effects reset
+  on load, session stop and backend change.
+- [ ] Audit other Model 1 drive/output protocols per game before assigning
+  them VR semantics. MAME exposes the output byte but does not decode VR pad
+  effects; Wing War R360 motion is not established by the VR protocol.
 - [ ] Map suitable effects to the Libretro rumble interface, with capability
   checks and explicit player routing. Preserve the distinction between a
   gamepad intensity approximation and directional wheel force feedback;
@@ -85,11 +92,36 @@ Libretro core, not as a prerequisite for the current standalone milestones.
   including no-effect/stop, reset, unload and supported games. Decide dedicated
   wheel force-feedback scope separately; R360 cabinet motion is not pad rumble.
 
-Current standalone limit: only P1 receives the shared rumble approximation.
+Current standalone limit: only P1 receives pad rumble. VR and VFormula now
+share the motor-board decoder and bounded pad approximation; VFormula's actual
+gamepad output still requires user testing. The Standard VR cabinet's capture
+had only handshake outputs and therefore remains silent. Special, Upright and 2P Link captured
+drive commands. Low/high SDL3 motor levels are distinct; gilrs uses the larger
+level as its single effect gain. Pad buzz is not directional wheel torque.
 The locked `gilrs-core` 0.5.15 macOS backend reports no force-feedback support
-and its motor-output function is empty, even with `rumble = on`. A future
-Libretro frontend owns host rumble delivery; no separate macOS backend rewrite
-or physical motion implementation is authorized by this roadmap entry.
+and its motor-output function is empty, even with `rumble = on`. The SDL3
+backend can drive P1 pad motors on macOS; unit tests establish command and
+adapter behavior, not physical feel. A future Libretro frontend owns host rumble
+delivery; physical cabinet motion remains outside this milestone.
+
+Other Model 1 output survey (MAME `model1.cpp`, 2026-09-28): ordinary Wing War
+has I/O board 2 but no drive callback; Wing War R360 adds a separate feedback
+protocol whose documented bytes mostly cover cabinet states and replies, not a
+pad-rumble intensity. SWA has no drive callback; its documented outputs are
+lamps and coin counters, with some bits still unknown. NetMerc has a documented
+trigger/thumb motor output bit, but the game and output path need separate
+validation. None of these observations authorizes reusing the VR decoder or
+inventing effects from game motion, audio or throttle.
+
+Diagnostic checkpoint (2026-09-28): `RUST_LOG=warn,model1_drive=trace`
+records each output from the original Model 1 I/O board's port E, including
+multiple outputs in one frame; `frame=N sampled=XX` marks the byte currently
+forwarded to pad rumble. The trace changes no hardware or controller behavior.
+For an interactive VR capture with the configured NVRAM, run
+`RUST_LOG=warn,model1_drive=trace tgpulse.dev vr 2> /tmp/tgpulse-vr-drive.log`,
+drive briefly, then quit. The headless debugger reached VR gameplay with its
+default NVRAM but observed only two `00` outputs during initialization and no
+later port-E output; this does not establish what the configured cabinet sends.
 
 ## Phase 1 — bounded compatibility fixes
 
