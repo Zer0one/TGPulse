@@ -434,21 +434,7 @@ fn cabinet_trace_equivalence() {
     use crate::input::players::Player;
     use gilrs::Button as B;
     fn sample(input: &mut InputState, out: &mut Inputs, hash: &mut u64) {
-        // Replay the historical common-button defaults, not the corrected
-        // workbook defaults (covered by physical-button assertions below).
-        for player in crate::input::players::Player::ALL {
-            for (signal, old) in [
-                (S::Test, "F2, pad:LeftThumb"),
-                (S::Service, "F8, pad:RightThumb"),
-            ] {
-                if input.bindings.player_binding(player, signal).text == signal.default_text() {
-                    input
-                        .bindings
-                        .set_player_expression(player, signal, old)
-                        .unwrap();
-                }
-            }
-        }
+        // The preferred Test/Service defaults match the historical trace.
         // Test-only adapter: replay the old logical shift requests through
         // their new channels. New defaults/independence have separate tests.
         for (gear, old) in [(S::GearDown, S::Action1), (S::GearUp, S::Action2)] {
@@ -1271,8 +1257,8 @@ fn default_indy_stcc_overrev_buttons_are_isolated() {
             (B::DPadRight, [255; 3]),
             (B::RightTrigger, [255, 0xef, 255]),
             (B::LeftTrigger, [255, 0xdf, 255]),
-            (B::LeftThumb, [0xf7, 255, 255]),
-            (B::RightThumb, [0xfb, 255, 255]),
+            (B::LeftThumb, [0xfb, 255, 255]),
+            (B::RightThumb, [0xf7, 255, 255]),
         ] {
             input.set_pad_button(button, true);
             input.poll(&mut out);
@@ -1344,11 +1330,11 @@ fn motor_raid_attacks_remain_independent() {
 }
 
 #[test]
-fn workbook_physical_buttons_produce_only_the_expected_action() {
+fn default_physical_buttons_produce_only_the_expected_action() {
     use crate::input::players::Player;
     use gilrs::Button as B;
-    // Profili H:W: expected physical positions, independent of Signal defaults.
-    // Each row checks the entire digital port image, not just the desired bit.
+    // Profili H:W supplies the physical positions except the explicit local
+    // Test/Service preference. Check the whole port image, not just one bit.
     for cabinet in cabinets() {
         let root = cabinet.sets.split_whitespace().next().unwrap();
         let buttons: &[(B, usize, u8)] = match root {
@@ -1445,8 +1431,8 @@ fn workbook_physical_buttons_produce_only_the_expected_action() {
             }
             for player in Player::ALL {
                 for (button, mask) in [
-                    (B::LeftThumb, if game == "bel" { 4 } else { 8 }),
-                    (B::RightThumb, if game == "bel" { 8 } else { 4 }),
+                    (B::LeftThumb, if game == "bel" { 8 } else { 4 }),
+                    (B::RightThumb, if game == "bel" { 4 } else { 8 }),
                 ] {
                     let mut input = state(game, cabinet.scheme);
                     let pad = if player == Player::One {

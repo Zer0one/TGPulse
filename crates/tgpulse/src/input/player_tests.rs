@@ -115,7 +115,7 @@ fn duplicate_test_service_or_together_without_other_inputs() {
     for game in ["vf", "swa", "swaj", "vr", "wingwar"] {
         let mut input = cabinet(game);
         let mut out = Inputs::default();
-        for (button, bit) in [(B::LeftThumb, 8), (B::RightThumb, 4)] {
+        for (button, bit) in [(B::LeftThumb, 4), (B::RightThumb, 8)] {
             input.external.buttons = HashSet::from([button]);
             input.external_p2.buttons = HashSet::from([button]);
             input.poll(&mut out);

@@ -12,6 +12,12 @@ including independent P2 lightgun coordinates through the DPRAM and serial
 mux. Air Walkers also has a port-F player-pair mux; the public catalogue and
 bindings remain frontend-only.
 
+TGPulse's preferred Test/Service buttons are Test on L3 (F2) and Service on
+R3 (F8), for both P1 and P2. This is an explicit local preference: the SM2
+Libretro workbook and core use the opposite physical positions. The binding
+loader updates only the exact former stock expressions in memory, preserving
+custom and empty bindings; saving settings writes the current preference.
+
 Desktop pad buttons are tracked per device from gilrs' logical press/release
 events by default. On macOS, Settings → Input → Emulator can instead select
 SDL3 as the gamepad backend; `gamepad_backend = sdl3` in `config/input.conf`

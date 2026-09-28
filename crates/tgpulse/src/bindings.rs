@@ -14,8 +14,8 @@ use winit::keyboard::KeyCode;
 // Loading never rewrites the user's file. Newly split signals inherit defaults.
 fn refreshed_stock_binding(signal: Signal, value: &str) -> &str {
     match (signal, value) {
-        (Signal::Test, "F2, pad:LeftThumb")
-        | (Signal::Service, "F8, pad:RightThumb")
+        (Signal::Test, "F2, pad:RightThumb")
+        | (Signal::Service, "F8, pad:LeftThumb")
         | (Signal::Elevation, "keys:KeyG/KeyT, pad:LeftStickY") => signal.default_text(),
         _ => value,
     }
@@ -861,10 +861,10 @@ mod tests {
     }
 
     #[test]
-    fn workbook_defaults_refresh_without_overwriting_custom_bindings() {
+    fn preferred_defaults_refresh_without_overwriting_custom_bindings() {
         for (signal, old) in [
-            (Signal::Test, "F2, pad:LeftThumb"),
-            (Signal::Service, "F8, pad:RightThumb"),
+            (Signal::Test, "F2, pad:RightThumb"),
+            (Signal::Service, "F8, pad:LeftThumb"),
             (Signal::Elevation, "keys:KeyG/KeyT, pad:LeftStickY"),
         ] {
             assert_eq!(refreshed_stock_binding(signal, old), signal.default_text());
@@ -874,6 +874,33 @@ mod tests {
             );
             assert_eq!(refreshed_stock_binding(signal, ""), "");
         }
+    }
+
+    #[test]
+    fn former_stock_test_service_bindings_refresh_for_both_players() {
+        let path =
+            std::env::temp_dir().join(format!("tgpulse-test-service-{}.conf", std::process::id()));
+        std::fs::write(
+            &path,
+            "format = signals-v3\ntest = F2, pad:RightThumb\nservice = F8, pad:LeftThumb\np2.test = F2, pad:RightThumb\np2.service = F8, pad:LeftThumb\n",
+        )
+        .unwrap();
+        let loaded = Bindings::load(&path);
+        for player in Player::ALL {
+            assert_eq!(
+                loaded.player_binding(player, Signal::Test).text,
+                "F2, pad:LeftThumb"
+            );
+            assert_eq!(
+                loaded.player_binding(player, Signal::Service).text,
+                "F8, pad:RightThumb"
+            );
+        }
+        // Loading is read-only; the current preference is written only on save.
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("test = F2, pad:RightThumb"));
+        std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn invalid_binding_is_not_applied() {

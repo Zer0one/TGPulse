@@ -40,8 +40,10 @@ No second mapping layer or game-filtered GUI list was added. Motor Raid reuses
 the existing Action 1/2 OR defaults (South/L1 Kick, East/R1 Punch) but corrects
 their electrical route. Fighter/baseball/soccer and Top Skater action wiring is
 corrected without inventing per-game duplicate face-button signals. Default
-Test/Service now follow SM2 R3/L3 physical positions respectively; exact old
-stock expressions refresh on load, but custom and empty values are preserved.
+At this checkpoint, Test/Service followed SM2 R3/L3 physical positions
+respectively. The later TGPulse preference restores Test/L3 and Service/R3;
+only exact former stock expressions refresh on load, while custom and empty
+values are preserved. The historical audit below describes this checkpoint.
 
 The workbook-only Model 3 rows are out of scope. Air Walkers P1/P2 face
 positions are aligned; the workbook's P3/P4 electrical matrix needs a separate
@@ -118,7 +120,8 @@ This audit is not permission to replace them with per-game RetroPad bindings.
   Guard (`04`), for P1 and P2. All four VF2 revisions share this rule.
   Other fighters now use the workbook's South Kick / East Punch positions;
   DOA retains its distinct electrical bits and Hold on West.
-- Service now uses L3/F8 and Test R3/F2, matching the workbook's physical positions.
+- At this checkpoint Service used L3/F8 and Test R3/F2, matching the workbook.
+  The later TGPulse preference is Service R3/F8 and Test L3/F2.
   BEL swaps the destination bits, not these bindings.
 - Views retain the one global Down/Left/Right/Up list. Two-view driving
   cabinets consume View / Select 4 (Up) and 1 (Down), following SM2's layout.

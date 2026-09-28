@@ -1198,10 +1198,10 @@ mod tests {
             let mut out = Inputs::default();
             input.poll(&mut out);
             assert_eq!((out.in0, out.in1), (0xff, 0xff), "{game}: idle");
-            input.set_pad_button(B::LeftThumb, true);
+            input.set_pad_button(B::RightThumb, true);
             input.poll(&mut out);
             assert_eq!((out.in0, out.in1), (0xf7, 0xff), "{game}: service");
-            input.set_pad_button(B::LeftThumb, false);
+            input.set_pad_button(B::RightThumb, false);
             input.set_pad_button(B::RightTrigger, true);
             input.poll(&mut out);
             assert_eq!(out.in1, 0xdf, "{game}: shift up");

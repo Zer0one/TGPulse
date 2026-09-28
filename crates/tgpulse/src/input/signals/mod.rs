@@ -30,8 +30,8 @@ macro_rules! signals {
 signals! {
     Coin, "Coin", "coin", false, "Digit5, pad:Select";
     Start, "Start", "start", false, "Enter, NumpadEnter, pad:Start";
-    Test, "Test", "test", false, "F2, pad:RightThumb";
-    Service, "Service", "service", false, "F8, pad:LeftThumb";
+    Test, "Test", "test", false, "F2, pad:LeftThumb";
+    Service, "Service", "service", false, "F8, pad:RightThumb";
     Up, "Joystick Up", "up", false, "ArrowUp, KeyW, pad:DPadUp";
     Down, "Joystick Down", "down", false, "ArrowDown, KeyS, pad:DPadDown";
     Left, "Joystick Left", "left", false, "ArrowLeft, KeyA, pad:DPadLeft";
