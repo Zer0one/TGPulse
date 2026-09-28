@@ -392,6 +392,7 @@ impl Model1System {
         if self.listctl[0] & 4 != 0 && self.frame_num & 1 != 0 {
             self.listctl[0] ^= 0x40;
         }
+        log::trace!(target: "model1_drive", "frame={} sampled={:02X}", self.frame_num, self.drive_cmd);
         self.frame_num = self.frame_num.wrapping_add(1);
         if let Some(comm) = &mut self.comm {
             comm.tick();

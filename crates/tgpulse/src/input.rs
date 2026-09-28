@@ -11,6 +11,8 @@
 //! the wheel and resting at 0x20 for both pedals.
 
 mod cabinet;
+mod model1_rumble;
+mod model2_rumble;
 #[cfg(test)]
 mod player_tests;
 pub mod players;
@@ -18,6 +20,8 @@ mod sampling;
 #[cfg(target_os = "macos")]
 mod sdl_pads;
 pub mod signals;
+use model1_rumble::Model1PadRumble;
+use model2_rumble::Model2PadRumble;
 use players::{PadAssignments, PadDevice, Player};
 use signals::Signal;
 use std::collections::{HashMap, HashSet};
@@ -26,20 +30,20 @@ use gilrs::ff::{BaseEffect, BaseEffectType, Effect, EffectBuilder, Repeat, Repla
 use winit::keyboard::KeyCode;
 
 use tgpulse_core::config::Inputs;
+use tgpulse_core::model2_drive::Protocol as Model2DriveProtocol;
 
 use crate::bindings::{Bindings, GamepadBackend, Sign, Source};
 
-// --- Drive board command encoding -------------------------------------------
+// --- Legacy fallback for unaudited Model 1 outputs --------------------------
 //
-// Recovered by disassembling the drive board's own Z80 ROM (epr-16488a): the
+// Recovered by disassembling Daytona's drive board Z80 ROM (epr-16488a): the
 // dispatch at 0x0520 debounces the byte, then 0x0328 selects the effect from
 // `cmd & 0xf8` while 0x04c0 takes `cmd & 0x07` as the magnitude and scales the
 // motor target with it. `0x10` lands on 0x04d4, which zeroes the target -- no
 // force.
 //
-// The cabinet drives a torque motor on the wheel; a pad has two eccentric
-// motors and no wheel to push. So the magnitude carries over honestly and the
-// effect kind cannot: what is reproduced here is "how hard", not "which way".
+// This old intensity-only path remains for Model 1 titles other than VR until
+// their output protocol has been verified. Model 2 uses model2_drive instead.
 /// Mask selecting the effect kind.
 const DRIVE_KIND: u8 = 0xf8;
 /// Mask selecting the force magnitude, 0..7.
@@ -101,6 +105,8 @@ pub struct InputState {
     rumble: Option<Effect>,
     rumble_gain: f32,
     rumble_enabled: bool,
+    model1_rumble: Model1PadRumble,
+    model2_rumble: Model2PadRumble,
     keys: HashSet<KeyCode>,
     /// 0 = neutral, 1..4 = gears.
     gear: usize,
@@ -304,6 +310,8 @@ impl InputState {
             rumble: None,
             rumble_gain: -1.0,
             rumble_enabled: false,
+            model1_rumble: Model1PadRumble::default(),
+            model2_rumble: Model2PadRumble::default(),
             keys: HashSet::new(),
             gear: 0,
             shift_up_held: false,
@@ -455,12 +463,52 @@ impl InputState {
         Some(eff)
     }
 
-    /// Applies the drive board's force command to the pad's motors.
-    ///
-    /// `cmd` is the byte the game sent to the drive board; see the constants
-    /// above for where its meaning comes from. Call once per emulated frame with
-    /// `Model2System::drive_cmd`.
-    pub fn set_rumble(&mut self, cmd: u8) {
+    fn send_rumble(&mut self, low: f32, high: f32) {
+        // Gilrs exposes one effect gain here; SDL3 can retain the two motors.
+        let gain = low.max(high);
+        if (gain - self.rumble_gain).abs() > f32::EPSILON {
+            if let Some(eff) = self.rumble.as_ref() {
+                let _ = eff.set_gain(gain);
+            }
+            self.rumble_gain = gain;
+        }
+        // SDL rumble expires automatically. Renew it while emulation runs;
+        // a paused or stopped machine cannot leave a motor running.
+        #[cfg(target_os = "macos")]
+        if let (Some(sdl), Some(id)) = (&mut self.sdl, self.rumble_pad) {
+            sdl.rumble(id, low, high);
+        }
+    }
+
+    /// Applies an original Model 1 VR-family motor command to the pad adapter.
+    pub fn set_model1_rumble(&mut self, cmd: u8, steer: u8) {
+        if !self.rumble_enabled {
+            return;
+        }
+        let (low, high) = self.model1_rumble.frame(cmd, steer);
+        self.send_rumble(low, high);
+    }
+
+    pub fn reset_model1_rumble(&mut self) {
+        self.model1_rumble.reset();
+        self.send_rumble(0.0, 0.0);
+    }
+
+    pub fn set_model2_rumble(&mut self, set: &str, cmd: u8, steer: u8) {
+        if !self.rumble_enabled {
+            return;
+        }
+        let levels = if let Some(protocol) = Model2DriveProtocol::for_set(set) {
+            self.model2_rumble.frame(protocol, cmd, steer)
+        } else {
+            self.model2_rumble.reset();
+            (0.0, 0.0)
+        };
+        self.send_rumble(levels.0, levels.1);
+    }
+
+    /// Legacy intensity approximation for unaudited Model 1 boards only.
+    pub fn set_legacy_model1_rumble(&mut self, cmd: u8) {
         if !self.rumble_enabled {
             return;
         }
@@ -472,31 +520,14 @@ impl InputState {
         } else {
             (cmd & DRIVE_MAGNITUDE) as f32 / DRIVE_MAGNITUDE as f32
         };
-        if (gain - self.rumble_gain).abs() > f32::EPSILON {
-            if let Some(eff) = self.rumble.as_ref() {
-                let _ = eff.set_gain(gain);
-            }
-            self.rumble_gain = gain;
-        }
-        // SDL rumble expires automatically. Renew it while emulation runs;
-        // a paused or stopped machine cannot leave a motor running.
-        #[cfg(target_os = "macos")]
-        if let (Some(sdl), Some(id)) = (&mut self.sdl, self.rumble_pad) {
-            sdl.rumble(id, gain);
-        }
+        self.send_rumble(gain, gain);
     }
 
     pub fn enable_rumble(&mut self, on: bool) {
         self.rumble_enabled = on;
         if !on {
-            if let Some(eff) = self.rumble.as_ref() {
-                let _ = eff.set_gain(0.0);
-            }
-            #[cfg(target_os = "macos")]
-            if let (Some(sdl), Some(id)) = (&mut self.sdl, self.rumble_pad) {
-                sdl.rumble(id, 0.0);
-            }
-            self.rumble_gain = 0.0;
+            self.reset_model1_rumble();
+            self.model2_rumble.reset();
         }
     }
 
@@ -571,6 +602,8 @@ impl InputState {
         std::mem::swap(&mut self.external_p2, &mut previous.external_p2);
         self.return_to_menu_held = previous.return_to_menu_held;
         self.rumble_gain = -1.0;
+        self.model1_rumble.reset();
+        self.model2_rumble.reset();
     }
     fn refresh_controllers(&mut self) {
         let mut connected = self
@@ -604,6 +637,8 @@ impl InputState {
                 selected.and_then(|id| self.gilrs.as_mut().and_then(|g| Self::build_rumble(g, id)));
             self.rumble_pad = selected;
             self.rumble_gain = -1.0;
+            self.model1_rumble.reset();
+            self.model2_rumble.reset();
         }
     }
 

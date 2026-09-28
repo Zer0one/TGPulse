@@ -220,7 +220,13 @@ impl Session {
                 sys.run_slice(tgpulse_core::model1::CYCLES_PER_FRAME)
                     .map_err(|e| e.to_string())?;
                 self.audio.push(sys.sound.samples.drain(..));
-                self.input.set_rumble(sys.drive_cmd);
+                if tgpulse_core::model1_drive::DriveFamily::for_set(&self.set).is_some() {
+                    self.input
+                        .set_model1_rumble(sys.drive_cmd, sys.inputs.steer);
+                } else {
+                    // Other Model 1 boards need their own protocol audit.
+                    self.input.set_legacy_model1_rumble(sys.drive_cmd);
+                }
                 sys.trigger_vblank();
                 if let (Some(net), Some(board)) = (&mut self.network, &mut sys.comm) {
                     if let Err(e) = net.poll(board) {
@@ -232,7 +238,8 @@ impl Session {
                 self.input.poll(&mut sys.inputs);
                 sys.run_slice(CYCLES_PER_FRAME);
                 self.audio.push(sys.sound.drain_samples());
-                self.input.set_rumble(sys.drive_cmd);
+                self.input
+                    .set_model2_rumble(&self.set, sys.drive_cmd, sys.inputs.steer);
                 sys.trigger_vblank();
             }
         }

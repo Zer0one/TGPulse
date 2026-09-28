@@ -37,7 +37,13 @@ impl Session {
             self.audio.clear();
             self.background.fill(0);
             self.foreground.fill(0);
-            self.input.set_rumble(sys.drive_cmd);
+            self.input.reset_model1_rumble();
+            // A paused load must not re-arm the pad from a stale saved latch.
+            // VR-family motor boards resume from the restored command on the
+            // next emulated frame, not while the frontend remains paused.
+            if tgpulse_core::model1_drive::DriveFamily::for_set(&self.set).is_none() {
+                self.input.set_legacy_model1_rumble(sys.drive_cmd);
+            }
             // Loading NVRAM into memory must not cause an immediate disk flush.
             // Normal periodic/close persistence remains the existing policy.
             self.nvram_countdown = NVRAM_FLUSH_INTERVAL;

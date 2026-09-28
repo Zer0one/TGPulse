@@ -642,7 +642,12 @@ impl Board {
                 self.eeprom.clk_write(value & 0x80 != 0);
                 self.secondary_controls = value & 0x01 != 0;
             }
-            4 => self.drive_cmd = value,
+            4 => {
+                // Trace each port-E output, including commands later replaced
+                // in this frame. The normal drive_cmd latch keeps only the last.
+                log::trace!(target: "model1_drive", "port_e={value:02X}");
+                self.drive_cmd = value;
+            }
             5 => self.outputs = value,
             _ => {}
         }

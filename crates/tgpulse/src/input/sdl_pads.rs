@@ -107,12 +107,13 @@ impl SdlPads {
         normalize_axis(axis, pad.axis(mapped))
     }
 
-    pub fn rumble(&mut self, id: usize, gain: f32) {
+    pub fn rumble(&mut self, id: usize, low: f32, high: f32) {
         if let Some(pad) = self.pads.get_mut(&id) {
-            let strength = (gain.clamp(0.0, 1.0) * u16::MAX as f32) as u16;
+            let low = (low.clamp(0.0, 1.0) * u16::MAX as f32) as u16;
+            let high = (high.clamp(0.0, 1.0) * u16::MAX as f32) as u16;
             // Commands are refreshed during gameplay; a short duration ensures
             // force cannot remain latched after pause, disconnect or exit.
-            let _ = pad.set_rumble(strength, strength, if strength == 0 { 0 } else { 100 });
+            let _ = pad.set_rumble(low, high, if low == 0 && high == 0 { 0 } else { 100 });
         }
     }
 }
