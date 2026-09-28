@@ -146,7 +146,7 @@ fn synthetic_reference_vectors() {
             std::fs::write(dir.join(format!("case-{case}.rust.txt")), &actual).unwrap();
         }
     }
-    assert_eq!(combined, expected);
+    assert_eq!(combined, expected.replace("\r\n", "\n"));
 }
 
 #[test]
