@@ -15,6 +15,8 @@ mod cabinet;
 mod player_tests;
 pub mod players;
 mod sampling;
+#[cfg(target_os = "macos")]
+mod sdl_pads;
 pub mod signals;
 use players::{PadAssignments, PadDevice, Player};
 use signals::Signal;
@@ -25,7 +27,7 @@ use winit::keyboard::KeyCode;
 
 use tgpulse_core::config::Inputs;
 
-use crate::bindings::{Bindings, Sign, Source};
+use crate::bindings::{Bindings, GamepadBackend, Sign, Source};
 
 // --- Drive board command encoding -------------------------------------------
 //
@@ -87,6 +89,8 @@ const TOP_GEAR: usize = 4;
 
 pub struct InputState {
     gilrs: Option<gilrs::Gilrs>,
+    #[cfg(target_os = "macos")]
+    sdl: Option<sdl_pads::SdlPads>,
     // Cache logical events, not native codes: gilrs' unmapped-button fallback
     // can alias an SDL-mapped button (e.g. Xbox R3 and D-pad Right on macOS).
     pad_buttons: HashMap<gilrs::GamepadId, HashSet<gilrs::Button>>,
@@ -292,6 +296,8 @@ impl InputState {
     fn with_gilrs(gilrs: Option<gilrs::Gilrs>) -> Self {
         let mut state = Self {
             gilrs,
+            #[cfg(target_os = "macos")]
+            sdl: None,
             pad_buttons: HashMap::new(),
             assignments: PadAssignments::default(),
             rumble_pad: None,
@@ -392,7 +398,7 @@ impl InputState {
     pub fn aim_p2(&self) -> Option<(f32, f32)> {
         // Keep the idle single-player screen unchanged. A selected P2 pad or
         // a moved/rebound P2 cursor makes the second reticle useful.
-        (self.pad_for(Player::Two).is_some() || self.cursor_p2_active).then_some(self.cursor_p2)
+        (self.has_pad(Player::Two) || self.cursor_p2_active).then_some(self.cursor_p2)
     }
 
     /// Records the mouse buttons: left fires, right reloads (points off-screen).
@@ -458,9 +464,6 @@ impl InputState {
         if !self.rumble_enabled {
             return;
         }
-        let Some(eff) = self.rumble.as_ref() else {
-            return;
-        };
         if !(DRIVE_FORCE_FIRST..=DRIVE_FORCE_LAST).contains(&cmd) {
             return; // not a force command; leave the motors as they were
         }
@@ -470,8 +473,16 @@ impl InputState {
             (cmd & DRIVE_MAGNITUDE) as f32 / DRIVE_MAGNITUDE as f32
         };
         if (gain - self.rumble_gain).abs() > f32::EPSILON {
-            let _ = eff.set_gain(gain);
+            if let Some(eff) = self.rumble.as_ref() {
+                let _ = eff.set_gain(gain);
+            }
             self.rumble_gain = gain;
+        }
+        // SDL rumble expires automatically. Renew it while emulation runs;
+        // a paused or stopped machine cannot leave a motor running.
+        #[cfg(target_os = "macos")]
+        if let (Some(sdl), Some(id)) = (&mut self.sdl, self.rumble_pad) {
+            sdl.rumble(id, gain);
         }
     }
 
@@ -480,6 +491,10 @@ impl InputState {
         if !on {
             if let Some(eff) = self.rumble.as_ref() {
                 let _ = eff.set_gain(0.0);
+            }
+            #[cfg(target_os = "macos")]
+            if let (Some(sdl), Some(id)) = (&mut self.sdl, self.rumble_pad) {
+                sdl.rumble(id, 0.0);
             }
             self.rumble_gain = 0.0;
         }
@@ -498,6 +513,36 @@ impl InputState {
     }
 
     pub fn set_bindings(&mut self, bindings: Bindings) {
+        #[cfg(target_os = "macos")]
+        if bindings.gamepad_backend != self.bindings.gamepad_backend {
+            let rumble_was_enabled = self.rumble_enabled;
+            self.enable_rumble(false);
+            self.rumble = None;
+            self.rumble_pad = None;
+            self.pad_buttons.clear();
+            self.assignments = PadAssignments::default();
+            match bindings.gamepad_backend {
+                GamepadBackend::Sdl3 => {
+                    self.gilrs = None;
+                    self.sdl = match sdl_pads::SdlPads::new() {
+                        Ok(sdl) => Some(sdl),
+                        Err(e) => {
+                            log::error!(target: "input", "SDL3 gamepad backend unavailable: {e}");
+                            None
+                        }
+                    };
+                }
+                GamepadBackend::Gilrs => {
+                    self.sdl = None;
+                    self.gilrs = gilrs::Gilrs::new()
+                        .map_err(|e| {
+                            log::error!(target: "input", "gilrs gamepad backend unavailable: {e}");
+                        })
+                        .ok();
+                }
+            }
+            self.rumble_enabled = rumble_was_enabled;
+        }
         self.bindings = bindings;
         self.refresh_controllers();
     }
@@ -511,7 +556,13 @@ impl InputState {
     /// Keep device identity/held state across library -> game, without carrying
     /// the previous cabinet's gear, analog ramps or game routing into the new one.
     pub fn retain_controllers_from(&mut self, previous: &mut Self) {
+        // The transferred SDL event pump is unique to the active input state.
+        // Preserve its backend selection so set_bindings does not try to make
+        // a second event pump during the menu-to-game transition.
+        self.bindings.gamepad_backend = previous.bindings.gamepad_backend;
         std::mem::swap(&mut self.gilrs, &mut previous.gilrs);
+        #[cfg(target_os = "macos")]
+        std::mem::swap(&mut self.sdl, &mut previous.sdl);
         std::mem::swap(&mut self.assignments, &mut previous.assignments);
         std::mem::swap(&mut self.pad_buttons, &mut previous.pad_buttons);
         std::mem::swap(&mut self.rumble, &mut previous.rumble);
@@ -522,7 +573,7 @@ impl InputState {
         self.rumble_gain = -1.0;
     }
     fn refresh_controllers(&mut self) {
-        let connected = self
+        let mut connected = self
             .gilrs
             .as_ref()
             .map(|g| {
@@ -538,6 +589,10 @@ impl InputState {
                     .collect()
             })
             .unwrap_or_default();
+        #[cfg(target_os = "macos")]
+        if let Some(sdl) = &self.sdl {
+            connected = sdl.devices();
+        }
         self.assignments.observe(connected);
         self.assignments.resolve(&self.bindings.controllers);
         let selected = self.assignments.id(Player::One);
@@ -567,7 +622,7 @@ impl InputState {
     /// stick, a trigger or a thumb on the screen has a position of its own and
     /// is read directly.
     fn has_analog(&self) -> bool {
-        self.pad().is_some() || self.external.present || !self.touch.is_empty()
+        self.has_pad(Player::One) || self.external.present || !self.touch.is_empty()
     }
 
     /// The travel of one pad axis, from whichever device is reporting it.
@@ -579,13 +634,17 @@ impl InputState {
         }
     }
     fn axis_value_for(&self, player: Player, axis: gilrs::Axis) -> f32 {
-        let hardware = self.pad_for(player).map_or(0.0, |pad| {
+        let mut hardware = self.pad_for(player).map_or(0.0, |pad| {
             mapped_axis_value(
                 axis,
                 pad.axis_code(axis).map(|_| pad.value(axis)),
                 |button| pad.button_data(button).map_or(0.0, |data| data.value()),
             )
         });
+        #[cfg(target_os = "macos")]
+        if let (Some(sdl), Some(id)) = (&self.sdl, self.assignments.id(player)) {
+            hardware = sdl.axis(id, axis);
+        }
         let external = self.external_for(player).axis(axis);
         if external.abs() > hardware.abs() {
             external
@@ -601,11 +660,15 @@ impl InputState {
         match source {
             Source::Key(k) => f32::from(u8::from(self.held(k))),
             Source::Pad(b) => {
-                let hardware = self.pad_for(player).is_some_and(|pad| {
+                let mut hardware = self.pad_for(player).is_some_and(|pad| {
                     self.pad_buttons
                         .get(&pad.id())
                         .is_some_and(|buttons| buttons.contains(&b))
                 });
+                #[cfg(target_os = "macos")]
+                if let (Some(sdl), Some(id)) = (&self.sdl, self.assignments.id(player)) {
+                    hardware = sdl.button(id, b);
+                }
                 f32::from(u8::from(
                     hardware || self.external_for(player).buttons.contains(&b),
                 ))
@@ -631,8 +694,15 @@ impl InputState {
         }
     }
 
-    fn pad(&self) -> Option<gilrs::Gamepad<'_>> {
-        self.pad_for(Player::One)
+    fn has_pad(&self, player: Player) -> bool {
+        let Some(id) = self.assignments.id(player) else {
+            return false;
+        };
+        #[cfg(target_os = "macos")]
+        if let Some(sdl) = &self.sdl {
+            return sdl.has(id);
+        }
+        self.pad_for(player).is_some()
     }
     fn pad_for(&self, player: Player) -> Option<gilrs::Gamepad<'_>> {
         let selected = self.assignments.id(player)?;
@@ -687,6 +757,10 @@ impl InputState {
                     update_pad_buttons(self.pad_buttons.entry(event.id).or_default(), event.event);
                 }
             }
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(sdl) = self.sdl.as_mut() {
+            sdl.poll();
         }
         self.refresh_controllers();
 

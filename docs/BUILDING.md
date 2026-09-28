@@ -20,6 +20,12 @@ symbolic links: a system-wide link to `tgpulse-dev` can be invoked from any
 directory without passing `--roms`. Keep the checkout and release build in
 place when using such a link.
 
+The optional SDL3 gamepad backend links to a native SDL3 installation through
+`pkg-config` (`pkg-config --modversion sdl3`). It can be selected in Settings →
+Input → Emulator, or with `gamepad_backend = sdl3` in `config/input.conf`.
+The default remains `gilrs`; no cabinet bindings need to be changed. A build
+with this macOS feature requires SDL3 even if the runtime selection is gilrs.
+
 The interface uses logical coordinates for Retina scaling and mouse input.
 Fullscreen remains bound to F11; on macOS, try Fn+Cmd+F11 to send it to the
 application.

@@ -13,7 +13,15 @@ mux. Air Walkers also has a port-F player-pair mux; the public catalogue and
 bindings remain frontend-only.
 
 Desktop pad buttons are tracked per device from gilrs' logical press/release
-events. Native-code fallback polling is deliberately avoided: on macOS an
+events by default. On macOS, Settings → Input → Emulator can instead select
+SDL3 as the gamepad backend; `gamepad_backend = sdl3` in `config/input.conf`
+persists this choice. Only the selected provider samples physical gamepads;
+both use the same P1/P2 signals, device assignment and binding expressions.
+SDL3 needs the native SDL3 library available at build and launch time. Neither
+provider changes keyboard, mouse, touch or the emulated I/O ports. Device
+identifiers can differ between providers: if P1/P2 was assigned an
+explicit controller rather than `auto`, reselect it after switching backend.
+Native-code fallback polling is deliberately avoided: on macOS an
 SDL-mapped Xbox R3 can share the fallback code for D-pad Right, otherwise
 activating Service and View / Select 3 together. Disconnecting clears the
 device's button state; this does not change the binding catalogue.
@@ -104,7 +112,7 @@ UUID identifies the controller model, not necessarily an individual serial
 number. Identical controllers use enumeration ordinals; verify/reselect them
 if their connection order changes across application restarts. The Android
 single-pad/touch adapter remains P1-only; this implementation targets desktop
-gilrs devices. Two-physical-gamepad gameplay/reconnect acceptance is still pending.
+gamepads. Two-physical-gamepad gameplay/reconnect acceptance is still pending.
 
 ### Return to game menu / quit
 
@@ -270,7 +278,8 @@ neutral = Digit0, pad:West
 - An empty value unbinds a signal; a missing entry retains its default.
 - Full signed axes and keyboard pairs cannot be used in a digital chord.
 
-gilrs uses positive stick Y for **up**. This is opposite to Libretro's Y
+The frontend uses positive stick Y for **up**; SDL3's native downward-positive
+Y is inverted at the backend boundary. This is opposite to Libretro's Y
 convention; the H-gate expressions account for that difference. Direct gear
 selection latches when released. Conflicting direct selections leave the
 current gear unchanged. Sequential shifting remains edge-triggered.

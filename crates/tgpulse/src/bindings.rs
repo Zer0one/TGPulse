@@ -122,7 +122,25 @@ pub struct Bindings {
     pub controls_p2: BTreeMap<Signal, Binding>,
     /// "auto", "none", or a persistent device UUID:ordinal from the frontend.
     pub controllers: [String; 2],
+    /// Desktop gamepad provider; exactly one is active at a time.
+    pub gamepad_backend: GamepadBackend,
     pub hotkeys: BTreeMap<Hotkey, KeyCode>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GamepadBackend {
+    #[default]
+    Gilrs,
+    Sdl3,
+}
+
+impl GamepadBackend {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Gilrs => "gilrs",
+            Self::Sdl3 => "sdl3",
+        }
+    }
 }
 
 impl Default for Bindings {
@@ -155,6 +173,7 @@ impl Default for Bindings {
                 })
                 .collect(),
             controllers: ["auto".into(), "auto".into()],
+            gamepad_backend: GamepadBackend::default(),
             hotkeys,
             return_to_menu: Binding::parse("Escape, pad:Select & pad:Start", false)
                 .expect("valid return-to-menu default"),
@@ -302,6 +321,17 @@ impl Bindings {
             };
             let (name, value) = (name.trim(), value.trim());
             if name == "format" {
+                continue;
+            }
+            if name == "gamepad_backend" {
+                bindings.gamepad_backend = match value {
+                    "gilrs" => GamepadBackend::Gilrs,
+                    "sdl3" if cfg!(target_os = "macos") => GamepadBackend::Sdl3,
+                    _ => {
+                        log::warn!(target: "input", "{}:{}: unsupported gamepad backend '{value}'", path.display(), number + 1);
+                        GamepadBackend::Gilrs
+                    }
+                };
                 continue;
             }
             if name == "controller_p1" || name == "controller_p2" {
@@ -543,8 +573,10 @@ impl Bindings {
         }
         let mut out = String::from("# TGPulse: one signal list, independent player bindings.\n# Comma = alternatives; & = simultaneous chord.\n# pad:Axis = signed axis, pad:Axis~ = inverted, +/- = half axis.\n# keys:Negative/Positive = keyboard axis. Empty = unbound.\nformat = signals-v3\n\n");
         out += &format!(
-            "controller_p1 = {}\ncontroller_p2 = {}\n\n# Cabinet P1\n",
-            self.controllers[0], self.controllers[1]
+            "gamepad_backend = {}\ncontroller_p1 = {}\ncontroller_p2 = {}\n\n# Cabinet P1\n",
+            self.gamepad_backend.name(),
+            self.controllers[0],
+            self.controllers[1]
         );
         for signal in Signal::ALL {
             out += &format!(
@@ -807,7 +839,24 @@ mod tests {
         assert_eq!(read.hotkeys, written.hotkeys);
         assert_eq!(read.controls_p2, written.controls_p2);
         assert_eq!(read.controllers, written.controllers);
+        assert_eq!(read.gamepad_backend, written.gamepad_backend);
         assert_eq!(read.return_to_menu, written.return_to_menu);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sdl3_selection_round_trips_without_changing_cabinet_bindings() {
+        let path =
+            std::env::temp_dir().join(format!("tgpulse-sdl3-bindings-{}.conf", std::process::id()));
+        let mut bindings = Bindings::default();
+        let original = bindings.controls.clone();
+        bindings.gamepad_backend = GamepadBackend::Sdl3;
+        bindings.save(&path).unwrap();
+        let loaded = Bindings::load(&path);
+        assert_eq!(loaded.gamepad_backend, GamepadBackend::Sdl3);
+        assert_eq!(loaded.controls, original);
+        assert_eq!(loaded.controls_p2, bindings.controls_p2);
         std::fs::remove_file(path).unwrap();
     }
 

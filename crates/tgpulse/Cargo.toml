@@ -23,8 +23,7 @@ tgpulse-core = { workspace = true }
 bytemuck = { workspace = true }
 cpal = { workspace = true }
 env_logger = { workspace = true }
-# Gamepads: evdev on Linux, XInput on Windows, and a stub elsewhere -- Android
-# delivers controller input through the activity instead.
+# Gamepads: gilrs remains the default; Android delivers input through the activity.
 gilrs = { workspace = true }
 imgui = { workspace = true }
 log = { workspace = true }
@@ -32,6 +31,9 @@ pollster = { workspace = true }
 wgpu = { workspace = true }
 winit = { workspace = true }
 png = "0.17"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+sdl3 = { version = "0.20", features = ["use-pkg-config"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_logger = "0.13"

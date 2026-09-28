@@ -19,7 +19,7 @@ use tgpulse_core::library::{self, Entry};
 use tgpulse_core::sound::AudioSource;
 use tgpulse_core::tilemap::{SCREEN_H, SCREEN_W};
 
-use crate::bindings::{Bindings, Hotkey, Source};
+use crate::bindings::{Bindings, GamepadBackend, Hotkey, Source};
 use crate::input::players::{PadDevice, Player};
 use crate::input::signals::Signal;
 
@@ -1192,6 +1192,26 @@ fn input_window(
 
             if let Some(tabs) = ui.tab_bar("input_tabs") {
                 if let Some(tab) = ui.tab_item("Emulator") {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let preview = match bindings.gamepad_backend {
+                            GamepadBackend::Gilrs => "gilrs",
+                            GamepadBackend::Sdl3 => "SDL3",
+                        };
+                        if let Some(_combo) = ui.begin_combo("Gamepad backend", preview) {
+                            for (backend, label) in [
+                                (GamepadBackend::Gilrs, "gilrs"),
+                                (GamepadBackend::Sdl3, "SDL3"),
+                            ] {
+                                if ui.selectable_config(label).selected(bindings.gamepad_backend == backend).build() {
+                                    bindings.gamepad_backend = backend;
+                                    actions.push(Action::BindingsChanged);
+                                }
+                            }
+                        }
+                        ui.text_disabled("One gamepad backend at a time; keyboard and cabinet bindings are shared.");
+                        ui.separator();
+                    }
                     for hotkey in Hotkey::ALL {
                         let bound = bindings
                             .hotkey(*hotkey)
