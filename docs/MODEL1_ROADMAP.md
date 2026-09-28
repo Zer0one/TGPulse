@@ -193,8 +193,8 @@ replacement for a user's persistent gameplay NVRAM.
    motion-system simulation. See the R360 checkpoint in MODEL1_IOBOARD2.md.
    **R360 follow-up is deferred by user decision**, including the EEPROM/link
    diagnosis; it does not keep the main networking milestone open.
-   The bounded timing audit and Z80 consolidation are now complete; full
-   machine save states remain the next implementation phase.
+   The bounded timing audit and Z80 consolidation are complete; whole-machine
+   save/load is implemented, with broader in-game acceptance still open.
 
    **DPRAM timing follow-up completed:** the one-cycle V60 read wait now also
    applies to the original I/O-board games, matching MAME's common memory map.
@@ -399,8 +399,9 @@ manual gameplay confirmation; the clipping check above remains open.
   New integrations should inventory state and add serialization/continuation
   coverage where applicable now, without waiting for the full adapter. The
   standalone machine now has a versioned, ROM-identified in-memory save/load
-  API with bounded decoding and atomic rejection. Desktop integration and
-  broader in-game acceptance remain; saves with COMM fitted are refused.
+  API with bounded decoding and atomic rejection. Desktop integration is
+  implemented; broader in-game acceptance remains, and saves with COMM fitted
+  are refused.
   See [save-state restart](#save-state-restart--2026-09-27).
 - [x] **Cabinet link — closed by user decision.** The following records the
   actual automated evidence, not additional manual gameplay/LAN certification.
@@ -445,8 +446,9 @@ manual gameplay confirmation; the clipping check above remains open.
   no synchronized gameplay result is claimed. No automatic fake loopback,
   invented protocol, Z80 COMM firmware claim or full-machine save-state claim.
   Drive/motion-board fidelity remains separate from cabinet link and the existing
-  controller rumble approximation. Rumble/force-feedback work is deferred to the
-  Libretro-development milestone above, not the next standalone networking task.
+  controller rumble approximation. The VR-family standalone pad checkpoint is
+  implemented above; Libretro rumble and wheel force feedback remain separate
+  future work, not part of the networking milestone.
 - Consider checksum-aware ROM diagnostics beyond the narrowly guarded TGP
   fallback. The current general loader matches names, not expected hashes.
 
