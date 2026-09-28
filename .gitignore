@@ -14,4 +14,6 @@
 # Romsets, and the battery-backed RAM and save states written beside them.
 /roms
 /states
+/nvram/*.nv
 *.nv.sav
+.DS_Store

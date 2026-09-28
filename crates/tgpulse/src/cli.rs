@@ -39,6 +39,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn version_uses_the_public_release_tag_when_provided_at_build_time() {
+        let args = parse_from(vec!["--version".into()], Config::default()).unwrap();
+        let expected = option_env!("TGPULSE_RELEASE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+        assert!(
+            matches!(args.command, Command::Message(text) if text == format!("tgpulse {expected}"))
+        );
+    }
+
+    #[test]
     fn profiles_resolve_explicit_paths_from_invocation_and_cli_wins() {
         let dir = std::env::temp_dir().join(format!("tgpulse-cli-profile-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("profiles")).unwrap();
@@ -375,11 +384,15 @@ fn parse_from_at(
             }
             "--fullscreen" => config.fullscreen = on_off(arg, &next(&mut i)?)?,
             "--version" | "-V" => {
+                // Cargo's package version is upstream's internal 0.1.0; tagged
+                // fork releases pass their public version at build time.
+                let version =
+                    option_env!("TGPULSE_RELEASE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
                 return Ok(Args {
-                    command: Command::Message(format!("tgpulse {}", env!("CARGO_PKG_VERSION"))),
+                    command: Command::Message(format!("tgpulse {version}")),
                     profile: Default::default(),
                     config,
-                })
+                });
             }
             "--help" | "-h" => {
                 return Ok(Args {
