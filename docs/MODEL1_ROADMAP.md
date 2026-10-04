@@ -37,7 +37,7 @@ macos-emulation-toolkit and MAME projects.
   the timing audit is closed as a bounded implementation milestone, not a
   hardware-cycle-accuracy or fresh gameplay certification.
 
-### Current milestone status — 2026-09-28
+### Current milestone status — 2026-10-04
 
 | Stato | Attività | Cosa resta |
 | --- | --- | --- |
@@ -45,9 +45,71 @@ macos-emulation-toolkit and MAME projects.
 | 🟢 | Model 1 audio (FM, DSB, MultiPCM) | Closed by user acceptance; the perceived SWA clipping also occurs in MAME. |
 | 🟢 | Model 1 pad rumble | Closed for the established VR use case. On current evidence VFormula is not an FFB-capable game; other cabinet actuators are separate possible work. |
 | 🟢 | Wing War I/O, Z80 consolidation, bounded timing audit, P2, networking and sRGB correction | Milestones closed with the evidence limits below. |
-| 🔵 | Extended audio fidelity checks, R360 motion/link and NetMerc | Possible separate follow-ups, not open acceptance gates for the closed milestones. |
+| 🟢 | Diagnostic LCD presentation | Closed by user acceptance on 2026-10-04. Off/overlay/dedicated window, corner/opacity settings and HD44780/Text rendering implemented. |
+| 🟢 | NetMerc sensor tracking | Closed by user acceptance on 2026-10-04. Auto/Off/Right Stick/Sensors, calibration/recenter, Holder and optional gravity stabilization implemented; stabilization defaults On. Relative yaw and fixed XYZ remain documented design limits, not open acceptance gates. |
+| 🟢 | NetMerc motor output | Closed by user acceptance on 2026-10-04. Actual port-D bit-2 output drives pad rumble; the bounded write-edge audit found no pulses missed by frame sampling. No synthetic effects. |
+| 🟢 | NetMerc substitute audio | Closed by user acceptance on 2026-10-04: donor/procedural fallback and output controls. This is accepted best-effort playback, not authentic reconstruction of the missing ROM. A verified corrected dump is separate possible work. |
+| 🟡 | NetMerc — Overall Gameplay | Boot, SRAM/service, advanced I/O, serial pose delivery, state restore and City transition/road geometry verified. Tracking, LCD, rumble and substitute audio are closed above. Extended later-level and repeat-game coverage remains; the low-level Polhemus board is not a completion requirement. See [checkpoint](MODEL1_NETMERC.md). |
+| 🔵 | NetMerc — Verified Corrected Audio Dump | If a verified corrected/redumped ROM becomes available, integrate its catalogue identity and original playback path, then verify loading, audio and state compatibility. Availability-dependent; not a gate for accepted substitute audio. |
+| 🔵 | NetMerc — Low-Level Polhemus i386SX Board | Optional future work only, not a next checkpoint or completion requirement. No current practical need has been identified beyond the implemented protocol endpoint. Reconsider only if a concrete functional limitation justifies it. See [scope](#possible--netmerc-low-level-polhemus-board). |
+| 🔵 | Extended audio fidelity checks and R360 motion/link | Possible separate follow-ups, not open acceptance gates for the closed milestones. |
 
 Legenda: 🟢 Completato · 🟡 Parziale · ⚪ Da iniziare · 🔵 Possibili.
+
+2026-10-04 audio follow-up: NetMerc has an optional, persistent Alternative
+Audio Gains preset selected from the actual loaded donor/fallback path.
+It applies immediately, preserves manual levels and does not affect other games.
+Build and offline workspace checks pass; the user closes the substitute-audio
+and output-control milestone on 2026-10-04.
+See [gain checkpoint](MODEL1_NETMERC.md#alternative-audio-gains--2026-10-04).
+
+2026-10-04 gameplay follow-up: the user's NetMerc pre-City snapshot reproduces
+a path-table overrun followed by Inf/NaN and a nonterminating V60 normalization
+loop. City conversion alone still stalls. An extended private finite-format
+trial, also combined with City conversion, continues through 809 frames past
+the first transient NaN and renders the city; interactive gameplay acceptance
+and hardware fidelity remain open. A separate diagnostic build defaults to both
+experiments for the user's from-boot trial. Paired native reference boots
+complete 18,000 frames but do not establish the City transition; tunnel reset
+semantics and the first divergent path index remain open. No production timing,
+CPU, ROM or save patch has been applied. See [diagnosis](MODEL1_NETMERC.md#stage-2--city-freeze-investigation--2026-10-04).
+
+User acceptance follow-up: the private Combined build entered City and
+continued after a brief pause. Controlled replay of the new user snapshot
+confirms Finite Only and Combined both continue, while City Only still stalls.
+The final software images and work RAM match between the two finite variants,
+but their full snapshots differ; broader fidelity is not established.
+The diagnostic's unbuffered log/dump operation reproduces a ~0.30 s host pause,
+versus ~3.2 ms for the critical CPU frame. Buffering reduces dump work to
+~38 ms without changing captured/continued state. No production change or
+additional user trial is part of this comparison. See
+[comparison](MODEL1_NETMERC.md#new-user-snapshot-and-dump-latency-comparison--2026-10-04).
+
+Production follow-up: NetMerc now selects the tested finite TGP compatibility
+policy. The optional `NetMerc City Workaround` is independently configurable,
+default On after the user's City road-plane rendering comparison, and applies
+live to subsequent conversions; existing saves retain
+the destination preference. Other games remain on their original IEEE policy.
+The reference engine uses finite arithmetic in its shared TGP ALU: restricting
+the rollout to NetMerc is our conservative scope, not its game gating. No
+diagnostic dump writer, timing change or ROM patch is integrated. Wider hardware
+fidelity remains open. Workspace: 539 tests pass and development release builds.
+Before/after 1,800-frame boot/continuation checks match serialized state/audio
+for six Model 1 games and one working representative of each Model 2 revision;
+both supplied NetMerc pre-City saves continue with City Off/On. These are
+headless checks, not fresh manual gameplay acceptance. See
+[integration and correctness boundary](MODEL1_NETMERC.md#production-arithmetic-integration--2026-10-04).
+
+Diagnostic LCD scope updated by user request: the existing two 20-character
+lines can be displayed in a dedicated host window or a corner overlay.
+`model1board::IoBoard::diagnostic_lines()` remains the frontend-independent
+interface; no hardware timing or snapshot state changed. The dedicated window
+reuses the existing blit/UI renderer with a separate suspended ImGui context
+so it does not consume the gameplay/menu input stream. Fullscreen replaces the
+window with the overlay; Off remains Off. Configuration and all four corner
+draw paths are tested. Exact HD44780 font/CGRAM pixels and blink are outside
+scope. User visual checks remain for live text, hidden-menu/fullscreen
+transitions, scaling, game close and save/load refresh.
 
 Apply the preflight/checkpoint/recap agreement in [AGENTS.md](../AGENTS.md).
 The table is an initial engineering estimate, not a measured cost or completion
@@ -107,6 +169,13 @@ Standard VR cabinet's capture had only handshake outputs and therefore remains
 silent. Special, Upright and 2P Link captured drive commands. Low/high SDL3
 motor levels are distinct; gilrs uses the larger level as its single effect
 gain. Pad buzz is not directional wheel torque.
+The shared frontend now exposes persistent Rumble Intensity (0–100%, default
+100%), applied immediately after Model 1/2 decoding to both backend outputs.
+It leaves hardware commands and snapshots unchanged. The offline workspace
+suite passes 534 tests (local socket permission required for two existing TCP
+checks), the desktop release build passes, and CLI valid/invalid percentage
+smokes pass. Physical intensity/GUI acceptance remains a user test; no hardware
+feel is inferred from the automated scaling checks.
 The locked `gilrs-core` 0.5.15 macOS backend reports no force-feedback support
 and its motor-output function is empty, even with `rumble = on`. The SDL3
 backend can drive P1 pad motors on macOS; unit tests establish command and
@@ -120,6 +189,13 @@ lamps and coin counters, with some bits still unknown. NetMerc has a documented
 trigger/thumb motor output bit, but the game and output path need separate
 validation. None of these observations authorizes reusing the VR decoder or
 inventing effects from game motion, audio or throttle.
+
+NetMerc startup-rumble correction (2026-10-03): its port-E LCD data was being
+decoded by the unaudited legacy intensity fallback. The desktop now explicitly
+outputs zero for this set, including after save-state load; the VR and Model 2
+adapters are unchanged. NetMerc's real trigger/thumb motor is port-D bit 2 and
+still requires separate protocol/pad validation. See
+[the source-backed diagnosis](MODEL1_NETMERC.md#unintended-desktop-rumble-at-startup--2026-10-03).
 
 Diagnostic checkpoint (2026-09-28): `RUST_LOG=warn,model1_drive=trace`
 records each output from the original Model 1 I/O board's port E, including
@@ -146,6 +222,12 @@ later port-E output; this does not establish what the configured cabinet sends.
   with a region overrun. Cover the real database record with a synthetic chip.
 - [x] Supply the missing `netmerc_nvram.bin` from the author's verified MAME PR attachment.
   Wiring the region does not supply its contents or make NetMerc playable.
+- [x] Initialize only the known NetMerc ROM-set default's bookkeeping in memory
+  at load time, preserving calibration and ZIP contents. Saved SRAM/EEPROM and
+  machine snapshots bypass this policy; do not hide genuine checksum faults.
+- [x] Map the NetMerc seed to its four `CONTROLLER UNIT TEST` endpoint entries
+  and document the actual hexadecimal values (`FF`, `00`, `00`, `FF`), separate
+  from live ADC/button readings and HMD pose. See [NetMerc checkpoint](MODEL1_NETMERC.md).
 
 ### ROM baseline and fallback
 
@@ -272,7 +354,7 @@ replacement for a user's persistent gameplay NVRAM.
    Separately investigate the existing
    V60 string-operation multiplication overflow encountered in the debug probe
    (`ops.rs`, register-28 update); do not mask it with global overflow settings.
-4. **NetMerc initialization — possible separate milestone:** after Wing War,
+4. **NetMerc initialization — active separate milestone (2026-10-03):** after Wing War,
    with verified ROMs and I/O, validate factory NVRAM,
    startup and gameplay. MAME itself still marks NetMerc not working, so it is
    not a complete gameplay oracle.
@@ -280,6 +362,13 @@ replacement for a user's persistent gameplay NVRAM.
    the I/O board; the reference machine configuration includes it. Do not require
    NetMerc's boot, diagnostic LCD or tracking work to complete the Wing War
    milestone. Shared hardware fixes remain reusable, not NetMerc-specific hacks.
+   Advanced-board selection, firmware loading and the write-only diagnostic
+   LCD are now integrated; the existing reference's stationary forward HMD
+   pose is supplied at cold boot. Automated input probes reach 3D; no manual
+   playability or complete tracking claim follows. The follow-up validates
+   factory-SRAM/service persistence and the dynamic DPRAM request/acknowledge
+   cycle without a hardware workaround. Evidence and the next checkpoint are in
+   [MODEL1_NETMERC.md](MODEL1_NETMERC.md).
 
 Priority confirmed on 2026-09-27 against the
 [official MAME driver](https://github.com/mamedev/mame/blob/master/src/mame/sega/model1.cpp):
@@ -289,6 +378,35 @@ fidelity or a new gameplay test. NetMerc's Polhemus/i386SX subsystem is addition
 to the shared I/O board and cannot be treated as a proven complete reference.
 
 ## Phase 3 — fidelity and remaining features
+
+### Possible — NetMerc Low-Level Polhemus Board
+
+Retained as optional future work by user decision (2026-10-03), not an active
+milestone or proposed next checkpoint. No current practical need for low-level
+board emulation has been identified; the existing protocol endpoint remains the
+tracking path. Reopen only with explicit user approval and a concrete functional
+limitation or benefit that the current approach cannot address. Full board
+emulation would execute the original `u1/u2` firmware on an i386SX and model
+the peripherals it actually accesses. TGPulse currently has no i386 core;
+the inspected MAME configuration supplies CPU/RAM/ROM but no complete
+Polhemus peripheral map or serial connection to the I/O board.
+
+If this activity is reopened, its first bounded checkpoint would disassemble
+the interleaved 32 KiB firmware and identify
+reset initialization, I/O and memory-mapped accesses, interrupt handlers and
+sensor-data waits. Recommend GPT-6 Astra with high reasoning effort for that
+audit; expected consumption medium–high, with high uncertainty about peripheral
+identification. Select an existing CPU implementation only after the audit
+establishes the execution and peripheral requirements.
+
+Subsequent work would run the firmware in isolation, implement evidence-backed
+peripherals using existing components where compatible, and connect its serial
+output to the advanced I/O board. Determine how host-provided poses can enter
+the sensor-processing path before claiming compatibility with current MVD
+controls. Keep emulated time, input provision and mutable state explicit and
+serializable, with frontend-owned host devices. Firmware execution, command
+responses and pose delivery require separate verification; loading a CPU and
+ROM alone does not establish functioning low-level tracking.
 
 - [ ] **🔵 Possible — Wave Runner throttle travel (Model 2 follow-up):**
   user reports RT drives Throttle Lever and LT does not. This matches the
@@ -740,6 +858,9 @@ does not open files, write NVRAM, access host transports or reset devices.
   identity and a payload checksum, followed by fixed-integer little-endian
   bincode. Incompatible future layouts must change the version; the existing
   Model 2 format is separate and unchanged.
+  **2026-10-03:** format 2 adds explicit I/O-board identity and complete
+  write-side diagnostic LCD state. Format-1 files are rejected without machine
+  mutation; NVRAM remains compatible. See [NetMerc checkpoint](MODEL1_NETMERC.md).
 - Identity hashes the normalized loaded ROM contents, optional DSB resources,
   I/O-board kind and COMM capability, not ZIP names or operator NVRAM/EEPROM
   defaults. It is cached at construction: ROM resources must remain immutable;

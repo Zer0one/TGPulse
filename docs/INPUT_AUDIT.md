@@ -82,7 +82,7 @@ display order does not alter saved keys, defaults or hardware routing.
 | Sky Target | Start at IN0:40, not IN0:10; proper full-range stick axes and channel order |
 | Behind Enemy Lines | Service IN0:04, Test IN0:08; Missile is not off-screen reload |
 | Wing War | Machine Gun / Missile / Smoke at IN1:10/20/40; all four views restored; 360 variant has no view switches and has different stick polarity |
-| NetMerc | MVD Holder at IN1:04, no invented Start switch; Y reaches channel 2, not the throttle mirror |
+| NetMerc | MVD Holder at IN1:04, no invented Start switch; Y reaches channel 2, not the throttle mirror. User-requested Y polarity now sends Up to ADC 00 and Down to FF, retaining centre 7F and unchanged X. |
 | Star Wars Arcade | At this audit: Start 2 restored; Y direction, throttle centre/range and independent idle gunner axes. Superseded by the P2 follow-up below. |
 | Two-button joystick cabinets | Third/unused action line stays released; Dynamite Baseball retains its own Button 1/2 order and Bat Swing |
 | Hanguk Pro Yagu / Royal Ascot / Air Walkers | Anonymous Button 1/2 follow SM2's South/East ordering rather than the fighting template |

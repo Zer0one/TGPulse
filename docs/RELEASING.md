@@ -22,7 +22,8 @@ that existing tag. The job checks out and rebuilds the tagged source, then
 publishes to the same tag; do not move an existing release tag. Leave
 `release_tag` empty for an ordinary dry run.
 
-The archives contain the executable, project README and license. The macOS
+The archives contain the executable, project README, license and third-party
+notices under `LICENSES/` (including MAME and YMFM). The macOS
 archive also contains SDL3 and its license, with the executable linked to the
 adjacent dylib rather than to a Homebrew path. It uses Metal and is ad-hoc
 signed for packaging, **not notarized**. Linux may still need the usual system

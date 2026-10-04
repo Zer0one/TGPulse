@@ -3,7 +3,13 @@
 Status: 2026-09-27. **Advanced I/O board selected for Wing War World/US/Japan.
 Reference DPRAM replay, integrated startup, input delivery and EEPROM reload
 checks pass.** This is a bounded step of the [Model 1 roadmap](MODEL1_ROADMAP.md),
-not complete gameplay/peripheral validation. R360 and NetMerc remain deferred.
+not complete gameplay/peripheral validation. R360 motion remains separate.
+**2026-10-03:** NetMerc now selects the advanced board and runs its real
+firmware, including the diagnostic LCD; see [NetMerc checkpoint](MODEL1_NETMERC.md)
+for partial startup/3D evidence and remaining tracking/operator checks. NetMerc
+also fits a clocked, serial measurement peer on CN7, reusing the existing SIO
+and UART; this is not i386SX/magnetic-sensor emulation. Other board types keep
+their prior pin wiring. Peer state is included in board/machine snapshots.
 
 **Initial target: Wing War World/US/Japan.** NetMerc is a later, independent
 milestone, not a prerequisite for enabling or validating Wing War. The official
@@ -202,7 +208,8 @@ no permanent one-off runner or ROM data was added to the repository.
 
 The short Wing War probe above is superseded by the longer comparison below:
 it sampled an initialization phase before it had time to finish, not a hang.
-NetMerc's LCD fault remains recorded but is not a Wing War blocker.
+NetMerc's LCD fault was not a Wing War blocker. It is resolved by the
+2026-10-03 write-side LCD integration; the original probe above is historical.
 
 ### Wing War EEPROM initialization comparison — 2026-09-27
 
@@ -456,11 +463,12 @@ motion/drive behavior likewise remain separate from the base I/O board.
    DPRAM transaction replay and integrated cold boot. No firmware patched.
 4. **Done for base Wing War:** select the advanced board/clock and load its
    `iocpu` region through the existing ROM database. R360 is covered by the
-   follow-up below; NetMerc remains excluded.
+   follow-up below. NetMerc is selected by the 2026-10-03 integration, with its
+   own firmware and partial acceptance status.
 5. **Automated checks passed; manual validation pending:** Wing War World/US/Japan
    digital/analog delivery and EEPROM lifecycle. Verify actual gamepad use,
    operator-menu edits and extended gameplay. Validate R360 cabinet behavior separately;
-   NetMerc remains a later milestone. Do not alter existing bindings or user
+   NetMerc's remaining checks are tracked separately. Do not alter existing bindings or user
    saves as a side effect of board integration.
 
 Firmware now executes in the integrated base Wing War system. User configuration,

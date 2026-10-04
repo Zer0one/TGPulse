@@ -35,6 +35,15 @@ load to P1 pad motors, with separate SDL3 low/high levels. The command tables
 and treatment of streamed torque follow SM2-Emu's standalone implementation;
 no board protocol is inferred for other Model 2 titles. Pad vibration is an
 approximation, not directional wheel force feedback or physical-test proof.
+
+The shared host output boundary applies `rumble_intensity` (0–100%, default
+100%) after decoding, to both SDL3 motor levels before gilrs selects its single
+effect gain. Settings → Machine → Rumble Intensity applies immediately,
+including to an already active effect. Zero silences output without changing
+the emulated command stream or decoder progression. The existing `rumble`
+enable switch remains separate. CLI: `--rumble-intensity 50`; the active profile
+saves the percentage. The intensity preference is not machine snapshot state.
+
 Native-code fallback polling is deliberately avoided: on macOS an
 SDL-mapped Xbox R3 can share the fallback code for D-pad Right, otherwise
 activating Service and View / Select 3 together. Disconnecting clears the
