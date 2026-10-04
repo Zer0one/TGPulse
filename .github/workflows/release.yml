@@ -83,6 +83,7 @@ jobs:
           name="tgpulse-${version}-macos-arm64"
           mkdir -p "dist/$name"
           cp target/release/tgpulse LICENSE README.md "dist/$name/"
+          cp -R LICENSES "dist/$name/"
           sdl="$(pkg-config --variable=libdir sdl3)/libSDL3.0.dylib"
           test -f "$sdl"
           cp -L "$sdl" "dist/$name/"
@@ -139,6 +140,7 @@ jobs:
           name="tgpulse-${version}-linux-x86_64"
           mkdir -p "dist/$name"
           cp target/release/tgpulse LICENSE README.md "dist/$name/"
+          cp -R LICENSES "dist/$name/"
           file "dist/$name/tgpulse" | grep -q 'ELF 64-bit.*x86-64'
           ! ldd "dist/$name/tgpulse" | grep -q 'not found'
           if [[ -n "$RELEASE_TAG" ]]; then
@@ -181,6 +183,7 @@ jobs:
           $name = "tgpulse-$version-windows-x86_64"
           New-Item -ItemType Directory -Path "dist/$name" -Force | Out-Null
           Copy-Item target/release/tgpulse.exe, LICENSE, README.md "dist/$name/"
+          Copy-Item LICENSES -Destination "dist/$name/" -Recurse
           $bytes = [IO.File]::ReadAllBytes("dist/$name/tgpulse.exe")
           if ($bytes[0] -ne 0x4d -or $bytes[1] -ne 0x5a) { throw 'Not a PE executable' }
           $actual = (& (Resolve-Path "dist/$name/tgpulse.exe") --version).Trim()
@@ -217,10 +220,14 @@ jobs:
             test -f "tgpulse-${RELEASE_TAG}-${platform}.tar.gz"
             tar tzf "tgpulse-${RELEASE_TAG}-${platform}.tar.gz" > "${platform}.contents"
             grep -q '/tgpulse$' "${platform}.contents"
+            grep -q '/LICENSES/MAME-BSD-3-Clause.txt$' "${platform}.contents"
+            grep -q '/LICENSES/YMFM-BSD-3-Clause.txt$' "${platform}.contents"
           done
           test -f "tgpulse-${RELEASE_TAG}-windows-x86_64.zip"
           unzip -l "tgpulse-${RELEASE_TAG}-windows-x86_64.zip" > windows.contents
           grep -q 'tgpulse.exe' windows.contents
+          grep -q 'LICENSES/MAME-BSD-3-Clause.txt' windows.contents
+          grep -q 'LICENSES/YMFM-BSD-3-Clause.txt' windows.contents
           rm -f macos-arm64.contents linux-x86_64.contents windows.contents
           sha256sum ./*.tar.gz ./*.zip > SHA256SUMS
       - name: Publish prerelease
