@@ -39,6 +39,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rumble_intensity_cli_accepts_only_percentages_up_to_100() {
+        for value in ["0", "100"] {
+            let args = parse_from(vec!["--rumble-intensity".into(), value.into()], Config::default()).unwrap();
+            assert_eq!(args.config.rumble_intensity, value.parse::<u32>().unwrap());
+        }
+        for value in ["-1", "101", "NaN"] {
+            assert!(parse_from(vec!["--rumble-intensity".into(), value.into()], Config::default()).is_err());
+        }
+    }
+
+    #[test]
     fn version_uses_the_public_release_tag_when_provided_at_build_time() {
         let args = parse_from(vec!["--version".into()], Config::default()).unwrap();
         let expected = option_env!("TGPULSE_RELEASE_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
@@ -55,12 +66,16 @@ mod tests {
         std::fs::write(dir.join("sets/vr.zip"), []).unwrap();
         std::fs::write(
             dir.join("profiles/master.conf"),
-            "volume = 20\nnvram = saves/master.nv\nmodel1_port_in = 25001\n",
+            "volume = 20\nrumble_intensity = 80\nnetmerc_city_workaround = on\nnvram = saves/master.nv\nmodel1_port_in = 25001\n",
         )
         .unwrap();
         let args = [
             "--volume",
             "75",
+            "--rumble-intensity",
+            "40",
+            "--netmerc-city-workaround",
+            "off",
             "--config",
             "profiles/master.conf",
             "--roms",
@@ -74,6 +89,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parsed.config.volume, 75);
+        assert_eq!(parsed.config.rumble_intensity, 40);
+        assert_eq!(parsed.profile.settings.rumble_intensity, 80);
+        assert!(!parsed.config.netmerc_city_workaround);
+        assert!(parsed.profile.settings.netmerc_city_workaround);
         assert_eq!(parsed.config.rom_dir, dir.join("sets"));
         assert_eq!(parsed.profile.path, dir.join("profiles/master.conf"));
         assert_eq!(parsed.profile.settings.network.port_in, 25001);
@@ -275,6 +294,8 @@ fn parse_profile(
             | "--ssaa"
             | "--volume"
             | "--rumble"
+            | "--rumble-intensity"
+            | "--netmerc-city-workaround"
             | "--smooth-shadows"
             | "--widescreen"
             | "--widescreen-stretch-2d"
@@ -377,6 +398,15 @@ fn parse_from_at(
                     .map_err(|_| format!("bad --volume '{v}' (want a percentage)"))?;
             }
             "--rumble" => config.rumble = on_off(arg, &next(&mut i)?)?,
+            "--netmerc-city-workaround" => {
+                config.netmerc_city_workaround = on_off(arg, &next(&mut i)?)?
+            }
+            "--rumble-intensity" => {
+                let value = next(&mut i)?;
+                config.rumble_intensity = value.parse::<u32>().ok()
+                    .filter(|v| *v <= 100)
+                    .ok_or_else(|| format!("bad --rumble-intensity '{value}' (want 0..100)"))?;
+            }
             "--smooth-shadows" => config.smooth_shadows = on_off(arg, &next(&mut i)?)?,
             "--widescreen" => config.widescreen = next(&mut i)?.parse()?,
             "--widescreen-stretch-2d" => {
@@ -541,6 +571,11 @@ Audio:
                         level (default 100). SCSP titles mix quiet.
 
 Machine:
+  --rumble on|off       Send supported cabinet effects to P1 pad motors (default off).
+  --netmerc-city-workaround on|off
+                        Optional NetMerc City rounding override (default on).
+  --rumble-intensity 0..100
+                        Pad output intensity; 100 preserves existing levels (default 100).
   --cabinet twin|single Model 1/2 network board fitted/absent (default single).
                         Model 1 twin enables TCP; roles remain in NVRAM.
 

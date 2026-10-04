@@ -9,6 +9,13 @@ const STEER_CENTRE: f32 = 0x80 as f32;
 const STEER_TRAVEL: f32 = 0x60 as f32;
 const CORNER_DEADZONE: f32 = 0.2;
 
+/// Binary cabinet motor, not a force/direction protocol. The ceiling is a
+/// desktop adaptation shared with the existing Model 1 pad effects.
+pub fn binary_motor_levels(on: bool) -> (f32, f32) {
+    let gain = if on { PAD_CEILING } else { 0.0 };
+    (gain, gain)
+}
+
 #[derive(Default)]
 pub struct Model1PadRumble {
     board_active: bool,

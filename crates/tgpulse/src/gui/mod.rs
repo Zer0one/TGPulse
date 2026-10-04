@@ -8,6 +8,7 @@
 //! that the application applies, which keeps the emulator's state in one place
 //! and makes the UI replaceable.
 
+pub mod diagnostic;
 mod platform;
 mod renderer;
 
@@ -16,6 +17,7 @@ use std::time::Duration;
 
 use tgpulse_core::config::Config;
 use tgpulse_core::library::{self, Entry};
+use tgpulse_core::roms_db::Board;
 use tgpulse_core::sound::AudioSource;
 use tgpulse_core::tilemap::{SCREEN_H, SCREEN_W};
 
@@ -24,6 +26,20 @@ use crate::input::players::{PadDevice, Player};
 use crate::input::signals::Signal;
 
 pub use renderer::Renderer;
+
+/// Separate contexts prevent an auxiliary redraw consuming menu input.
+struct ContextHost(Option<imgui::Context>);
+impl std::ops::Deref for ContextHost {
+    type Target = imgui::Context;
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().unwrap()
+    }
+}
+impl std::ops::DerefMut for ContextHost {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().unwrap()
+    }
+}
 
 /// How much larger everything is drawn than on a desktop. A phone is held at
 /// arm's length and has no pointer to aim with, so both the text and the hit
@@ -45,6 +61,8 @@ pub enum Action {
     Debug(String),
     /// Settings were edited; the application re-reads them.
     SettingsChanged,
+    MvdRecenter,
+    MvdCalibrate,
     NetworkSettingsChanged(crate::network::Config),
     /// Bindings were edited; the application re-reads and saves them.
     BindingsChanged,
@@ -73,6 +91,95 @@ mod tests {
     use super::*;
     pub(super) static IMGUI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    fn library_entry(board: Option<Board>, set: &str) -> Entry {
+        Entry {
+            path: PathBuf::from(format!("roms/{set}.zip")),
+            set: set.into(),
+            title: set.into(),
+            year: String::new(),
+            manufacturer: String::new(),
+            board,
+            scheme: None,
+            missing: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn library_filter_distinguishes_every_board_and_all_includes_unknown_sets() {
+        let boards = [
+            None,
+            Some(Board::Model1),
+            Some(Board::Model2o),
+            Some(Board::Model2a),
+            Some(Board::Model2b),
+            Some(Board::Model2c),
+        ];
+        for board in boards {
+            let entry = library_entry(board, "test");
+            assert!(library_matches_board(&entry, None));
+            for filter in boards.into_iter().flatten() {
+                assert_eq!(
+                    library_matches_board(&entry, Some(filter)),
+                    board == Some(filter)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn library_filter_draws_and_clears_only_hidden_selections() {
+        let _lock = IMGUI_TEST_LOCK.lock().unwrap();
+        let mut context = imgui::Context::create();
+        context.set_ini_filename(None);
+        context.io_mut().display_size = [800.0, 600.0];
+        context.fonts().build_rgba32_texture();
+        let entries = [
+            library_entry(Some(Board::Model2o), "daytona"),
+            library_entry(Some(Board::Model1), "netmerc"),
+            library_entry(None, "unknown"),
+        ];
+        for (mut board, initial, expected) in [
+            (None, Some(2), Some(2)),
+            (Some(Board::Model1), Some(0), None),
+            (Some(Board::Model1), Some(1), Some(1)),
+            (Some(Board::Model2o), Some(0), Some(0)),
+            (Some(Board::Model2a), Some(0), None),
+            (Some(Board::Model2b), Some(0), None),
+            (Some(Board::Model2c), Some(0), None),
+            (None, Some(99), None),
+        ] {
+            let mut selected = initial;
+            let mut refresh = false;
+            let mut actions = Vec::new();
+            let ui = context.frame();
+            library_window(
+                ui,
+                [800.0, 600.0],
+                &entries,
+                None,
+                &mut board,
+                &mut selected,
+                &mut refresh,
+                &mut actions,
+            );
+            assert_eq!(selected, expected);
+            assert!(!refresh);
+            assert!(actions.is_empty());
+            context.render();
+        }
+    }
+
+    #[test]
+    fn library_refresh_retains_the_session_board_filter() {
+        let _lock = IMGUI_TEST_LOCK.lock().unwrap();
+        let config = Config::default();
+        let mut gui = Gui::new(&config, StartupPanels::default());
+        assert_eq!(gui.library_board, None);
+        gui.library_board = Some(Board::Model1);
+        gui.refresh_library(&config);
+        assert_eq!(gui.library_board, Some(Board::Model1));
+    }
+
     #[test]
     fn state_feedback_draws_without_the_menu_or_input_capture() {
         let _lock = IMGUI_TEST_LOCK.lock().unwrap();
@@ -81,6 +188,26 @@ mod tests {
         gui.set_suppressed(true);
         gui.context.io_mut().display_size = [800.0, 600.0];
         gui.context.fonts().build_rgba32_texture();
+        gui.update_mvd_holder(Some(false));
+        assert_eq!(gui.state_message.as_ref().unwrap().0, "MVD Holder: cleared");
+        gui.update_mvd_holder(Some(true));
+        assert_eq!(gui.state_message.as_ref().unwrap().0, "MVD Holder: latched");
+        let deadline = gui.state_message.as_ref().unwrap().2;
+        gui.update_mvd_holder(Some(true));
+        assert_eq!(gui.state_message.as_ref().unwrap().2, deadline);
+        // The same notification renderer must work with menus hidden.
+        for frame in 0..2 {
+            let ui = gui.context.frame();
+            state_notice(ui, gui.state_message.as_ref());
+            let draw = gui.context.render();
+            if frame > 0 {
+                assert!(draw.total_vtx_count > 0);
+            }
+        }
+        gui.update_mvd_holder(Some(false));
+        assert_eq!(gui.state_message.as_ref().unwrap().0, "MVD Holder: cleared");
+        gui.update_mvd_holder(None);
+        assert!(gui.state_message.is_none());
         for error in [false, true] {
             gui.report_state("Slot 0 test feedback".into(), error);
             assert!(!gui.showing());
@@ -179,6 +306,13 @@ mod gain_interaction_tests {
                 context.frame(),
                 &mut config,
                 &[],
+                &mut crate::input::mvd::Mode::Auto,
+                &mut [30, 20],
+                &mut true,
+                &mut false,
+                false,
+                false,
+                &mut diagnostic::Options::default(),
                 &mut network,
                 "TCP: waiting",
                 &mut false,
@@ -356,11 +490,13 @@ mod gain_interaction_tests {
 pub struct Gui {
     pub network_draft: crate::network::Config,
     pub network_status: String,
-    context: imgui::Context,
+    context: ContextHost,
     pub controller_devices: Vec<PadDevice>,
     pub controller_labels: [String; 2],
     /// The running machine's implemented outputs; empty in the library.
     pub audio_sources: &'static [AudioSource],
+    /// Actual loaded sample path, independent of the next-load donor choice.
+    pub netmerc_donor_active: bool,
 
     /// Whether the player wants the interface up.
     pub visible: bool,
@@ -378,9 +514,19 @@ pub struct Gui {
     binding_editor: BindingEditor,
 
     entries: Vec<Entry>,
+    library_board: Option<Board>,
+    pub mvd_input: crate::input::mvd::Mode,
+    pub mvd_range: [u32; 2],
+    pub mvd_holder_auto: bool,
+    pub mvd_gravity_stabilization: bool,
+    pub netmerc_running: bool,
+    pub diagnostic: diagnostic::Options,
+    pub diagnostic_lines: Option<[[u8; 20]; 2]>,
+    pub diagnostic_pixels: Option<tgpulse_core::model1io2::DiagnosticPixels>,
     selected: Option<usize>,
     library_error: Option<String>,
     state_message: Option<(String, bool, std::time::Instant)>,
+    mvd_holder: Option<bool>,
 
     debug_input: String,
     debug_log: Vec<String>,
@@ -437,10 +583,11 @@ impl Gui {
         }
 
         Self {
-            context,
+            context: ContextHost(Some(context)),
             network_draft: crate::network::Config::default(),
             network_status: String::new(),
             audio_sources: &[],
+            netmerc_donor_active: false,
             visible: true,
             suppressed: false,
             show_settings: false,
@@ -453,9 +600,19 @@ impl Gui {
             show_debugger: panels.show_debugger,
             show_stats: panels.show_stats,
             entries: library::scan(&config.rom_dir),
+            library_board: None,
+            mvd_input: crate::input::mvd::Mode::default(),
+            mvd_range: [30, 20],
+            mvd_holder_auto: true,
+            mvd_gravity_stabilization: true,
+            netmerc_running: false,
+            diagnostic: Default::default(),
+            diagnostic_lines: None,
+            diagnostic_pixels: None,
             selected: None,
             library_error: None,
             state_message: None,
+            mvd_holder: None,
             debug_input: String::new(),
             debug_log: Vec::new(),
             debug_follow: true,
@@ -499,6 +656,30 @@ impl Gui {
     pub fn report_state(&mut self, message: String, error: bool) {
         let duration = Duration::from_secs(if error { 10 } else { 3 });
         self.state_message = Some((message, error, std::time::Instant::now() + duration));
+    }
+
+    /// Notify only when the game's latch changes, without extending the toast
+    /// on every frame. No frontend toggle is inferred from the physical button.
+    pub fn update_mvd_holder(&mut self, state: Option<bool>) {
+        if state == self.mvd_holder {
+            return;
+        }
+        self.mvd_holder = state;
+        if let Some(latched) = state {
+            self.report_state(
+                format!(
+                    "MVD Holder: {}",
+                    if latched { "latched" } else { "cleared" }
+                ),
+                false,
+            );
+        } else if self
+            .state_message
+            .as_ref()
+            .is_some_and(|(text, _, _)| text.starts_with("MVD Holder: "))
+        {
+            self.state_message = None;
+        }
     }
 
     /// Appends debugger output.
@@ -554,6 +735,11 @@ impl Gui {
             let ui = self.context.frame();
             let actions = touch.render(ui, &self.entries, running, config, &mut self.state_slot);
             state_notice(ui, self.state_message.as_ref());
+            if self.diagnostic.overlay(self.suppressed) {
+                if let Some(lines) = self.diagnostic_lines {
+                    diagnostic::draw(ui, lines, self.diagnostic_pixels, self.diagnostic, false);
+                }
+            }
             renderer.capture(self.context.render());
             return actions;
         }
@@ -561,12 +747,17 @@ impl Gui {
         let mut actions = Vec::new();
         if !self.showing() {
             // Still render, so the stats window can stay up during play.
-            if self.show_stats || self.state_message.is_some() {
+            if self.show_stats || self.state_message.is_some() || self.diagnostic_lines.is_some() {
                 let ui = self.context.frame();
                 if self.show_stats {
                     stats_window(ui, stats);
                 }
                 state_notice(ui, self.state_message.as_ref());
+                if self.diagnostic.overlay(self.suppressed) {
+                    if let Some(lines) = self.diagnostic_lines {
+                        diagnostic::draw(ui, lines, self.diagnostic_pixels, self.diagnostic, false);
+                    }
+                }
                 renderer.capture(self.context.render());
             } else {
                 // Clear the renderer's old notice after it expires.
@@ -668,6 +859,7 @@ impl Gui {
                 ui.io().display_size,
                 entries,
                 library_error.as_deref(),
+                &mut self.library_board,
                 &mut selected,
                 &mut refresh,
                 &mut actions,
@@ -679,6 +871,13 @@ impl Gui {
                 ui,
                 config,
                 self.audio_sources,
+                &mut self.mvd_input,
+                &mut self.mvd_range,
+                &mut self.mvd_holder_auto,
+                &mut self.mvd_gravity_stabilization,
+                self.netmerc_running,
+                self.netmerc_donor_active,
+                &mut self.diagnostic,
                 &mut self.network_draft,
                 &self.network_status,
                 &mut self.audio_gain_reset_held,
@@ -714,6 +913,11 @@ impl Gui {
 
         let _ = &mut state_slot;
         state_notice(ui, self.state_message.as_ref());
+        if self.diagnostic.overlay(self.suppressed) {
+            if let Some(lines) = self.diagnostic_lines {
+                diagnostic::draw(ui, lines, self.diagnostic_pixels, self.diagnostic, false);
+            }
+        }
         renderer.capture(self.context.render());
 
         self.show_settings = show_settings;
@@ -745,6 +949,20 @@ impl Gui {
         Renderer::new(device, queue, format, &atlas)
     }
 
+    /// Only one context may be active. No host UI state enters the core.
+    pub fn with_diagnostic_context<T>(
+        &mut self,
+        auxiliary: &mut Option<imgui::SuspendedContext>,
+        draw: impl FnOnce(&mut imgui::Context) -> T,
+    ) -> T {
+        let main = self.context.0.take().unwrap().suspend();
+        let mut context = auxiliary.take().unwrap().activate().unwrap();
+        let result = draw(&mut context);
+        *auxiliary = Some(context.suspend());
+        self.context.0 = Some(main.activate().unwrap());
+        result
+    }
+
     /// Hides the interface without forgetting that the player wanted it up.
     pub fn set_suppressed(&mut self, suppressed: bool) {
         self.suppressed = suppressed;
@@ -765,11 +983,42 @@ impl Gui {
     }
 }
 
+fn library_matches_board(entry: &Entry, board: Option<Board>) -> bool {
+    board.is_none() || entry.board == board
+}
+
+/// A frontend-only filter; entries and their original indices stay intact.
+fn library_board_filter(ui: &imgui::Ui, board: &mut Option<Board>) {
+    if ui.button(format!("Board: {}", board.map_or("All", Board::label))) {
+        ui.open_popup("library_models");
+    }
+    if let Some(_popup) = ui.begin_popup("library_models") {
+        for choice in [
+            None,
+            Some(Board::Model1),
+            Some(Board::Model2o),
+            Some(Board::Model2a),
+            Some(Board::Model2b),
+            Some(Board::Model2c),
+        ] {
+            if ui
+                .selectable_config(choice.map_or("All", Board::label))
+                .selected(*board == choice)
+                .build()
+            {
+                *board = choice;
+                ui.close_current_popup();
+            }
+        }
+    }
+}
+
 fn library_window(
     ui: &imgui::Ui,
     display: [f32; 2],
     entries: &[Entry],
     error: Option<&str>,
+    board: &mut Option<Board>,
     selected: &mut Option<usize>,
     refresh: &mut bool,
     actions: &mut Vec<Action>,
@@ -788,6 +1037,16 @@ fn library_window(
                 *refresh = true;
             }
             ui.same_line();
+            library_board_filter(ui, board);
+            // Never leave Play/double-click pointing at a hidden romset.
+            if selected.is_some_and(|i| {
+                entries
+                    .get(i)
+                    .is_none_or(|entry| !library_matches_board(entry, *board))
+            }) {
+                *selected = None;
+            }
+            ui.same_line();
             let can_launch = selected
                 .and_then(|i| entries.get(i))
                 .is_some_and(Entry::is_known);
@@ -799,7 +1058,11 @@ fn library_window(
                 }
             });
             ui.same_line();
-            ui.text_disabled(format!("{} romset(s)", entries.len()));
+            let count = entries
+                .iter()
+                .filter(|entry| library_matches_board(entry, *board))
+                .count();
+            ui.text_disabled(format!("{count}/{} romset(s)", entries.len()));
 
             if let Some(error) = error {
                 ui.text_colored([1.0, 0.45, 0.4, 1.0], error);
@@ -816,7 +1079,15 @@ fn library_window(
                         );
                         return;
                     }
+                    if count == 0 {
+                        ui.text_wrapped(
+                            "No romsets for this model. Select All to see the full library.",
+                        );
+                    }
                     for (i, entry) in entries.iter().enumerate() {
+                        if !library_matches_board(entry, *board) {
+                            continue;
+                        }
                         let label = if entry.is_known() {
                             format!("{}  ({})", entry.title, entry.set)
                         } else {
@@ -881,6 +1152,18 @@ fn audio_gain_row(
     reference: u32,
     reset_held: &mut bool,
 ) -> bool {
+    audio_gain_row_with_lock(ui, label, gain, muted, reference, reset_held, false)
+}
+
+fn audio_gain_row_with_lock(
+    ui: &imgui::Ui,
+    label: &str,
+    gain: &mut u32,
+    muted: &mut bool,
+    reference: u32,
+    reset_held: &mut bool,
+    locked: bool,
+) -> bool {
     let _id = ui.push_id(label);
     let style = ui.clone_style();
     // Reserve only the unlabelled checkbox, gaps and widest source name.
@@ -900,13 +1183,16 @@ fn audio_gain_row(
         + 2.0 * style.item_spacing[0]
         + label_width;
     ui.set_next_item_width((ui.content_region_avail()[0] - trailing_width).max(80.0));
-    let mut changed = audio_gain_slider(
-        ui,
-        gain,
-        reference,
-        tgpulse_core::config::AudioGains::MAX,
-        reset_held,
-    );
+    let mut changed = {
+        let _disabled = ui.begin_disabled(locked);
+        audio_gain_slider(
+            ui,
+            gain,
+            reference,
+            tgpulse_core::config::AudioGains::MAX,
+            reset_held,
+        )
+    };
     ui.same_line();
     changed |= ui.checkbox("##mute", muted);
     if ui.is_item_hovered() {
@@ -1013,6 +1299,13 @@ fn settings_window(
     ui: &imgui::Ui,
     config: &mut Config,
     audio_sources: &[AudioSource],
+    mvd_input: &mut crate::input::mvd::Mode,
+    mvd_range: &mut [u32; 2],
+    mvd_holder_auto: &mut bool,
+    mvd_gravity_stabilization: &mut bool,
+    netmerc_running: bool,
+    netmerc_donor_active: bool,
+    diagnostic: &mut diagnostic::Options,
     network: &mut crate::network::Config,
     network_status: &str,
     audio_gain_reset_held: &mut bool,
@@ -1024,6 +1317,7 @@ fn settings_window(
         .opened(open)
         .build(|| {
             let mut changed = false;
+            changed |= diagnostic::controls(ui, diagnostic);
 
             ui.text_disabled("Video");
             let mut ssaa = config.ssaa as i32;
@@ -1061,51 +1355,151 @@ fn settings_window(
             changed |= master_volume_slider(ui, &mut config.volume, audio_gain_reset_held);
             ui.text_disabled("Double-click an audio slider to restore its default.");
             ui.text_disabled("SCSP titles mix quiet; try 400 for Sega Rally.");
+            if let Some(_combo) =
+                ui.begin_combo("NetMerc Audio Donor", config.netmerc_audio_donor.label())
+            {
+                for donor in tgpulse_core::config::NetmercAudioDonor::ALL {
+                    if ui.selectable_config(donor.label())
+                        .selected(config.netmerc_audio_donor == donor)
+                        .build()
+                    {
+                        changed |= config.netmerc_audio_donor != donor;
+                        config.netmerc_audio_donor = donor;
+                    }
+                }
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip_text("Best-effort substitute audio, not restored original samples. Put the donor ZIP beside NetMerc. Applies on game load/reset. Off or unavailable: procedural fallback for the known missing PCM dump; a valid original dump keeps original audio.");
+            }
             if audio_sources.is_empty() {
                 ui.text_disabled("Load a game to show its audio sources.");
             } else {
+                if netmerc_running {
+                    changed |= ui.checkbox(
+                        "NetMerc Alternative Audio Gains",
+                        &mut config.netmerc_alternative_gains,
+                    );
+                    if ui.is_item_hovered() {
+                        ui.tooltip_text("Alternative output gains for NetMerc only. Applies immediately: donor 38/38/30; original/procedural 50/50/30. Preserves your manual gains. Master volume and mute remain available.");
+                    }
+                }
+                let locked = netmerc_running && config.netmerc_alternative_gains;
+                let reference = if locked {
+                    config.effective_audio_gains("netmerc", netmerc_donor_active)
+                } else {
+                    tgpulse_core::config::AudioGains::REFERENCE
+                };
+                let mut preset = reference;
+                let gains = if locked {
+                    &mut preset
+                } else {
+                    &mut config.audio_gains
+                };
                 for source in audio_sources {
-                    let reference = tgpulse_core::config::AudioGains::REFERENCE;
                     let (label, muted, gain, default) = match source {
                         AudioSource::MultiPcm1 => (
                             "MultiPCM 1",
                             &mut config.audio_mutes.multipcm1,
-                            &mut config.audio_gains.multipcm1,
+                            &mut gains.multipcm1,
                             reference.multipcm1,
                         ),
                         AudioSource::MultiPcm2 => (
                             "MultiPCM 2",
                             &mut config.audio_mutes.multipcm2,
-                            &mut config.audio_gains.multipcm2,
+                            &mut gains.multipcm2,
                             reference.multipcm2,
                         ),
                         AudioSource::Scsp => (
                             "SCSP",
                             &mut config.audio_mutes.scsp,
-                            &mut config.audio_gains.scsp,
+                            &mut gains.scsp,
                             reference.scsp,
                         ),
                         AudioSource::Ym3438 => (
                             "FM (YM3438)",
                             &mut config.audio_mutes.ym3438,
-                            &mut config.audio_gains.ym3438,
+                            &mut gains.ym3438,
                             reference.ym3438,
                         ),
                         AudioSource::Dsb => (
                             "DSB (MPEG)",
                             &mut config.audio_mutes.dsb,
-                            &mut config.audio_gains.dsb,
+                            &mut gains.dsb,
                             reference.dsb,
                         ),
                     };
-                    changed |=
-                        audio_gain_row(ui, label, gain, muted, default, audio_gain_reset_held);
+                    changed |= if locked {
+                        audio_gain_row_with_lock(
+                            ui, label, gain, muted, default, audio_gain_reset_held, true,
+                        )
+                    } else {
+                        audio_gain_row(ui, label, gain, muted, default, audio_gain_reset_held)
+                    };
                 }
             }
 
             ui.separator();
             ui.text_disabled("Machine");
+            changed |= ui.checkbox("NetMerc City Workaround", &mut config.netmerc_city_workaround);
+            if ui.is_item_hovered() {
+                ui.tooltip_text("City rounding override; NetMerc only. Recommended for correct road geometry. Applies to subsequent calculations immediately. Load a pre-transition save to compare; toggling cannot undo earlier calculations. Default: On.");
+            }
+            if let Some(_combo) = ui.begin_combo("NetMerc MVD input", mvd_input.label()) {
+                for mode in crate::input::mvd::Mode::ALL {
+                    if ui.selectable_config(mode.label()).selected(*mvd_input == mode).build() {
+                        changed |= *mvd_input != mode;
+                        *mvd_input = mode;
+                    }
+                }
+            }
+            ui.text_wrapped("Auto: calibrated P1 sensors, then Right Stick, then fixed. Sensors require SDL3. Keep the controller still for 5 seconds at activation; gyro tracking is relative and may drift.");
+            {
+                let _disabled = ui.begin_disabled(!matches!(*mvd_input, crate::input::mvd::Mode::Auto | crate::input::mvd::Mode::Sensors));
+                changed |= ui.checkbox("MVD Gravity Stabilization", mvd_gravity_stabilization);
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("Accelerometer correction limits tilt drift. Yaw remains gyro-only; translation is not tracked. Takes effect immediately, without recalibration. Default: On.");
+                }
+            }
+            {
+                let _disabled = ui.begin_disabled(!netmerc_running);
+                if ui.button("Recenter MVD") { actions.push(Action::MvdRecenter); }
+                ui.same_line();
+                if ui.button("Calibrate MVD") { actions.push(Action::MvdCalibrate); }
+            }
+            {
+                let _disabled = ui.begin_disabled(*mvd_input == crate::input::mvd::Mode::Off);
+                let range_label = |degrees| if degrees == 0 { "Off".into() } else { format!("{degrees} degrees") };
+                for (axis, label) in ["Horizontal range", "Vertical range"].into_iter().enumerate() {
+                    if let Some(_combo) = ui.begin_combo(label, range_label(mvd_range[axis])) {
+                        for degrees in (0..=90).step_by(10) {
+                            if ui.selectable_config(range_label(degrees)).selected(mvd_range[axis] == degrees).build() {
+                                changed |= mvd_range[axis] != degrees;
+                                mvd_range[axis] = degrees;
+                            }
+                        }
+                    }
+                }
+                ui.text_disabled("Stick only, maximum per side; Off locks that axis.");
+            }
+            if let Some(_combo) = ui.begin_combo("NetMerc MVD Holder", if *mvd_holder_auto { "Auto" } else { "Manual" }) {
+                for (automatic, label) in [(true, "Auto"), (false, "Manual")] {
+                    if ui.selectable_config(label).selected(*mvd_holder_auto == automatic).build() {
+                        changed |= *mvd_holder_auto != automatic;
+                        *mvd_holder_auto = automatic;
+                    }
+                }
+            }
+            ui.text_wrapped("Auto pulses Holder when credits/game state allow it; Trigger remains manual. Manual uses the cabinet binding.");
             changed |= ui.checkbox("Force feedback to pad rumble", &mut config.rumble);
+            {
+                let _disabled = ui.begin_disabled(!config.rumble);
+                changed |= ui.slider_config("Rumble Intensity", 0, 100)
+                    .display_format("%d%%")
+                    .build(&mut config.rumble_intensity);
+                if ui.is_item_hovered() {
+                    ui.tooltip_text("Applies immediately. 100% preserves existing effect levels; 0% silences both pad motors.");
+                }
+            }
             let mut twin = config.cabinet == tgpulse_core::config::Cabinet::Twin;
             if ui.checkbox("Network board fitted (twin cabinet)", &mut twin) {
                 config.cabinet = if twin {
@@ -1149,8 +1543,17 @@ fn settings_window(
                 config.volume = shipped.volume;
                 config.audio_mutes = shipped.audio_mutes;
                 config.audio_gains = shipped.audio_gains;
+                config.netmerc_audio_donor = shipped.netmerc_audio_donor;
+                config.netmerc_alternative_gains = shipped.netmerc_alternative_gains;
+                config.netmerc_city_workaround = shipped.netmerc_city_workaround;
                 config.rumble = shipped.rumble;
+                config.rumble_intensity = shipped.rumble_intensity;
                 config.cabinet = shipped.cabinet;
+                *mvd_input = crate::input::mvd::Mode::default();
+                *mvd_range = [30, 20];
+                *mvd_holder_auto = true;
+                *mvd_gravity_stabilization = true;
+                *diagnostic = Default::default();
                 *network = crate::network::Config::default();
                 actions.push(Action::NetworkSettingsChanged(network.clone()));
                 changed = true;

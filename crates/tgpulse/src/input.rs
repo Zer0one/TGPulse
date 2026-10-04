@@ -13,6 +13,10 @@
 mod cabinet;
 mod model1_rumble;
 mod model2_rumble;
+// Sensor sample adapters remain independent of hardware emulation.
+#[allow(dead_code)]
+pub mod motion;
+pub mod mvd;
 #[cfg(test)]
 mod player_tests;
 pub mod players;
@@ -43,7 +47,8 @@ use crate::bindings::{Bindings, GamepadBackend, Sign, Source};
 // force.
 //
 // This old intensity-only path remains for Model 1 titles other than VR until
-// their output protocol has been verified. Model 2 uses model2_drive instead.
+// their output protocol has been verified, excluding NetMerc's LCD bus.
+// Model 2 uses model2_drive instead.
 /// Mask selecting the effect kind.
 const DRIVE_KIND: u8 = 0xf8;
 /// Mask selecting the force magnitude, 0..7.
@@ -55,6 +60,23 @@ const DRIVE_KIND_OFF: u8 = 0x10;
 /// and reading a magnitude out of them would rumble on handshakes.
 const DRIVE_FORCE_FIRST: u8 = 0x10;
 const DRIVE_FORCE_LAST: u8 = 0x6f;
+
+/// NetMerc port E is also the diagnostic LCD data bus, not a motor protocol.
+/// Its actual trigger/thumb motor is on port D bit 2 (MAME model1.cpp).
+/// That separate output is handled by set_netmerc_motor, never this decoder.
+fn legacy_model1_rumble_gain(set: &str, cmd: u8) -> Option<f32> {
+    if set == "netmerc" {
+        return Some(0.0);
+    }
+    if !(DRIVE_FORCE_FIRST..=DRIVE_FORCE_LAST).contains(&cmd) {
+        return None;
+    }
+    Some(if cmd & DRIVE_KIND == DRIVE_KIND_OFF {
+        0.0
+    } else {
+        (cmd & DRIVE_MAGNITUDE) as f32 / DRIVE_MAGNITUDE as f32
+    })
+}
 
 /// Travel limits of the I/O board's ADC channels.
 const ANALOG_MIN: i32 = 0x20;
@@ -99,11 +121,19 @@ pub struct InputState {
     // can alias an SDL-mapped button (e.g. Xbox R3 and D-pad Right on macOS).
     pad_buttons: HashMap<gilrs::GamepadId, HashSet<gilrs::Button>>,
     assignments: PadAssignments,
+    motion_mode: mvd::Mode,
+    motion_pad: Option<usize>,
+    motion_tracker: motion::OrientationTracker,
+    motion_last: Option<std::time::Instant>,
+    motion_notice: Option<(String, bool)>,
     rumble_pad: Option<usize>,
     /// A single always-running rumble effect whose gain we scale, rather than
     /// rebuilding an effect every time the game changes force.
     rumble: Option<Effect>,
     rumble_gain: f32,
+    rumble_intensity: u32,
+    /// Last unscaled decoder output, retained for immediate intensity changes.
+    rumble_levels: (f32, f32),
     rumble_enabled: bool,
     model1_rumble: Model1PadRumble,
     model2_rumble: Model2PadRumble,
@@ -136,6 +166,7 @@ pub struct InputState {
     special_shift: bool,
     special_shift_held: bool,
     return_to_menu_held: bool,
+    mvd_commands_held: [bool; 2],
     /// The ADC channel wiring of the loaded cabinet.
     analog_roles: [AnalogRole; 8],
     /// What the player has bound each control to.
@@ -306,9 +337,16 @@ impl InputState {
             sdl: None,
             pad_buttons: HashMap::new(),
             assignments: PadAssignments::default(),
+            motion_mode: mvd::Mode::Off,
+            motion_pad: None,
+            motion_tracker: Default::default(),
+            motion_last: None,
+            motion_notice: None,
             rumble_pad: None,
             rumble: None,
             rumble_gain: -1.0,
+            rumble_intensity: 100,
+            rumble_levels: (0.0, 0.0),
             rumble_enabled: false,
             model1_rumble: Model1PadRumble::default(),
             model2_rumble: Model2PadRumble::default(),
@@ -329,6 +367,7 @@ impl InputState {
             special_shift: false,
             special_shift_held: false,
             return_to_menu_held: false,
+            mvd_commands_held: [false; 2],
             analog_roles: [AnalogRole::None; 8],
             bindings: Bindings::default(),
             touch: Vec::new(),
@@ -464,6 +503,8 @@ impl InputState {
     }
 
     fn send_rumble(&mut self, low: f32, high: f32) {
+        self.rumble_levels = (low, high);
+        let (low, high) = scaled_rumble_levels((low, high), self.rumble_intensity);
         // Gilrs exposes one effect gain here; SDL3 can retain the two motors.
         let gain = low.max(high);
         if (gain - self.rumble_gain).abs() > f32::EPSILON {
@@ -494,6 +535,14 @@ impl InputState {
         self.send_rumble(0.0, 0.0);
     }
 
+    /// NetMerc port D bit 2 only; no LCD bytes or synthetic weapon events.
+    pub fn set_netmerc_motor(&mut self, on: bool) {
+        if self.rumble_enabled {
+            let (low, high) = model1_rumble::binary_motor_levels(on);
+            self.send_rumble(low, high);
+        }
+    }
+
     pub fn set_model2_rumble(&mut self, set: &str, cmd: u8, steer: u8) {
         if !self.rumble_enabled {
             return;
@@ -508,19 +557,13 @@ impl InputState {
     }
 
     /// Legacy intensity approximation for unaudited Model 1 boards only.
-    pub fn set_legacy_model1_rumble(&mut self, cmd: u8) {
+    pub fn set_legacy_model1_rumble(&mut self, set: &str, cmd: u8) {
         if !self.rumble_enabled {
             return;
         }
-        if !(DRIVE_FORCE_FIRST..=DRIVE_FORCE_LAST).contains(&cmd) {
-            return; // not a force command; leave the motors as they were
+        if let Some(gain) = legacy_model1_rumble_gain(set, cmd) {
+            self.send_rumble(gain, gain);
         }
-        let gain = if cmd & DRIVE_KIND == DRIVE_KIND_OFF {
-            0.0
-        } else {
-            (cmd & DRIVE_MAGNITUDE) as f32 / DRIVE_MAGNITUDE as f32
-        };
-        self.send_rumble(gain, gain);
     }
 
     pub fn enable_rumble(&mut self, on: bool) {
@@ -528,6 +571,16 @@ impl InputState {
         if !on {
             self.reset_model1_rumble();
             self.model2_rumble.reset();
+        }
+    }
+
+    /// Apply a host-only intensity adjustment without resetting an effect.
+    pub fn set_rumble_intensity(&mut self, percent: u32) {
+        let percent = percent.min(100);
+        if self.rumble_intensity != percent {
+            self.rumble_intensity = percent;
+            let (low, high) = self.rumble_levels;
+            self.send_rumble(low, high);
         }
     }
 
@@ -546,6 +599,7 @@ impl InputState {
     pub fn set_bindings(&mut self, bindings: Bindings) {
         #[cfg(target_os = "macos")]
         if bindings.gamepad_backend != self.bindings.gamepad_backend {
+            self.reset_motion_device();
             let rumble_was_enabled = self.rumble_enabled;
             self.enable_rumble(false);
             self.rumble = None;
@@ -587,6 +641,7 @@ impl InputState {
     /// Keep device identity/held state across library -> game, without carrying
     /// the previous cabinet's gear, analog ramps or game routing into the new one.
     pub fn retain_controllers_from(&mut self, previous: &mut Self) {
+        previous.reset_motion_device();
         // The transferred SDL event pump is unique to the active input state.
         // Preserve its backend selection so set_bindings does not try to make
         // a second event pump during the menu-to-game transition.
@@ -795,9 +850,32 @@ impl InputState {
         }
         #[cfg(target_os = "macos")]
         if let Some(sdl) = self.sdl.as_mut() {
-            sdl.poll();
+            let selected = self.motion_pad;
+            let tracker = &mut self.motion_tracker;
+            let last = &mut self.motion_last;
+            let notice = &mut self.motion_notice;
+            sdl.poll_motion(|id, sample| {
+                if Some(id) == selected {
+                    let before = tracker.calibration_result();
+                    if tracker.observe(sample) {
+                        *last = Some(std::time::Instant::now());
+                    }
+                    if before.is_none() {
+                        if let Some(result) = tracker.calibration_result() {
+                            log::info!(target: "input", "MVD gyro calibration: {result:?}");
+                            *notice = Some(match result {
+                                Ok(_) => ("MVD sensor calibration successful".into(), false),
+                                Err(reason) => {
+                                    (format!("MVD calibration rejected: {reason}"), true)
+                                }
+                            });
+                        }
+                    }
+                }
+            });
         }
         self.refresh_controllers();
+        self.refresh_motion_device();
 
         let active = self.bindings.return_to_menu.value(|atom| match atom {
             signals::expression::Atom::Source(source) => self.source_amount(*source),
@@ -807,6 +885,11 @@ impl InputState {
         self.return_to_menu_held = active;
         pressed
     }
+}
+
+fn scaled_rumble_levels((low, high): (f32, f32), percent: u32) -> (f32, f32) {
+    let scale = percent.min(100) as f32 / 100.0;
+    (low * scale, high * scale)
 }
 
 // SDL mappings may expose triggers as analog buttons rather than Z axes.
@@ -838,6 +921,42 @@ fn update_pad_buttons(buttons: &mut HashSet<gilrs::Button>, event: gilrs::EventT
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rumble_intensity_scales_both_motors_without_amplifying() {
+        let levels = (0.6, 0.2);
+        assert_eq!(scaled_rumble_levels(levels, 100), levels);
+        assert_eq!(scaled_rumble_levels(levels, 50), (0.3, 0.1));
+        assert_eq!(scaled_rumble_levels(levels, 0), (0.0, 0.0));
+        assert_eq!(scaled_rumble_levels(levels, 200), levels);
+    }
+
+    #[test]
+    fn netmerc_lcd_bytes_never_reach_pad_motors() {
+        // NetMerc LCD traffic is not a drive-board protocol, including the
+        // sampled boot bytes 61/2A/6D.
+        for command in 0..=u8::MAX {
+            assert_eq!(legacy_model1_rumble_gain("netmerc", command), Some(0.0));
+        }
+    }
+
+    #[test]
+    fn netmerc_exclusion_preserves_other_legacy_outputs() {
+        for (command, expected) in [
+            (0x00, None),
+            (0x10, Some(0.0)),
+            (0x17, Some(0.0)),
+            (0x20, Some(0.0)),
+            (0x2a, Some(2.0 / 7.0)),
+            (0x61, Some(1.0 / 7.0)),
+            (0x6d, Some(5.0 / 7.0)),
+            (0x6f, Some(1.0)),
+            (0x70, None),
+            (0xff, None),
+        ] {
+            assert_eq!(legacy_model1_rumble_gain("wingwar", command), expected);
+        }
+    }
 
     const IN0_COIN1: u8 = 0x01;
     const IN0_COIN2: u8 = 0x02;

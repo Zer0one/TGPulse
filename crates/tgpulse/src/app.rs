@@ -1,4 +1,5 @@
-//! The application: one window, one renderer, and at most one running machine.
+//! The application: one gameplay window, optional diagnostic display,
+//! and at most one running machine.
 //!
 //! A session can be started and stopped without leaving the program, which is
 //! what lets the library window launch a game and get back afterwards. The
@@ -55,6 +56,13 @@ enum Machine {
 }
 
 struct Session {
+    audio_notice: Option<(String, bool)>,
+    netmerc_donor_active: bool,
+    diagnostic_font: Option<Box<[u8; 4096]>>,
+    mvd_input: crate::input::mvd::Mode,
+    mvd_range: [u32; 2],
+    mvd_holder_auto: bool,
+    mvd_holder_pulse: crate::input::mvd::holder::HolderAuto,
     nvram_file: Option<crate::settings::NvramFile>,
     network: Option<crate::network::Network>,
     machine: Machine,
@@ -92,9 +100,42 @@ impl Session {
         let scheme = entry.scheme.unwrap_or(ControlScheme::Joystick);
         let roles = analog_roles(&config.rom_path);
 
+        let mut audio_notice = None;
+        let mut netmerc_donor_active = false;
         let machine = match config.system {
             System::Model1 => {
-                let roms = loader::load_model1_zip(&config.rom_path)?;
+                let mut roms = loader::load_model1_zip(&config.rom_path)?;
+                match loader::audio_donor::apply_adjacent(
+                    &mut roms,
+                    path,
+                    config.netmerc_audio_donor,
+                ) {
+                    Ok(true) => {
+                        netmerc_donor_active = true;
+                        audio_notice = Some((
+                            format!(
+                                "NetMerc Audio Donor: {}",
+                                config.netmerc_audio_donor.label()
+                            ),
+                            false,
+                        ));
+                    }
+                    Ok(false) if roms.netmerc_procedural_audio => {
+                        log::info!(target: "audio", "NetMerc best-effort procedural audio (donor Off)");
+                        audio_notice = Some(("NetMerc Audio: Procedural Fallback".into(), false));
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        let path = if roms.netmerc_procedural_audio {
+                            "Procedural Fallback"
+                        } else {
+                            "Original Audio"
+                        };
+                        log::warn!(target: "audio", "NetMerc donor unavailable: {error}; using {path}");
+                        audio_notice =
+                            Some((format!("NetMerc Audio Donor Unavailable — {path}"), true));
+                    }
+                }
                 Machine::Model1(Box::new(
                     Model1System::with_config(&roms, config.clone()).map_err(|e| e.to_string())?,
                 ))
@@ -111,6 +152,7 @@ impl Session {
             None
         };
         let mut input = InputState::new();
+        input.set_rumble_intensity(config.rumble_intensity);
         input.enable_rumble(config.rumble);
         input.set_scheme(scheme);
         input.set_game(&set);
@@ -123,6 +165,17 @@ impl Session {
         let audio = Audio::new(sample_rate, config.volume);
 
         let mut session = Session {
+            audio_notice,
+            netmerc_donor_active,
+            diagnostic_font: if set == "netmerc" {
+                loader::load_hd44780_font(&config.rom_path)
+            } else {
+                None
+            },
+            mvd_input: crate::input::mvd::Mode::default(),
+            mvd_range: [30, 20],
+            mvd_holder_auto: true,
+            mvd_holder_pulse: Default::default(),
             nvram_file,
             network,
             machine,
@@ -137,7 +190,7 @@ impl Session {
         };
         session.load_nvram()?;
         session.set_audio_mutes(config.audio_mutes);
-        session.set_audio_gains(config.audio_gains);
+        session.set_audio_gains(&config);
         log::info!(target: "app", "{} ({:?} controls)", session.title, session.scheme);
         Ok((session, config))
     }
@@ -186,7 +239,8 @@ impl Session {
         }
     }
 
-    fn set_audio_gains(&mut self, gains: tgpulse_core::config::AudioGains) {
+    fn set_audio_gains(&mut self, config: &Config) {
+        let gains = config.effective_audio_gains(&self.set, self.netmerc_donor_active);
         match &mut self.machine {
             Machine::Model1(sys) => sys.sound.set_gains(gains),
             Machine::Model2(sys) => sys.sound.set_gains(gains),
@@ -212,6 +266,20 @@ impl Session {
         match &mut self.machine {
             Machine::Model1(sys) => {
                 self.input.poll(&mut sys.inputs);
+                self.input.set_mvd_mode(if self.set == "netmerc" {
+                    self.mvd_input
+                } else {
+                    crate::input::mvd::Mode::Off
+                });
+                if self.set == "netmerc" {
+                    if let Some(state) = sys.mvd_holder_context() {
+                        if self.mvd_holder_pulse.frame(self.mvd_holder_auto, state) {
+                            sys.inputs.in1 &= !0x04;
+                        }
+                    }
+                    sys.ioboard
+                        .set_hmd_pose(self.input.mvd_pose(self.mvd_input, self.mvd_range));
+                }
                 if let (Some(net), Some(board)) = (&mut self.network, &mut sys.comm) {
                     if let Err(e) = net.poll(board) {
                         log::warn!(target: "network", "{e}");
@@ -220,12 +288,15 @@ impl Session {
                 sys.run_slice(tgpulse_core::model1::CYCLES_PER_FRAME)
                     .map_err(|e| e.to_string())?;
                 self.audio.push(sys.sound.samples.drain(..));
-                if tgpulse_core::model1_drive::DriveFamily::for_set(&self.set).is_some() {
+                if let Some(on) = sys.ioboard.netmerc_motor() {
+                    self.input.set_netmerc_motor(on);
+                } else if tgpulse_core::model1_drive::DriveFamily::for_set(&self.set).is_some() {
                     self.input
                         .set_model1_rumble(sys.drive_cmd, sys.inputs.steer);
                 } else {
                     // Other Model 1 boards need their own protocol audit.
-                    self.input.set_legacy_model1_rumble(sys.drive_cmd);
+                    self.input
+                        .set_legacy_model1_rumble(&self.set, sys.drive_cmd);
                 }
                 sys.trigger_vblank();
                 if let (Some(net), Some(board)) = (&mut self.network, &mut sys.comm) {
@@ -336,12 +407,21 @@ struct Presenter {
     ui: crate::gui::Renderer,
 }
 
+/// Drop the surface before its window. No machine or input backend is duplicated.
+struct DiagnosticWindow {
+    presenter: Presenter,
+    context: Option<imgui::SuspendedContext>,
+    window: Window,
+    background: Vec<u32>,
+}
+
 struct App {
     profile: crate::settings::Profile,
     nvram_game: Option<String>,
     config: Config,
     network_config: crate::network::Config,
     presenter: Option<Presenter>,
+    diagnostic_window: Option<DiagnosticWindow>,
     gui: Gui,
     session: Option<Session>,
     /// Retain exit-chord state across the transition back to the library.
@@ -397,6 +477,11 @@ impl App {
             .as_ref()
             .and_then(|_| pending_rom.as_ref().map(|p| library::describe(p).set));
         let mut gui = Gui::new(&config, panels);
+        gui.mvd_input = profile.settings.mvd_input;
+        gui.mvd_range = profile.settings.mvd_range;
+        gui.mvd_holder_auto = profile.settings.mvd_holder_auto;
+        gui.mvd_gravity_stabilization = profile.settings.mvd_gravity_stabilization;
+        gui.diagnostic = profile.settings.diagnostic;
         gui.network_draft = network_config.clone();
         Self {
             profile,
@@ -405,6 +490,7 @@ impl App {
             network_config,
             config,
             presenter: None,
+            diagnostic_window: None,
             session: None,
             menu_input: Some(menu_input),
             debugger: None,
@@ -459,10 +545,12 @@ impl App {
         if let Some(mut session) = self.session.take() {
             session.save_nvram();
             session.input.enable_rumble(false);
+            session.input.set_mvd_mode(crate::input::mvd::Mode::Off);
             self.menu_input = Some(session.input);
         }
         self.session = None;
         self.debugger = None;
+        self.gui.update_mvd_holder(None);
 
         match Session::open(
             rom,
@@ -477,6 +565,17 @@ impl App {
                     session.input.retain_controllers_from(&mut input);
                 }
                 session.input.set_bindings(self.bindings.clone());
+                session.mvd_input = self.gui.mvd_input;
+                session.mvd_range = self.gui.mvd_range;
+                session.mvd_holder_auto = self.gui.mvd_holder_auto;
+                session
+                    .input
+                    .set_mvd_gravity_stabilization(self.gui.mvd_gravity_stabilization);
+                session.input.set_mvd_mode(if session.set == "netmerc" {
+                    session.mvd_input
+                } else {
+                    crate::input::mvd::Mode::Off
+                });
                 self.session = Some(session);
                 self.menu_input = None;
                 self.sync_fullscreen(window);
@@ -493,6 +592,29 @@ impl App {
         }
     }
 
+    fn recenter_mvd(&mut self) {
+        if let Some(session) = self.session.as_mut().filter(|s| s.set == "netmerc") {
+            let centered = session.input.recenter_mvd();
+            self.gui.report_state(
+                if centered {
+                    "MVD recentered"
+                } else {
+                    "MVD sensors not ready"
+                }
+                .into(),
+                false,
+            );
+        }
+    }
+
+    fn calibrate_mvd(&mut self) {
+        if let Some(session) = self.session.as_mut().filter(|s| s.set == "netmerc") {
+            session.input.recalibrate_mvd();
+            self.gui
+                .report_state("MVD: keep P1 controller still for 5 seconds".into(), false);
+        }
+    }
+
     fn close_game(&mut self, window: &Window) {
         if self.session.is_none() || (self.started_from_cli && self.fullscreen) {
             // Reuse Quit, including its NVRAM save, without returning to the library.
@@ -502,6 +624,7 @@ impl App {
         if let Some(mut session) = self.session.take() {
             session.save_nvram();
             session.input.enable_rumble(false);
+            session.input.set_mvd_mode(crate::input::mvd::Mode::Off);
             self.menu_input = Some(session.input);
         }
         self.debugger = None;
@@ -619,8 +742,58 @@ impl App {
             Event::Suspended => {
                 // The surface is about to go away; the machine keeps its state.
                 self.presenter = None;
+                self.diagnostic_window = None;
             }
-            Event::WindowEvent { event, .. } => {
+            Event::WindowEvent { window_id, event } => {
+                if window_id != window.id() {
+                    if let Some(display) = &mut self.diagnostic_window {
+                        if display.window.id() == window_id {
+                            match event {
+                                WindowEvent::CloseRequested => {
+                                    self.diagnostic_window = None;
+                                    self.gui.diagnostic.mode = crate::gui::diagnostic::Mode::Off;
+                                    self.save_settings();
+                                }
+                                WindowEvent::Resized(size) => display.presenter.video.resize(size),
+                                WindowEvent::RedrawRequested => {
+                                    if let Some(lines) = self.gui.diagnostic_lines {
+                                        let options = self.gui.diagnostic;
+                                        let pixels = self.gui.diagnostic_pixels;
+                                        self.gui.with_diagnostic_context(
+                                            &mut display.context,
+                                            |context| {
+                                                let size = display.window.inner_size();
+                                                display.presenter.video.resize(size);
+                                                let scale = display.window.scale_factor();
+                                                let logical = size.to_logical::<f32>(scale);
+                                                let io = context.io_mut();
+                                                io.display_size = [logical.width, logical.height];
+                                                io.display_framebuffer_scale = [scale as f32; 2];
+                                                io.delta_time = 1.0 / 60.0;
+                                                crate::gui::diagnostic::draw(
+                                                    context.frame(),
+                                                    lines,
+                                                    pixels,
+                                                    options,
+                                                    true,
+                                                );
+                                                display.presenter.ui.capture(context.render());
+                                            },
+                                        );
+                                        display.presenter.video.present_model1(
+                                            Some(&mut display.presenter.ui),
+                                            &display.background,
+                                            &[],
+                                            &[],
+                                        );
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    return;
+                }
                 let Some(presenter) = &mut self.presenter else {
                     return;
                 };
@@ -682,10 +855,86 @@ impl App {
                 {
                     self.close_game(window);
                 }
+                if let Some(session) = self.session.as_mut() {
+                    if let Some((message, error)) = session.input.take_mvd_notice() {
+                        self.gui.report_state(message, error);
+                    }
+                    let [calibrate, recenter] = session.input.mvd_commands_requested();
+                    if calibrate {
+                        self.calibrate_mvd();
+                    } else if recenter {
+                        self.recenter_mvd();
+                    }
+                }
                 self.advance();
+                self.sync_diagnostic_window(elwt);
                 window.request_redraw();
             }
             _ => {}
+        }
+    }
+
+    fn sync_diagnostic_window(&mut self, elwt: &winit::event_loop::EventLoopWindowTarget<()>) {
+        self.gui.diagnostic_pixels = self.session.as_ref().and_then(|session| {
+            let font = session.diagnostic_font.as_ref()?;
+            match &session.machine {
+                Machine::Model1(sys) => sys.ioboard.diagnostic_pixels(font),
+                Machine::Model2(_) => None,
+            }
+        });
+        self.gui.diagnostic_lines =
+            self.session
+                .as_ref()
+                .and_then(|session| match &session.machine {
+                    Machine::Model1(sys) => sys.ioboard.diagnostic_lines(),
+                    Machine::Model2(_) => None,
+                });
+        let needed = self.gui.diagnostic_lines.is_some()
+            && self.gui.diagnostic.mode == crate::gui::diagnostic::Mode::Window
+            && !self.fullscreen
+            && self.presenter.is_some()
+            && !cfg!(target_os = "android");
+        if !needed {
+            self.diagnostic_window = None;
+            return;
+        }
+        if self.diagnostic_window.is_none() {
+            let window = match WindowBuilder::new()
+                .with_title("TGPulse — Diagnostic Display")
+                .with_inner_size(winit::dpi::LogicalSize::new(360.0, 130.0))
+                .with_min_inner_size(winit::dpi::LogicalSize::new(280.0, 100.0))
+                .build(elwt)
+            {
+                Ok(window) => window,
+                Err(error) => {
+                    self.gui.report_error(format!("Diagnostic window: {error}"));
+                    self.gui.diagnostic.mode = crate::gui::diagnostic::Mode::Overlay;
+                    self.save_settings();
+                    return;
+                }
+            };
+            // Blit-only presentation: no second emulated machine or 3D pipeline.
+            let video = pollster::block_on(Model2Video::new(&window, 1, true, false, true, false));
+            let mut context = Some(imgui::SuspendedContext::create());
+            let ui = self.gui.with_diagnostic_context(&mut context, |context| {
+                context.set_ini_filename(None);
+                let atlas = context.fonts().build_rgba32_texture();
+                crate::gui::Renderer::new(
+                    video.device(),
+                    video.queue(),
+                    video.surface_format(),
+                    &atlas,
+                )
+            });
+            self.diagnostic_window = Some(DiagnosticWindow {
+                presenter: Presenter { video, ui },
+                context,
+                window,
+                background: vec![0xff101a14; SCREEN_W * SCREEN_H],
+            });
+        }
+        if let Some(display) = &self.diagnostic_window {
+            display.window.request_redraw();
         }
     }
 
@@ -864,7 +1113,7 @@ impl App {
         // Output preferences belong to the frontend, not to machine snapshots.
         if let Some(session) = &mut self.session {
             session.set_audio_mutes(self.config.audio_mutes);
-            session.set_audio_gains(self.config.audio_gains);
+            session.set_audio_gains(&self.config);
         }
     }
 
@@ -883,7 +1132,13 @@ impl App {
             self.last_frame = Instant::now();
             return;
         };
+        if let Some((message, error)) = session.audio_notice.take() {
+            self.gui.report_state(message, error);
+        }
         if self.paused {
+            if session.set == "netmerc" {
+                session.input.set_netmerc_motor(false);
+            }
             self.last_frame = Instant::now();
             return;
         }
@@ -922,6 +1177,22 @@ impl App {
     }
 
     fn redraw(&mut self, window: &Window) {
+        self.gui.netmerc_running = self.session.as_ref().is_some_and(|s| s.set == "netmerc");
+        // Keep the surface and ImGui on the same geometry even if fullscreen
+        // delivers RedrawRequested before the corresponding Resized event.
+        if let Some(presenter) = &mut self.presenter {
+            presenter.video.resize(window.inner_size());
+        }
+        // Keep display dimensions current after resize/Retina scale changes.
+        self.gui.set_display_size(window);
+        let holder = self
+            .session
+            .as_ref()
+            .and_then(|session| match &session.machine {
+                Machine::Model1(sys) => sys.mvd_holder_latched(),
+                Machine::Model2(_) => None,
+            });
+        self.gui.update_mvd_holder(holder);
         // Re-evaluate live EEPROM after service-menu saves and state loads.
         if self.presenter.is_some() && self.video_settings != self.current_video_settings() {
             self.build_presenter(window);
@@ -945,6 +1216,10 @@ impl App {
 
         let title = self.session.as_ref().map(|s| s.title.clone());
         self.gui.audio_sources = self.session.as_ref().map_or(&[], Session::audio_sources);
+        self.gui.netmerc_donor_active = self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.netmerc_donor_active);
         self.gui.network_status = self.session.as_ref().map_or_else(
             || "No game loaded".into(),
             |session| match &session.machine {
@@ -1071,16 +1346,46 @@ impl App {
                     let config = self.config.clone();
                     if let Some(session) = &mut self.session {
                         session.reset(&config, &self.network_config);
+                        session.mvd_input = self.gui.mvd_input;
+                        session.mvd_range = self.gui.mvd_range;
+                        session.mvd_holder_auto = self.gui.mvd_holder_auto;
+                        session
+                            .input
+                            .set_mvd_gravity_stabilization(self.gui.mvd_gravity_stabilization);
+                        session.input.set_bindings(self.bindings.clone());
+                        session.input.set_mvd_mode(if session.set == "netmerc" {
+                            session.mvd_input
+                        } else {
+                            crate::input::mvd::Mode::Off
+                        });
                     }
                 }
                 Action::SaveState(slot) => self.save_state(slot),
                 Action::LoadState(slot) => self.load_state(slot),
                 Action::Debug(line) => self.run_debug_command(&line),
+                Action::MvdRecenter => self.recenter_mvd(),
+                Action::MvdCalibrate => self.calibrate_mvd(),
                 Action::NetworkSettingsChanged(network) => {
                     self.network_config = network;
                     self.save_settings();
                 }
                 Action::SettingsChanged => {
+                    if let Some(session) = &mut self.session {
+                        session.mvd_input = self.gui.mvd_input;
+                        session.input.set_mvd_mode(if session.set == "netmerc" {
+                            session.mvd_input
+                        } else {
+                            crate::input::mvd::Mode::Off
+                        });
+                        session
+                            .input
+                            .set_mvd_gravity_stabilization(self.gui.mvd_gravity_stabilization);
+                        session.mvd_range = self.gui.mvd_range;
+                        if session.mvd_holder_auto != self.gui.mvd_holder_auto {
+                            session.mvd_holder_pulse = Default::default();
+                        }
+                        session.mvd_holder_auto = self.gui.mvd_holder_auto;
+                    }
                     if let Some(presenter) = &mut self.presenter {
                         presenter.video.set_srgb(self.config.srgb);
                     }
@@ -1089,8 +1394,12 @@ impl App {
                     if let Some(session) = &mut self.session {
                         session.audio.set_volume(self.config.volume);
                         session.set_audio_mutes(self.config.audio_mutes);
-                        session.set_audio_gains(self.config.audio_gains);
+                        session.set_audio_gains(&self.config);
+                        if let Machine::Model1(sys) = &mut session.machine {
+                            sys.set_netmerc_city_workaround(self.config.netmerc_city_workaround);
+                        }
                         session.input.enable_rumble(self.config.rumble);
+                        session.input.set_rumble_intensity(self.config.rumble_intensity);
                     }
                     // Supersampling and the widescreen framing shape the
                     // pipelines themselves, so editing one only takes effect
@@ -1165,6 +1474,11 @@ impl App {
     fn save_settings(&mut self) {
         let mut settings = crate::settings::Settings::from_config(&self.config);
         settings.network = self.network_config.clone();
+        settings.mvd_input = self.gui.mvd_input;
+        settings.mvd_range = self.gui.mvd_range;
+        settings.mvd_holder_auto = self.gui.mvd_holder_auto;
+        settings.mvd_gravity_stabilization = self.gui.mvd_gravity_stabilization;
+        settings.diagnostic = self.gui.diagnostic;
         settings.nvram = self.profile.settings.nvram.clone();
         if let Err(e) = settings.save(&self.profile.path) {
             log::error!(target: "settings", "cannot save settings: {e}");

@@ -94,15 +94,11 @@ impl InputState {
                         hi,
                     )
                 }
-                // gilrs Y is positive UP; MAME's non-reversed ADC Y is positive DOWN.
+                // Native Y is positive UP. NetMerc uses the user-requested
+                // inverted polarity; keep its channel-2 calibration and X.
                 A::StickY => {
                     return centered(
-                        self.signal(S::SkyY)
-                            * if self.game == "netmerc" || self.game == "wingwar360" {
-                                1.0
-                            } else {
-                                -1.0
-                            },
+                        self.signal(S::SkyY) * if self.game == "wingwar360" { 1.0 } else { -1.0 },
                         if self.game == "netmerc" { 127 } else { mid },
                         lo,
                         hi,

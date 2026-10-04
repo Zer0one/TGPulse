@@ -20,6 +20,11 @@ use tgpulse_core::config::{AudioGains, AudioMutes, Cabinet, Config, Widescreen};
 /// Fullscreen is persisted along with the other user preferences.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
+    pub mvd_input: crate::input::mvd::Mode,
+    pub mvd_range: [u32; 2],
+    pub mvd_holder_auto: bool,
+    pub mvd_gravity_stabilization: bool,
+    pub diagnostic: crate::gui::diagnostic::Options,
     pub nvram: Option<PathBuf>,
     pub network: crate::network::Config,
     pub ssaa: u32,
@@ -31,7 +36,11 @@ pub struct Settings {
     pub volume: u32,
     pub audio_mutes: AudioMutes,
     pub audio_gains: AudioGains,
+    pub netmerc_audio_donor: tgpulse_core::config::NetmercAudioDonor,
+    pub netmerc_alternative_gains: bool,
+    pub netmerc_city_workaround: bool,
     pub rumble: bool,
+    pub rumble_intensity: u32,
     pub cabinet: Cabinet,
     pub reverse_landscape: bool,
 }
@@ -45,6 +54,11 @@ impl Default for Settings {
 impl Settings {
     pub fn from_config(config: &Config) -> Self {
         Self {
+            mvd_input: crate::input::mvd::Mode::default(),
+            mvd_range: [30, 20],
+            mvd_holder_auto: true,
+            mvd_gravity_stabilization: true,
+            diagnostic: Default::default(),
             nvram: None,
             network: crate::network::Config::default(),
             ssaa: config.ssaa,
@@ -56,7 +70,11 @@ impl Settings {
             volume: config.volume,
             audio_mutes: config.audio_mutes,
             audio_gains: config.audio_gains,
+            netmerc_audio_donor: config.netmerc_audio_donor,
+            netmerc_alternative_gains: config.netmerc_alternative_gains,
+            netmerc_city_workaround: config.netmerc_city_workaround,
             rumble: config.rumble,
+            rumble_intensity: config.rumble_intensity.min(100),
             cabinet: config.cabinet,
             reverse_landscape: config.reverse_landscape,
         }
@@ -72,7 +90,11 @@ impl Settings {
         config.volume = self.volume;
         config.audio_mutes = self.audio_mutes;
         config.audio_gains = self.audio_gains.clamped();
+        config.netmerc_audio_donor = self.netmerc_audio_donor;
+        config.netmerc_alternative_gains = self.netmerc_alternative_gains;
+        config.netmerc_city_workaround = self.netmerc_city_workaround;
         config.rumble = self.rumble;
+        config.rumble_intensity = self.rumble_intensity.min(100);
         config.cabinet = self.cabinet;
         config.reverse_landscape = self.reverse_landscape;
     }
@@ -116,6 +138,70 @@ impl Settings {
                 _ => None,
             };
             match name {
+                "netmerc_audio_donor" => match value.parse() {
+                    Ok(donor) => settings.netmerc_audio_donor = donor,
+                    Err(error) => log::warn!(target: "settings", "{error}"),
+                },
+                "diagnostic_rendering" => match crate::gui::diagnostic::Rendering::parse(value) {
+                    Some(rendering) => settings.diagnostic.rendering = rendering,
+                    None => {
+                        log::warn!(target: "settings", "bad diagnostic_rendering '{value}' (want hd44780/text)")
+                    }
+                },
+                "diagnostic_display" => match crate::gui::diagnostic::Mode::parse(value) {
+                    Some(mode) => settings.diagnostic.mode = mode,
+                    None => {
+                        log::warn!(target: "settings", "bad diagnostic_display '{value}' (want off/window/overlay)")
+                    }
+                },
+                "diagnostic_position" => match crate::gui::diagnostic::CORNER_KEYS
+                    .iter()
+                    .position(|key| *key == value)
+                {
+                    Some(corner) => settings.diagnostic.corner = corner as u32,
+                    None => log::warn!(target: "settings", "bad diagnostic_position '{value}'"),
+                },
+                "diagnostic_opacity" => match value.parse::<u32>() {
+                    Ok(opacity) if opacity <= 100 => settings.diagnostic.opacity = opacity,
+                    _ => {
+                        log::warn!(target: "settings", "bad diagnostic_opacity '{value}' (want 0..100)")
+                    }
+                },
+                "mvd_holder" => match value {
+                    "auto" => settings.mvd_holder_auto = true,
+                    "manual" => settings.mvd_holder_auto = false,
+                    _ => {
+                        log::warn!(target: "settings", "bad mvd_holder '{value}' (want auto/manual)")
+                    }
+                },
+                "mvd_gravity_stabilization" => match value {
+                    "on" => settings.mvd_gravity_stabilization = true,
+                    "off" => settings.mvd_gravity_stabilization = false,
+                    _ => {
+                        log::warn!(target: "settings", "bad mvd_gravity_stabilization '{value}' (want on/off)")
+                    }
+                },
+                "mvd_horizontal_degrees" | "mvd_vertical_degrees" => {
+                    match value
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|v| *v <= 90 && *v % 10 == 0)
+                    {
+                        Some(degrees) => {
+                            settings.mvd_range[usize::from(name == "mvd_vertical_degrees")] =
+                                degrees
+                        }
+                        None => {
+                            log::warn!(target: "settings", "bad {name} '{value}' (want 0..90, step 10)")
+                        }
+                    }
+                }
+                "mvd_input" => match crate::input::mvd::Mode::parse(value) {
+                    Some(mode) => settings.mvd_input = mode,
+                    None => {
+                        log::warn!(target: "settings", "bad mvd_input '{value}' (want auto/off/right_stick/sensors)")
+                    }
+                },
                 "nvram" => settings.nvram = (!value.is_empty()).then(|| PathBuf::from(value)),
                 "model1_address_in" => settings.network.address_in = value.into(),
                 "model1_address_out" => settings.network.address_out = value.into(),
@@ -151,7 +237,19 @@ impl Settings {
                         log::warn!(target: "settings", "{}:{}: bad volume '{value}'", path.display(), number + 1)
                     }
                 },
+                "netmerc_alternative_gains" => {
+                    settings.netmerc_alternative_gains =
+                        boolean(value).unwrap_or(settings.netmerc_alternative_gains)
+                }
+                "netmerc_city_workaround" => {
+                    settings.netmerc_city_workaround =
+                        boolean(value).unwrap_or(settings.netmerc_city_workaround)
+                }
                 "rumble" => settings.rumble = boolean(value).unwrap_or(settings.rumble),
+                "rumble_intensity" => match value.parse::<u32>().ok().filter(|v| *v <= 100) {
+                    Some(value) => settings.rumble_intensity = value,
+                    None => log::warn!(target: "settings", "{}:{}: bad rumble_intensity '{value}' (want 0..100)", path.display(), number + 1),
+                },
                 "gain_multipcm1" | "gain_multipcm2" | "gain_ym3438" | "gain_dsb" | "gain_scsp" => {
                     if let Some(gain) = value.parse::<u32>().ok().filter(|v| *v <= AudioGains::MAX)
                     {
@@ -230,6 +328,13 @@ impl Settings {
              widescreen_stretch_2d = {}\n\
              smooth_shadows = {}\n\
              volume = {}\n\
+             # NetMerc substitute samples: vf (default), vr, swa, wingwar, off.\n\
+             # Applies on game load; Off/missing donor uses best-effort procedural audio for the known missing dump.\n\
+             netmerc_audio_donor = {}\n\
+             # Alternative NetMerc-only output gains; uses the actual loaded donor/fallback.\n\
+             netmerc_alternative_gains = {}\n\
+             # Optional NetMerc City conversion override; live, default on.\n\
+             netmerc_city_workaround = {}\n\
              # Absolute route gain in percent (50 = 0.5), range 0..100.\n\
              gain_multipcm1 = {}\n\
              gain_multipcm2 = {}\n\
@@ -243,6 +348,24 @@ impl Settings {
              mute_dsb = {}\n\
              mute_scsp = {}\n\
              rumble = {}\n\
+             # Pad output intensity, 0..100%; 100 preserves existing effect levels.\n\
+             rumble_intensity = {}\n\
+             # NetMerc MVD: auto (sensors/stick/fixed), off, right_stick, sensors.\n\
+             mvd_input = {}\n\
+             # Accelerometer tilt stabilization, default on; no absolute yaw or XYZ.\n\
+             mvd_gravity_stabilization = {}\n\
+             # Maximum angle per side: 0..90 degrees, step 10; 0 disables the axis.\n\
+             mvd_horizontal_degrees = {}\n\
+             mvd_vertical_degrees = {}\n\
+             # Holder convenience, independent of tracking; never presses Trigger.\n\
+             mvd_holder = {}\n\
+             # Diagnostic LCD: off/window/overlay; fullscreen uses overlay unless off.\n\
+             diagnostic_display = {}\n\
+             # HD44780 font from game ZIP/adjacent hd44780.zip, otherwise Text.\n\
+             diagnostic_rendering = {}\n\
+             diagnostic_position = {}\n\
+             # Background opacity only, 0..100; characters remain opaque.\n\
+             diagnostic_opacity = {}\n\
              # Model 1/2 COMM presence: single=absent, twin=fitted where supported.\n\
              # Model 1 twin also enables TCP; roles remain in NVRAM.\n\
              cabinet = {}\n\
@@ -263,6 +386,9 @@ impl Settings {
             on_off(self.widescreen_stretch_2d),
             on_off(self.smooth_shadows),
             self.volume,
+            self.netmerc_audio_donor.as_str(),
+            on_off(self.netmerc_alternative_gains),
+            on_off(self.netmerc_city_workaround),
             self.audio_gains.multipcm1,
             self.audio_gains.multipcm2,
             self.audio_gains.ym3438,
@@ -274,6 +400,20 @@ impl Settings {
             on_off(self.audio_mutes.dsb),
             on_off(self.audio_mutes.scsp),
             on_off(self.rumble),
+            self.rumble_intensity.min(100),
+            self.mvd_input.key(),
+            on_off(self.mvd_gravity_stabilization),
+            self.mvd_range[0],
+            self.mvd_range[1],
+            if self.mvd_holder_auto {
+                "auto"
+            } else {
+                "manual"
+            },
+            self.diagnostic.mode.key(),
+            self.diagnostic.rendering.key(),
+            crate::gui::diagnostic::CORNER_KEYS[self.diagnostic.corner as usize],
+            self.diagnostic.opacity,
             cabinet,
             on_off(self.reverse_landscape),
             self.network.address_in,
@@ -335,6 +475,27 @@ impl NvramFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn netmerc_city_preference_round_trips_applies_and_defaults_on() {
+        assert!(Settings::default().netmerc_city_workaround);
+        let dir = std::env::temp_dir().join(format!(
+            "tgpulse-city-settings-{}", std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.conf");
+        for enabled in [true, false] {
+            Settings {
+                netmerc_city_workaround: enabled,
+                ..Settings::default()
+            }.save(&path).unwrap();
+            let loaded = Settings::load(&path);
+            let mut config = Config::default();
+            loaded.apply_to(&mut config);
+            assert_eq!(config.netmerc_city_workaround, enabled);
+            assert_eq!(Settings::from_config(&config).netmerc_city_workaround, enabled);
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn explicit_nvram_reads_and_writes_only_its_selected_file() {
@@ -357,7 +518,35 @@ mod tests {
     }
 
     #[test]
+    fn netmerc_audio_donor_round_trip_and_invalid_value() {
+        use tgpulse_core::config::NetmercAudioDonor;
+        let path = std::env::temp_dir().join(format!(
+            "tgpulse-donor-settings-{}.conf",
+            std::process::id()
+        ));
+        for donor in NetmercAudioDonor::ALL {
+            let settings = Settings {
+                netmerc_audio_donor: donor,
+                ..Settings::default()
+            };
+            settings.save(&path).unwrap();
+            let loaded = Settings::load(&path);
+            assert_eq!(loaded, settings);
+            let mut config = Config::default();
+            loaded.apply_to(&mut config);
+            assert_eq!(config.netmerc_audio_donor, donor);
+        }
+        std::fs::write(&path, "netmerc_audio_donor = unknown\n").unwrap();
+        assert_eq!(
+            Settings::load(&path).netmerc_audio_donor,
+            NetmercAudioDonor::Vf
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn saved_file_loads_back_identically() {
+        assert!(Settings::default().mvd_gravity_stabilization);
         let dir = std::env::temp_dir().join(format!("tgpulse-settings-{}", std::process::id()));
         let path = dir.join("settings.conf");
         let settings = Settings {
@@ -374,6 +563,8 @@ mod tests {
             widescreen: Widescreen::Auto,
             smooth_shadows: false,
             volume: 400,
+            rumble_intensity: 35,
+            netmerc_alternative_gains: true,
             audio_gains: AudioGains {
                 multipcm1: 80,
                 multipcm2: 0,
@@ -396,11 +587,43 @@ mod tests {
             .unwrap()
             .contains("model1_network"));
         assert_eq!(Settings::load(&path), settings);
+        for (index, mode) in crate::input::mvd::Mode::ALL.into_iter().enumerate() {
+            let mut settings = settings.clone();
+            settings.mvd_input = mode;
+            settings.mvd_range = [90, 0];
+            settings.mvd_holder_auto = false;
+            settings.mvd_gravity_stabilization = index % 2 == 0;
+            settings.diagnostic = crate::gui::diagnostic::Options {
+                mode: crate::gui::diagnostic::Mode::Window,
+                rendering: crate::gui::diagnostic::Rendering::Text,
+                corner: 3,
+                opacity: 25,
+            };
+            settings.save(&path).unwrap();
+            assert_eq!(Settings::load(&path), settings);
+        }
         for mode in [Widescreen::Off, Widescreen::On, Widescreen::Auto] {
             let mut settings = settings.clone();
             settings.widescreen = mode;
             settings.save(&path).unwrap();
             assert_eq!(Settings::load(&path), settings);
+        }
+        for mode in [
+            crate::gui::diagnostic::Mode::Off,
+            crate::gui::diagnostic::Mode::Window,
+            crate::gui::diagnostic::Mode::Overlay,
+        ] {
+            for corner in 0..4 {
+                let mut settings = settings.clone();
+                settings.diagnostic = crate::gui::diagnostic::Options {
+                    mode,
+                    rendering: crate::gui::diagnostic::Rendering::Hd44780,
+                    corner,
+                    opacity: corner * 25,
+                };
+                settings.save(&path).unwrap();
+                assert_eq!(Settings::load(&path), settings);
+            }
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -418,7 +641,25 @@ mod tests {
         assert_eq!(settings.cabinet, Settings::default().cabinet);
         assert_eq!(settings.audio_mutes, AudioMutes::default());
         assert_eq!(settings.audio_gains, AudioGains::REFERENCE);
+        assert_eq!(settings.rumble_intensity, 100);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rumble_intensity_rejects_out_of_range_config_values() {
+        let path = std::env::temp_dir().join(format!("tgpulse-rumble-{}.conf", std::process::id()));
+        for invalid in ["101", "-1", "NaN"] {
+            std::fs::write(&path, format!("rumble_intensity = {invalid}\n")).unwrap();
+            assert_eq!(Settings::load(&path).rumble_intensity, 100);
+        }
+        for value in [0, 100] {
+            std::fs::write(&path, format!("rumble_intensity = {value}\n")).unwrap();
+            let settings = Settings::load(&path);
+            let mut config = Config::default();
+            settings.apply_to(&mut config);
+            assert_eq!(config.rumble_intensity, value);
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -50,7 +50,9 @@ impl InputState {
                 Atom::Source(s) if !keyboard_only => self.source_amount_for(player, *s),
                 Atom::Axis(axis, sign) if !keyboard_only => {
                     let v = self.axis_value_for(player, *axis) * sign;
-                    if v.abs() > 0.15 {
+                    if (self.game == "netmerc" && matches!(signal, S::SkyX | S::SkyY))
+                        || v.abs() > 0.15
+                    {
                         v
                     } else {
                         0.0

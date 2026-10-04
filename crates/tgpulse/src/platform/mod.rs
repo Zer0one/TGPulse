@@ -15,5 +15,6 @@ pub trait UiPass {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        target_size: [u32; 2],
     );
 }

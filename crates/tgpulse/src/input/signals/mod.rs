@@ -68,7 +68,11 @@ signals! {
     BatSwing, "Dynamite Baseball: Bat Swing", "bat_swing", false, "KeyI, pad:RightStickY-";
     NetmercButton1, "NetMerc: Button 1", "netmerc_button1", false, "KeyJ, KeyE, Space, pad:South, pad:LeftTrigger";
     NetmercButton2, "NetMerc: Button 2", "netmerc_button2", false, "KeyK, KeyQ, KeyR, pad:East, pad:RightTrigger";
-    NetmercMvdHolder, "NetMerc: MVD Holder", "netmerc_mvd_holder", false, "KeyL, pad:West";
+    NetmercMvdHolder, "NetMerc: MVD Holder", "netmerc_mvd_holder", false, "KeyL, pad:Start, pad:DPadDown";
+    NetmercMvdCalibrate, "NetMerc: MVD Calibrate", "netmerc_mvd_calibrate", false, "pad:North";
+    NetmercMvdRecenter, "NetMerc: MVD Recenter", "netmerc_mvd_recenter", false, "pad:West";
+    NetmercMvdX, "NetMerc: MVD Look X", "netmerc_mvd_x", true, "pad:RightStickX";
+    NetmercMvdY, "NetMerc: MVD Look Y", "netmerc_mvd_y", true, "pad:RightStickY";
     SledEntry, "Power Sled: Entry", "sled_entry", false, "KeyJ, KeyE, Space, pad:South, pad:LeftTrigger";
     SledCall, "Power Sled: Call", "sled_call", false, "KeyK, KeyQ, KeyR, pad:East, pad:RightTrigger";
     Action4, "Power Sled: Cancel Error", "action4", false, "KeyI, pad:North";

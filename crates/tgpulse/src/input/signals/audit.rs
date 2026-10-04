@@ -1699,7 +1699,7 @@ fn independent_analog_signals_reach_the_documented_channel_only() {
         ("wingwar360", Scheme::Flight, S::SkyX, 0, [0, 128, 255]),
         ("wingwar360", Scheme::Flight, S::SkyY, 1, [0, 128, 255]),
         ("netmerc", Scheme::Flight, S::SkyX, 0, [0, 127, 255]),
-        ("netmerc", Scheme::Flight, S::SkyY, 2, [0, 127, 255]),
+        ("netmerc", Scheme::Flight, S::SkyY, 2, [255, 127, 0]),
         ("desert", Scheme::Racing, S::Elevation, 2, [255, 128, 0]),
         ("segawski", Scheme::Ski, S::WaterSlide, 0, [255, 128, 0]),
         ("topskatr", Scheme::Skate, S::Curving, 0, [255, 128, 0]),

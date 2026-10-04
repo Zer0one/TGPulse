@@ -35,6 +35,9 @@ impl Session {
             // Only after a successful atomic core load. The next normal redraw
             // regenerates software layers/GPU quads, including while paused.
             self.audio.clear();
+            // The host convenience starts a fresh bounded input pulse if the
+            // restored game asks for one; no restored RAM latch is rewritten.
+            self.mvd_holder_pulse = Default::default();
             self.background.fill(0);
             self.foreground.fill(0);
             self.input.reset_model1_rumble();
@@ -42,7 +45,8 @@ impl Session {
             // VR-family motor boards resume from the restored command on the
             // next emulated frame, not while the frontend remains paused.
             if tgpulse_core::model1_drive::DriveFamily::for_set(&self.set).is_none() {
-                self.input.set_legacy_model1_rumble(sys.drive_cmd);
+                self.input
+                    .set_legacy_model1_rumble(&self.set, sys.drive_cmd);
             }
             // Loading NVRAM into memory must not cause an immediate disk flush.
             // Normal periodic/close persistence remains the existing policy.
@@ -132,6 +136,7 @@ mod tests {
     }
     fn system() -> Model1System {
         Model1System::new(&loader::Model1Roms {
+            netmerc_procedural_audio: false,
             maincpu: vec![0],
             tgp: vec![],
             copro_tables: vec![],
@@ -197,6 +202,13 @@ mod tests {
         let nvram_path = tmp.0.join("personal.nv");
         fs::write(&nvram_path, b"untouched").unwrap();
         let mut session = Session {
+            audio_notice: None,
+            netmerc_donor_active: false,
+            diagnostic_font: None,
+            mvd_input: crate::input::mvd::Mode::default(),
+            mvd_range: [30, 20],
+            mvd_holder_auto: true,
+            mvd_holder_pulse: Default::default(),
             nvram_file: Some(crate::settings::NvramFile(nvram_path.clone())),
             network: None,
             machine: Machine::Model1(Box::new(system())),

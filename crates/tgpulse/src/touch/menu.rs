@@ -40,6 +40,7 @@ pub enum Setting {
     Stretch2d,
     SmoothShadows,
     Rumble,
+    RumbleIntensity,
     Cabinet,
     ReverseLandscape,
 }
@@ -47,7 +48,7 @@ pub enum Setting {
 impl Setting {
     /// Whether the value steps through a range, rather than simply flipping.
     fn stepped(self) -> bool {
-        matches!(self, Setting::Ssaa | Setting::Volume)
+        matches!(self, Setting::Ssaa | Setting::Volume | Setting::RumbleIntensity)
     }
 
     fn label(self) -> &'static str {
@@ -58,6 +59,7 @@ impl Setting {
             Setting::Stretch2d => "Stretch 2D layers",
             Setting::SmoothShadows => "Smooth shadows",
             Setting::Rumble => "Rumble",
+            Setting::RumbleIntensity => "Rumble Intensity",
             Setting::Cabinet => "Network board (twin)",
             Setting::ReverseLandscape => "Reverse landscape",
         }
@@ -73,6 +75,7 @@ impl Setting {
             Setting::Stretch2d => "Stretches the sky and HUD across the wider frame.",
             Setting::SmoothShadows => "Blends the hardware's stipple instead of reproducing it.",
             Setting::Rumble => "Drive-board force sent to the pad's motors.",
+            Setting::RumbleIntensity => "100% preserves existing effects; 0% silences the motors.",
             Setting::Cabinet => "Takes effect the next time a game is loaded.",
             Setting::ReverseLandscape => {
                 "Turns the display around, for a cradle that holds the phone the other way."
@@ -88,6 +91,7 @@ impl Setting {
             Setting::Stretch2d => on_off(config.widescreen_stretch_2d),
             Setting::SmoothShadows => on_off(config.smooth_shadows),
             Setting::Rumble => on_off(config.rumble),
+            Setting::RumbleIntensity => format!("{}%", config.rumble_intensity),
             Setting::Cabinet => match config.cabinet {
                 Cabinet::Twin => "TWIN".to_string(),
                 Cabinet::Single => "SINGLE".to_string(),
@@ -109,6 +113,10 @@ impl Setting {
             Setting::Stretch2d => config.widescreen_stretch_2d = !config.widescreen_stretch_2d,
             Setting::SmoothShadows => config.smooth_shadows = !config.smooth_shadows,
             Setting::Rumble => config.rumble = !config.rumble,
+            Setting::RumbleIntensity => {
+                config.rumble_intensity =
+                    (config.rumble_intensity.min(100) as i32 + delta * 10).clamp(0, 100) as u32;
+            }
             Setting::Cabinet => {
                 config.cabinet = match config.cabinet {
                     Cabinet::Twin => Cabinet::Single,
@@ -124,13 +132,14 @@ fn on_off(value: bool) -> String {
     if value { "ON" } else { "OFF" }.to_string()
 }
 
-const SETTINGS: [Setting; 8] = [
+const SETTINGS: [Setting; 9] = [
     Setting::Ssaa,
     Setting::Volume,
     Setting::Widescreen,
     Setting::Stretch2d,
     Setting::SmoothShadows,
     Setting::Rumble,
+    Setting::RumbleIntensity,
     Setting::Cabinet,
     Setting::ReverseLandscape,
 ];
@@ -319,14 +328,15 @@ impl Menu {
     }
 
     fn layout_settings(&mut self, w: f32, h: f32, margin: f32, bar: f32, gap: f32) {
-        // The lines are shorter than a header bar so all eight fit between
-        // the header and the bottom of the screen without scrolling.
-        let line_h = 0.095 * h;
+        // Fit the current setting count below the header without scrolling.
         let line_gap = 0.010 * h;
+        let top = margin + bar + gap;
+        let count = SETTINGS.len() as f32;
+        let line_h = (0.095 * h).min((h - margin - top - line_gap * (count - 1.0)) / count);
         let box_w = line_h * 1.6;
         let step_w = line_h;
 
-        let mut y = margin + bar + gap;
+        let mut y = top;
         for setting in SETTINGS {
             let line = Rect {
                 x: margin,
@@ -648,7 +658,7 @@ mod tests {
         r.x >= 0.0 && r.y >= 0.0 && r.x + r.w <= SCREEN.0 && r.y + r.h <= SCREEN.1
     }
 
-    /// Eight settings have to fit between the header and the bottom edge
+    /// All settings have to fit between the header and the bottom edge
     /// without scrolling, and none may sit on top of another.
     #[test]
     fn the_settings_screen_fits_and_does_not_overlap() {

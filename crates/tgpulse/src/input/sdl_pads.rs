@@ -2,8 +2,10 @@
 //! cross into the existing signal bindings; no SDL handle enters the core.
 use std::collections::BTreeMap;
 
+use super::motion::{MotionSample, SensorKind};
 use gilrs::{Axis, Button};
 use sdl3::gamepad::{Axis as SdlAxis, Button as SdlButton, Gamepad};
+use sdl3::sensor::SensorType;
 use sdl3::{EventPump, GamepadSubsystem};
 
 pub struct SdlPads {
@@ -30,9 +32,37 @@ impl SdlPads {
     }
 
     pub fn poll(&mut self) {
+        self.poll_motion(|_, _| {});
+    }
+
+    /// Optional host sample sink. Sensors remain disabled unless explicitly
+    /// enabled by the active NetMerc input policy or a diagnostic.
+    pub fn poll_motion(&mut self, mut sample: impl FnMut(usize, MotionSample)) {
         // SDL updates gamepad state while pumping events. Enumeration, rather
         // than queued add/remove events alone, also catches startup devices.
-        for _ in self.events.poll_iter() {}
+        for event in self.events.poll_iter() {
+            if let sdl3::event::Event::GamepadSensorUpdated {
+                which,
+                sensor,
+                data,
+                timestamp,
+            } = event
+            {
+                let kind = match sensor {
+                    SensorType::Gyroscope => SensorKind::Gyro,
+                    SensorType::Accelerometer => SensorKind::Accel,
+                    _ => continue,
+                };
+                sample(
+                    which.raw() as usize,
+                    MotionSample {
+                        kind,
+                        data,
+                        timestamp_ns: timestamp,
+                    },
+                );
+            }
+        }
         match self.subsystem.gamepads() {
             Ok(ids) => {
                 self.pads
@@ -114,6 +144,37 @@ impl SdlPads {
             // Commands are refreshed during gameplay; a short duration ensures
             // force cannot remain latched after pause, disconnect or exit.
             let _ = pad.set_rumble(low, high, if low == 0 && high == 0 { 0 } else { 100 });
+        }
+    }
+
+    /// Enable available sensors for an explicit diagnostic/host request.
+    /// Returns advertised gyro/accel rates; None means absent, not zero data.
+    pub fn enable_motion(&self, id: usize) -> Result<[Option<f32>; 2], String> {
+        let pad = self.pads.get(&id).ok_or("Controller disconnected")?;
+        let mut rates = [None; 2];
+        for (axis, sensor) in [SensorType::Gyroscope, SensorType::Accelerometer]
+            .into_iter()
+            .enumerate()
+        {
+            // The owned live Gamepad keeps the native handle valid.
+            if unsafe { pad.has_sensor(sensor) } {
+                if let Err(error) = pad.sensor_set_enabled(sensor, true) {
+                    for sensor in [SensorType::Gyroscope, SensorType::Accelerometer] {
+                        let _ = pad.sensor_set_enabled(sensor, false);
+                    }
+                    return Err(error.to_string());
+                }
+                rates[axis] = Some(pad.sensor_get_data_rate(sensor));
+            }
+        }
+        Ok(rates)
+    }
+
+    pub fn disable_motion(&self, id: usize) {
+        if let Some(pad) = self.pads.get(&id) {
+            for sensor in [SensorType::Gyroscope, SensorType::Accelerometer] {
+                let _ = pad.sensor_set_enabled(sensor, false);
+            }
         }
     }
 }

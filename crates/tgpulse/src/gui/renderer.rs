@@ -278,11 +278,18 @@ impl UiPass for Renderer {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
+        target_size: [u32; 2],
     ) {
         let Some(frame) = self.frame.take() else {
             return;
         };
         if frame.commands.is_empty() || frame.vertices.is_empty() {
+            return;
+        }
+        // macOS fullscreen transitions can update window geometry before the
+        // surface catches up. Never submit draw data for a different target:
+        // clipping alone would leave projection and hit testing misaligned.
+        if !frame_matches_target(frame.display_size, frame.framebuffer_scale, target_size) {
             return;
         }
 
@@ -332,10 +339,7 @@ impl UiPass for Renderer {
             }),
         );
 
-        let (fb_w, fb_h) = (
-            frame.display_size[0] * frame.framebuffer_scale[0],
-            frame.display_size[1] * frame.framebuffer_scale[1],
-        );
+        let (fb_w, fb_h) = (target_size[0] as f32, target_size[1] as f32);
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("imgui"),
@@ -369,6 +373,38 @@ impl UiPass for Renderer {
             pass.set_scissor_rect(x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32);
             pass.draw_indexed(index_offset..index_offset + count, vertex_offset, 0..1);
         }
+    }
+}
+
+fn frame_matches_target(display: [f32; 2], scale: [f32; 2], target: [u32; 2]) -> bool {
+    (0..2).all(|axis| {
+        let pixels = display[axis] * scale[axis];
+        target[axis] > 0 && pixels.is_finite() && pixels.round() == target[axis] as f32
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::frame_matches_target;
+
+    #[test]
+    fn fullscreen_draw_data_must_match_the_acquired_target() {
+        assert!(frame_matches_target([992.0, 768.0], [2.0; 2], [1984, 1536]));
+        assert!(!frame_matches_target(
+            [1470.0, 923.0],
+            [2.0; 2],
+            [1984, 1536]
+        ));
+        assert!(!frame_matches_target(
+            [992.0, 768.0],
+            [2.0; 2],
+            [2940, 1846]
+        ));
+        assert!(frame_matches_target(
+            [1470.0, 923.0],
+            [2.0; 2],
+            [2940, 1846]
+        ));
     }
 }
 

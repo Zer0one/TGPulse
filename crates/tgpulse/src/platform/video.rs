@@ -400,7 +400,7 @@ impl Model2Video {
     }
 
     pub fn resize(&mut self, size: winit::dpi::PhysicalSize<u32>) {
-        if size.width > 0 && size.height > 0 {
+        if size.width > 0 && size.height > 0 && size != self.size {
             self.size = size;
             self.config.width = size.width;
             self.config.height = size.height;
@@ -504,7 +504,13 @@ impl Model2Video {
         }
         self.blit(&mut enc, &view);
         if let Some(ui) = ui {
-            ui.draw(&self.device, &self.queue, &mut enc, &view);
+            ui.draw(
+                &self.device,
+                &self.queue,
+                &mut enc,
+                &view,
+                [frame.texture.width(), frame.texture.height()],
+            );
         }
         self.queue.submit(Some(enc.finish()));
         frame.present();
@@ -576,7 +582,13 @@ impl Model2Video {
         }
         self.blit(&mut enc, &view);
         if let Some(ui) = ui {
-            ui.draw(&self.device, &self.queue, &mut enc, &view);
+            ui.draw(
+                &self.device,
+                &self.queue,
+                &mut enc,
+                &view,
+                [frame.texture.width(), frame.texture.height()],
+            );
         }
         self.queue.submit(Some(enc.finish()));
         frame.present();
