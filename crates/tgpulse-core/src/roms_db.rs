@@ -315,14 +315,33 @@ pub fn build_regions(
     def: &GameDef,
     archive: &mut ZipArchive<File>,
 ) -> Result<HashMap<String, Vec<u8>>, String> {
+    build_selected_regions(def, archive, None)
+}
+
+/// Selected resource loading is strict, unlike the legacy best-effort game
+/// loader. It must not turn a missing donor sample chip into silent padding.
+pub(crate) fn build_selected_regions(
+    def: &GameDef,
+    archive: &mut ZipArchive<File>,
+    selected: Option<&[&str]>,
+) -> Result<HashMap<String, Vec<u8>>, String> {
+    let includes = |name: &str| selected.is_none_or(|names| names.contains(&name));
     let mut regions: HashMap<String, Vec<u8>> = HashMap::new();
     for (name, size, fill) in &def.regions {
-        regions.insert(name.clone(), vec![*fill; *size]);
+        if includes(name) {
+            regions.insert(name.clone(), vec![*fill; *size]);
+        }
     }
     let mut missing = 0;
     for load in &def.loads {
+        if !includes(&load.region) {
+            continue;
+        }
         let data = match read_chip(archive, &load.file) {
             Ok(d) => d,
+            Err(e) if selected.is_some() => {
+                return Err(format!("{}: required donor ROM: {e}", def.name))
+            }
             Err(e) if def.board.is_model1() && load.region.starts_with("dsbz80:") => {
                 return Err(format!("{}: required DSB ROM: {e}", def.name));
             }
@@ -334,6 +353,14 @@ pub fn build_regions(
         let Some(dest) = regions.get_mut(&load.region) else {
             continue;
         };
+        if selected.is_some() && data.len() != load.len {
+            return Err(format!(
+                "donor ROM '{}': expected {} bytes, found {}",
+                load.file,
+                load.len,
+                data.len()
+            ));
+        }
         if def.board.is_model1() && load.region.starts_with("dsbz80:") {
             validate_dsb_size(load, &data)?;
         }
@@ -350,6 +377,10 @@ pub fn build_regions(
         log::info!(target: "loader", "warning: {missing} ROM file(s) missing from the set");
     }
     Ok(regions)
+}
+
+pub(crate) fn named_game(name: &str) -> Option<&'static GameDef> {
+    GAMES.iter().find(|game| game.name == name)
 }
 
 fn validate_dsb_size(load: &Load, data: &[u8]) -> Result<(), String> {
@@ -384,6 +415,65 @@ fn apply_load(dest: &mut [u8], load: &Load, data: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn donor_loads_only_pcm_and_rejects_incomplete_banks() {
+        use std::io::Write;
+        let path =
+            std::env::temp_dir().join(format!("tgpulse-donor-selected-{}.zip", std::process::id()));
+        let def = GameDef {
+            name: "donor-test".into(),
+            title: String::new(),
+            year: String::new(),
+            manufacturer: String::new(),
+            board: Board::Model1,
+            scheme: Scheme::Joystick,
+            analog_roles: [AnalogRole::None; 8],
+            regions: vec![("pcm".into(), 8, 0), ("dsbz80:mpegcpu".into(), 4, 0)],
+            loads: vec![
+                Load {
+                    region: "pcm".into(),
+                    file: "samples.bin".into(),
+                    off: 0,
+                    len: 4,
+                    kind: *b"w\0",
+                },
+                Load {
+                    region: "dsbz80:mpegcpu".into(),
+                    file: "not-needed.bin".into(),
+                    off: 0,
+                    len: 4,
+                    kind: *b"p\0",
+                },
+            ],
+            copies: vec![Copy {
+                region: "pcm".into(),
+                src: 0,
+                dst: 4,
+                len: 4,
+            }],
+        };
+        for size in [None, Some(3), Some(4), Some(5)] {
+            let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+            if let Some(size) = size {
+                zip.start_file("samples.bin", zip::write::FileOptions::default())
+                    .unwrap();
+                zip.write_all(&[1, 2, 3, 4, 5][..size]).unwrap();
+            }
+            let file = zip.finish().unwrap();
+            drop(file);
+            let mut archive = ZipArchive::new(File::open(&path).unwrap()).unwrap();
+            let result = build_selected_regions(&def, &mut archive, Some(&["pcm"]));
+            if size == Some(4) {
+                let regions = result.unwrap();
+                assert_eq!(regions.len(), 1);
+                assert_eq!(regions["pcm"], [2, 1, 4, 3, 2, 1, 4, 3]);
+            } else {
+                assert!(result.is_err());
+            }
+        }
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn dsb_chip_size_must_match_instead_of_filling_missing_audio_with_zeroes() {
@@ -461,7 +551,13 @@ mod tests {
                     .iter()
                     .any(|(name, size, _)| name == "ioboard:iocpu" && *size == 0x10000));
             } else if game.name == "netmerc" {
-                assert!(firmware.is_empty());
+                assert_eq!(firmware.len(), 1);
+                assert_eq!(firmware[0].file, "epr-18021.6");
+                assert_eq!(firmware[0].len, 0x10000);
+                assert!(game
+                    .regions
+                    .iter()
+                    .any(|(name, size, _)| name == "ioboard:iocpu" && *size == 0x10000));
             } else {
                 assert_eq!(firmware.len(), 1);
                 assert!(firmware[0].file.starts_with("epr-14869"));

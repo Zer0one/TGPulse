@@ -3,7 +3,7 @@
 // See LICENSES/MAME-BSD-3-Clause.txt.
 //! Advanced Model 1 I/O board bus: 837-10859 (Wing War), 837-11659 (NetMerc).
 //!
-//! Bus and CPU integration, selected for Wing War and R360 by `model1board`.
+//! Bus and CPU integration, selected for Wing War, R360 and NetMerc by `model1board`.
 //! Firmware is supplied in memory; no host resources or
 //! frontend bindings live here. Known missing devices return errors rather than
 //! invented ready values. Other games retain their existing board selection.
@@ -15,10 +15,15 @@ use crate::tmpz84c015::{InterruptSource, Peripherals};
 pub use crate::z80sio::{SerialInputs, SerialOutputs};
 
 mod cpu;
+mod lcd;
 mod r360;
+mod tracking;
 pub use cpu::{BoardState, IoBoard, SerialEvent};
+pub use tracking::{HmdPose, TrackingStatus};
 
 pub const CPU_HZ: u32 = 9_830_400;
+/// Palette indexes: 0 panel background, 1 lit dot, 2 unlit dot.
+pub type DiagnosticPixels = [[u8; 121]; 19];
 const FIRMWARE_SIZE: usize = 0x10000;
 const DPRAM_SIZE: usize = 0x800;
 
@@ -108,7 +113,9 @@ pub struct BusState {
     outputs: Outputs,
     secondary: bool,
     lcd_data: u8,
+    lcd: lcd::Lcd,
     r360: Option<r360::Cabinet>,
+    tracking: Option<tracking::Tracker>,
 }
 
 pub struct Bus {
@@ -137,12 +144,19 @@ impl Bus {
                 },
                 secondary: false,
                 lcd_data: 0,
+                lcd: lcd::Lcd::default(),
                 r360: None,
+                tracking: None,
             },
         })
     }
 
     pub fn set_inputs(&mut self, mut inputs: Inputs) {
+        if let Some(tracker) = &mut self.state.tracking {
+            // JP4 ROM_EMU on, JP3 MODE off: the firmware's Polhemus branch.
+            inputs.board_switches = (inputs.board_switches & 0x0f) | 0x20;
+            tracker.set_baud(inputs.dips[0]);
+        }
         if let Some(cabinet) = &mut self.state.r360 {
             cabinet.throttle = inputs.analog[2];
             inputs.analog[2] = 0; // MAME R360: throttle travels via drive commands.
@@ -171,6 +185,25 @@ impl Bus {
     pub fn outputs(&self) -> Outputs {
         self.state.outputs
     }
+    /// Visible character codes of the write-only diagnostic LCD, without a
+    /// font renderer or GUI. Display-off returns spaces; custom glyphs are codes.
+    pub fn diagnostic_lines(&self) -> [[u8; 20]; 2] {
+        self.state.lcd.lines()
+    }
+    pub fn diagnostic_pixels(&self, cgrom: &[u8; 4096], blink_on: bool) -> DiagnosticPixels {
+        self.state.lcd.pixels(cgrom, blink_on)
+    }
+    pub fn tracking_status(&self) -> Option<TrackingStatus> {
+        self.state.tracking.as_ref().map(tracking::Tracker::status)
+    }
+    pub fn set_hmd_pose(&mut self, pose: HmdPose) -> bool {
+        if let Some(tracker) = &mut self.state.tracking {
+            tracker.set_pose(pose);
+            true
+        } else {
+            false
+        }
+    }
     pub fn dpram(&self) -> &[u8; DPRAM_SIZE] {
         &self.state.dpram
     }
@@ -191,7 +224,14 @@ impl Bus {
     }
 
     pub(crate) fn validate_state(&self, state: &BusState) -> Result<(), BusError> {
-        if !state.cpu_peripherals.valid_state() || state.r360.is_some() != self.state.r360.is_some()
+        if !state.cpu_peripherals.valid_state()
+            || !state.lcd.valid()
+            || state.r360.is_some() != self.state.r360.is_some()
+            || state.tracking.is_some() != self.state.tracking.is_some()
+            || state
+                .tracking
+                .as_ref()
+                .is_some_and(|tracker| !tracker.valid())
         {
             return Err(BusError::InvalidSnapshot);
         }
@@ -274,9 +314,10 @@ impl Bus {
                 state.eeprom.di_write(data & 0x40 != 0);
                 state.eeprom.cs_write(data & 0x10 != 0);
                 if data & 0x0e == 0x04 {
-                    // EEPROM pins/latch have already changed. Stop here rather
-                    // than pretending the diagnostic LCD accepted the write.
-                    return Err(BusError::UnimplementedMemory(0x8005));
+                    // Same CN6 enable/E/RW qualification as MAME model1io2.
+                    // The board has no LCD readback path; EEPROM pins still
+                    // receive every port-F write independently of the panel.
+                    state.lcd.write(data & 1 != 0, state.lcd_data);
                 }
             }
             6 => {
@@ -306,7 +347,45 @@ impl Bus {
     /// Peripheral-only advancement. IoBoard supplies instruction/interrupt
     /// clocks and additionally delivers timestamped serial output transitions.
     pub fn advance(&mut self, clocks: u32, output: impl FnMut(u32, u8, bool)) {
-        self.state.cpu_peripherals.advance(clocks, output);
+        if self.state.tracking.is_none() {
+            self.state.cpu_peripherals.advance(clocks, output);
+            return;
+        }
+        self.advance_observed(clocks, output, |_, _, _| {});
+    }
+
+    fn advance_observed(
+        &mut self,
+        clocks: u32,
+        mut output: impl FnMut(u32, u8, bool),
+        mut serial: impl FnMut(u32, u8, SerialOutputs),
+    ) {
+        let Some(tracker) = &mut self.state.tracking else {
+            self.state
+                .cpu_peripherals
+                .advance_observed(clocks, output, serial);
+            return;
+        };
+        let peripherals = &mut self.state.cpu_peripherals;
+        let mut offset = 0;
+        while offset < clocks {
+            let step = (clocks - offset).min(tracker.next_tick());
+            peripherals.sio.inputs(
+                0,
+                SerialInputs {
+                    rxd: tracker.tx(),
+                    cts: false,
+                    dcd: false,
+                },
+            );
+            peripherals.advance_observed(
+                step,
+                |t, ch, high| output(offset + t, ch, high),
+                |t, ch, pins| serial(offset + t, ch, pins),
+            );
+            tracker.advance(step, peripherals.sio.outputs(0).txd);
+            offset += step;
+        }
     }
 
     pub fn trigger_ctc(&mut self, channel: u8, level: bool) -> bool {
@@ -554,9 +633,45 @@ mod tests {
             bus.read_port(0xab19),
             Err(BusError::UnimplementedPort(0x19))
         ); // RR3
+    }
+
+    #[test]
+    fn diagnostic_lcd_qualifies_cn6_writes_and_preserves_eeprom_pins() {
+        let mut bus = bus();
+        let write = |bus: &mut Bus, rs: bool, value| {
+            bus.write_memory(0x8004, value).unwrap();
+            bus.write_memory(0x8005, 4 | u8::from(rs)).unwrap();
+        };
+        write(&mut bus, false, 0x38);
+        write(&mut bus, false, 0x0c);
+        for value in b"NETMERC" {
+            write(&mut bus, true, *value);
+        }
+        for disabled in [0x0d, 0x07, 0x01] {
+            bus.write_memory(0x8004, b'!').unwrap();
+            bus.write_memory(0x8005, disabled).unwrap();
+        }
+        assert_eq!(&bus.diagnostic_lines()[0][..8], b"NETMERC ");
+        let snapshot = bincode::deserialize(&bincode::serialize(&bus.snapshot()).unwrap()).unwrap();
+        let mut restored = self::bus();
+        restored.restore(&snapshot).unwrap();
+        write(&mut bus, true, b'!');
+        write(&mut restored, true, b'!');
         assert_eq!(
-            bus.write_memory(0x8005, 4),
-            Err(BusError::UnimplementedMemory(0x8005))
+            bincode::serialize(&bus.snapshot()).unwrap(),
+            bincode::serialize(&restored.snapshot()).unwrap()
+        );
+        // LCD support must not steal the shared EEPROM DI/CLK/CS pins.
+        let mut expected = bus.state.eeprom.clone();
+        for pins in [0x55, 0x75] {
+            bus.write_memory(0x8005, pins).unwrap();
+            expected.clk_write(pins & 0x20 != 0);
+            expected.di_write(pins & 0x40 != 0);
+            expected.cs_write(pins & 0x10 != 0);
+        }
+        assert_eq!(
+            bincode::serialize(&bus.state.eeprom).unwrap(),
+            bincode::serialize(&expected).unwrap()
         );
     }
 
